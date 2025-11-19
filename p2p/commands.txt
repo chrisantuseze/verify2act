@@ -1,0 +1,5 @@
+python LLM/scripts/llm_planner.py --model-config LLM/configs/models/pretrained/generative/gpt_4_cot.yaml --prompt-config LLM/configs/prompts/evaluation/p1/packing_1.yaml --api-key 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
+
+python relational_dynamics/main.py --result_dir pretrained_model/ --checkpoint_path pretrained_model/checkpoint/pretrained.pth --test_dir test_scenes/ --test_max_size 5 
+
+python relational_dynamics/main.py --result_dir out/ --train_dir Training/cupboard_0 --batch_size 2 --num_epochs 5 --max_size 10  
