@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 import open3d as o3d
 from typing import List, Optional, Tuple, Dict
+from robosuite.environments.base import make
 
 
 class PointCloudGenerator:
@@ -132,6 +133,247 @@ class PointCloudGenerator:
         renderer.close()
         
         return rgb, depth
+    
+    def generate_segmented(
+        self, 
+        env, 
+        camera_names: List[str],
+        object_names: Optional[List[str]] = None
+    ) -> Dict[str, o3d.geometry.PointCloud]:
+        """
+        Generate object-specific point clouds using segmentation masks.
+        
+        Args:
+            env: Robosuite environment instance
+            camera_names: List of camera names to use
+            object_names: Optional list of specific object names to extract.
+                         If None, extracts all objects in the scene.
+            
+        Returns:
+            Dictionary mapping object names to their point clouds
+        """
+        # Storage for each object's points across all views
+        object_points = {}
+        object_colors = {}
+        
+        for cam_name in camera_names:
+            # Get observations including segmentation
+            obs = self._get_camera_observation_with_segmentation(env, cam_name)
+            
+            if obs is None:
+                print(f"Warning: Could not get observation from camera '{cam_name}'")
+                continue
+            
+            color, depth, seg_mask, intrinsics, extrinsics = obs
+            
+            # Backproject depth to 3D points in camera frame
+            points_cam = self._backproject_depth(depth, intrinsics)
+            
+            # Transform to world frame
+            points_world = self._transform_points(points_cam, extrinsics)
+            
+            # Flatten arrays
+            points_flat = points_world.reshape(-1, 3)
+            colors_flat = color.reshape(-1, 3)
+            seg_flat = seg_mask.flatten()
+            
+            # Get unique object IDs from segmentation mask
+            unique_ids = np.unique(seg_flat)
+            
+            # Get object name mapping from environment
+            obj_id_to_name = self._get_object_id_mapping(env)
+            
+            for obj_id in unique_ids:
+                # Skip background (usually ID 0 or -1)
+                if obj_id <= 0:
+                    continue
+                
+                # Get object name
+                obj_name = obj_id_to_name.get(obj_id, f"object_{obj_id}")
+                
+                # Filter by object names if specified
+                if object_names is not None and obj_name not in object_names:
+                    continue
+                
+                # Extract points for this object
+                mask = (seg_flat == obj_id)
+                obj_pts = points_flat[mask]
+                obj_cols = colors_flat[mask]
+                
+                # Filter invalid points
+                valid_mask = np.isfinite(obj_pts).all(axis=1)
+                obj_pts = obj_pts[valid_mask]
+                obj_cols = obj_cols[valid_mask]
+                
+                # Filter by bounds if specified
+                if self.bounds is not None:
+                    bounds_mask = self._within_bounds(obj_pts, self.bounds)
+                    obj_pts = obj_pts[bounds_mask]
+                    obj_cols = obj_cols[bounds_mask]
+                
+                # Accumulate points for this object
+                if obj_name not in object_points:
+                    object_points[obj_name] = []
+                    object_colors[obj_name] = []
+                
+                object_points[obj_name].append(obj_pts)
+                object_colors[obj_name].append(obj_cols)
+        
+        # Create point clouds for each object
+        object_pcds = {}
+        for obj_name in object_points:
+            if not object_points[obj_name]:
+                continue
+            
+            # Merge points from all views
+            points = np.concatenate(object_points[obj_name], axis=0)
+            colors = np.concatenate(object_colors[obj_name], axis=0)
+            
+            if len(points) == 0:
+                continue
+            
+            # Create point cloud
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points)
+            pcd.colors = o3d.utility.Vector3dVector(colors / 255.0)
+            
+            # Downsample
+            if self.voxel_size > 0:
+                pcd = pcd.voxel_down_sample(self.voxel_size)
+            
+            object_pcds[obj_name] = pcd
+        
+        return object_pcds
+    
+    def generate_single_object(
+        self,
+        env,
+        camera_names: List[str],
+        object_name: str
+    ) -> Optional[o3d.geometry.PointCloud]:
+        """
+        Generate point cloud for a specific object.
+        
+        Args:
+            env: Robosuite environment instance
+            camera_names: List of camera names to use
+            object_name: Name of the object to extract
+            
+        Returns:
+            Point cloud of the specified object, or None if not found
+        """
+        object_pcds = self.generate_segmented(env, camera_names, [object_name])
+        return object_pcds.get(object_name, None)
+    
+    def _get_camera_observation_with_segmentation(
+        self, 
+        env, 
+        camera_name: str
+    ) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Get camera observation including segmentation mask.
+        
+        Args:
+            env: Robosuite environment
+            camera_name: Name of the camera
+            
+        Returns:
+            Tuple of (color, depth, segmentation, intrinsics, extrinsics) or None if camera not found
+        """
+        width = env.camera_widths[0] if hasattr(env, 'camera_widths') else 256
+        height = env.camera_heights[0] if hasattr(env, 'camera_heights') else 256
+        
+        # Get RGB-D
+        obs_dict = env.sim.render(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            depth=True
+        )
+        
+        color = obs_dict[:, :, :3]  # RGB
+        depth = obs_dict[:, :, 3]    # Depth channel
+        
+        # Get segmentation mask
+        # Robosuite uses MuJoCo's segmentation which provides geom IDs
+        seg_mask = env.sim.render(
+            camera_name=camera_name,
+            width=width,
+            height=height,
+            depth=False,
+            segmentation=True
+        )[:, :, 0]  # First channel contains object IDs
+        
+        # Get camera parameters
+        camera_id = env.sim.model.camera_name2id(camera_name)
+        intrinsics = self._get_camera_intrinsics(env, camera_name)
+        extrinsics = self._get_camera_extrinsics(env, camera_id)
+        
+        return color, depth, seg_mask, intrinsics, extrinsics
+    
+    def _get_object_id_mapping(self, env) -> Dict[int, str]:
+        """
+        Get mapping from segmentation IDs to object names.
+        
+        Args:
+            env: Robosuite environment
+            
+        Returns:
+            Dictionary mapping object IDs to names
+        """
+        id_to_name = {}
+        
+        # Get all geom names and IDs from MuJoCo model
+        model = env.sim.model
+        
+        for i in range(model.ngeom):
+            geom_id = i + 1  # MuJoCo geom IDs start at 1
+            geom_name = model.geom_id2name(i)
+            
+            if geom_name is None:
+                continue
+            
+            # Parse object name from geom name
+            # Robosuite typically names geoms like "object_geom", "cube_g0", etc.
+            obj_name = self._parse_object_name(geom_name, env)
+            id_to_name[geom_id] = obj_name
+        
+        return id_to_name
+    
+    def _parse_object_name(self, geom_name: str, env) -> str:
+        """
+        Parse a clean object name from MuJoCo geom name.
+        
+        Args:
+            geom_name: Raw geom name from MuJoCo
+            env: Robosuite environment
+            
+        Returns:
+            Clean object name
+        """
+        # Common Robosuite object prefixes
+        object_keywords = ['cube', 'can', 'milk', 'bread', 'cereal', 'object', 
+                          'peg', 'box', 'target', 'obstacle', 'gripper', 'robot']
+        
+        geom_lower = geom_name.lower()
+        
+        # Check if this is a robot/gripper geom
+        if any(kw in geom_lower for kw in ['gripper', 'robot', 'eef', 'link']):
+            return 'robot'
+        
+        # Check if this is a table/floor geom
+        if any(kw in geom_lower for kw in ['table', 'floor', 'ground', 'arena']):
+            return 'table'
+        
+        # Try to identify the object
+        for keyword in object_keywords:
+            if keyword in geom_lower:
+                # Remove suffixes like _g0, _visual, etc.
+                clean_name = geom_name.split('_')[0]
+                return clean_name
+        
+        # Default: use the full geom name
+        return geom_name
     
     def _get_camera_observation(
         self, 
@@ -308,7 +550,7 @@ class PointCloudGenerator:
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
         
-        points = np.asarray(pcd.points)
+        points = np.asarray(pcd.points) 
         colors = np.asarray(pcd.colors)
         
         # Subsample for performance
@@ -367,6 +609,17 @@ class PointCloudGenerator:
         print(f"To visualize: python -c \"import open3d as o3d; o3d.visualization.draw_geometries([o3d.io.read_point_cloud('{filename}')])\"")
 
 
+def create_env():
+    """Create environment with visible renderer for macOS compatibility."""
+    return make(
+        "Stack",
+        robots="Panda",
+        has_renderer=True,  # Use visible renderer (works on macOS)
+        has_offscreen_renderer=False,  # Don't need offscreen
+        use_camera_obs=False,  # We'll capture manually
+        use_object_obs=True,  # Get object states
+        control_freq=20,
+    )
 
 def example_usage():
     """Example of how to use the PointCloudGenerator with Robosuite."""
@@ -397,18 +650,32 @@ def example_usage():
     # Create point cloud generator
     pcd_generator = PointCloudGenerator(voxel_size=0.005, bounds=bounds)
     
+    print("=== Example 1: Full Scene Point Cloud ===")
     # Generate point cloud from multiple views
     pcd = pcd_generator.generate(env, camera_names=["frontview", "agentview"])
+    print(f"Generated full scene point cloud with {len(np.asarray(pcd.points))} points")
     
-    # Visualize (optional)
-    coord_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    o3d.visualization.draw_geometries([pcd, coord_frame])
+    print("\n=== Example 2: Segmented Object Point Clouds ===")
+    # Generate point clouds for each object separately
+    object_pcds = pcd_generator.generate_segmented(env, camera_names=["frontview", "agentview"])
     
-    # Access point cloud data
-    points = np.asarray(pcd.points)
-    colors = np.asarray(pcd.colors)
+    print(f"Found {len(object_pcds)} objects:")
+    for obj_name, obj_pcd in object_pcds.items():
+        num_points = len(np.asarray(obj_pcd.points))
+        print(f"  - {obj_name}: {num_points} points")
     
-    print(f"Generated point cloud with {len(points)} points")
+    print("\n=== Example 3: Extract Specific Object ===")
+    # Get point cloud for a specific object (e.g., the cube in Lift task)
+    cube_pcd = pcd_generator.generate_single_object(
+        env, 
+        camera_names=["frontview", "agentview"],
+        object_name="cube"  # Adjust based on your environment
+    )
+    
+    if cube_pcd:
+        print(f"Extracted cube point cloud with {len(np.asarray(cube_pcd.points))} points")
+    else:
+        print("Cube not found. Available objects:", list(object_pcds.keys()))
     
     env.close()
 
