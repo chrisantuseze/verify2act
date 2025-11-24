@@ -90,7 +90,7 @@ ENV/
 # mac
 .DS_Store
 
-
+Points2Plans/Training/
 robosuite/data_capture/data/
 robosuite/data_capture/test_episodes/
 robosuite/MUJOCO_LOG.txt
