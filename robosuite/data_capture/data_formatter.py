@@ -11,23 +11,26 @@ from typing import Dict, List, Any
 class DataFormatter:
     """Formats episode data into Points2Plans structure."""
     
-    def __init__(self, object_metadata: Dict, num_points: int = 128):
+    def __init__(self, object_metadata: Dict, num_points: int = 128, state_capture=None):
         """
         Initialize data formatter.
         
         Args:
             object_metadata: Dictionary of object metadata
             num_points: Number of points per object point cloud
+            state_capture: StateCapture instance for robot info
         """
         self.object_metadata = object_metadata
         self.num_points = num_points
+        self.state_capture = state_capture
     
-    def build_data_dict(self, timestep_data: List[Dict]) -> Dict:
+    def build_data_dict(self, timestep_data: List[Dict], camera_obs: Dict = None) -> Dict:
         """
         Build the 'data' dictionary in Points2Plans format.
         
         Args:
             timestep_data: List of timestep state dictionaries
+            camera_obs: Optional camera observations (rgb, depth, seg)
             
         Returns:
             Data dictionary with time-series information
@@ -36,8 +39,27 @@ class DataFormatter:
         num_objects = len(object_names)
         
         data = {
-            'objects': {},
+            # Camera data (placeholders if not provided)
+            'rgb': [],
+            'depth': [],
+            'segmentation': [],
+            'projection_matrix': [],
+            'view_matrix': [],
+            
+            # Robot state
+            'joint_position': [],
+            'joint_velocity': [],
+            'joint_torque': [],
+            'target_joint_position': [],
+            'target_ee_discrete': [],
+            'ee_position': [],
+            'ee_orientation': [],
+            'ee_velocity': [],
+            
+            # Scene state
             'contact': [],
+            'objects': {},
+            'behavior': [],
             'hidden_label': [],
         }
         
@@ -57,6 +79,26 @@ class DataFormatter:
         
         # Extract time-series data
         for timestep_state in timestep_data:
+            # Robot state
+            robot_state = timestep_state['robot_state']
+            data['joint_position'].append(robot_state['joint_pos'])
+            data['joint_velocity'].append(robot_state['joint_vel'])
+            data['joint_torque'].append(robot_state['joint_torque'])
+            data['ee_position'].append(robot_state['eef_pos'])
+            data['ee_orientation'].append(robot_state['eef_quat'])
+            data['ee_velocity'].append(robot_state['eef_vel'])
+            
+            # Target positions (use current for now - can be updated by policy)
+            data['target_joint_position'].append(robot_state['joint_pos'])
+            data['target_ee_discrete'].append(np.zeros(3))  # Placeholder
+            
+            # Camera data (placeholders)
+            data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
+            data['depth'].append(np.zeros((480, 640), dtype=np.float32))
+            data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
+            data['projection_matrix'].append(np.eye(4))
+            data['view_matrix'].append(np.eye(4))
+            
             # Object states
             object_states = timestep_state['object_states']
             for obj_idx, obj_name in enumerate(object_names):
@@ -68,6 +110,13 @@ class DataFormatter:
             
             # Contacts
             data['contact'].append(timestep_state['contacts'])
+            
+            # Behavior (skill type from action)
+            action = timestep_state.get('action')
+            if action:
+                data['behavior'].append(action['skill_type'])
+            else:
+                data['behavior'].append('none')
             
             # Point clouds and occlusion
             point_clouds = timestep_state.get('point_clouds', {})
@@ -102,10 +151,22 @@ class DataFormatter:
             data['hidden_label'].append(hidden_labels)
         
         # Convert lists to numpy arrays
+        for key in ['joint_position', 'joint_velocity', 'joint_torque', 'target_joint_position',
+                    'target_ee_discrete', 'ee_position', 'ee_orientation', 'ee_velocity',
+                    'rgb', 'depth', 'segmentation', 'projection_matrix', 'view_matrix']:
+            data[key] = np.array(data[key])
+        
+        # Convert object states to arrays
+        for block_name in data['objects']:
+            data['objects'][block_name]['position'] = np.array(data['objects'][block_name]['position'])
+            data['objects'][block_name]['orientation'] = np.array(data['objects'][block_name]['orientation'])
+        
         for obj_idx in range(num_objects):
             data[f'point_cloud_{obj_idx + 1}'] = np.array(data[f'point_cloud_{obj_idx + 1}'])
             data[f'point_cloud_{obj_idx + 1}sampling'] = np.array(data[f'point_cloud_{obj_idx + 1}sampling'])
             data[f'point_cloud_{obj_idx + 1}sampling_noise'] = np.array(data[f'point_cloud_{obj_idx + 1}sampling_noise'])
+        
+        data['hidden_label'] = np.array(data['hidden_label'])
         
         return data
     
@@ -122,7 +183,21 @@ class DataFormatter:
         attrs = {
             'objects': {},
             'sudo_action_list': [],
+            'segmentation_labels': {},
+            'segmentation_ids': {},
+            'robot_joint_names': [],
+            'robot_link_names': [],
+            'n_arm_joints': 0,
+            'n_ee_joints': 0,
+            'behavior_params': {},
         }
+        
+        # Robot information
+        if self.state_capture:
+            attrs['robot_joint_names'] = self.state_capture.robot_joint_names
+            attrs['robot_link_names'] = self.state_capture.robot_link_names
+            attrs['n_arm_joints'] = self.state_capture.n_arm_joints
+            attrs['n_ee_joints'] = self.state_capture.n_ee_joints
         
         # Object metadata
         for obj_idx, (obj_name, obj_meta) in enumerate(self.object_metadata.items()):
@@ -137,9 +212,19 @@ class DataFormatter:
             
             if obj_meta.get('asset_filename'):
                 attrs['objects'][block_name]['asset_filename'] = obj_meta['asset_filename']
+            
+            # Segmentation info
+            attrs['segmentation_labels'][block_name] = obj_name
+            attrs['segmentation_ids'][block_name] = obj_idx + 1
         
         # Action list
         attrs['sudo_action_list'] = self._build_action_list(action_history)
+        
+        # Behavior parameters (placeholder)
+        attrs['behavior_params'] = {
+            'skills': ['grasp', 'release', 'move'],
+            'skill_params': {}
+        }
         
         return attrs
     

@@ -38,7 +38,7 @@ class BatchCollector:
     
     def __init__(self, 
                  env_name: str = "Stack",
-                 output_dir: str = "./dataset",
+                 output_dir: str = "./data_capture/dataset",
                  camera_names: Optional[List[str]] = None,
                  num_points: int = 128,
                  voxel_size: float = 0.005):

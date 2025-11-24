@@ -22,10 +22,41 @@ class StateCapture:
         self.env = env
         self.sim = env.sim
         self.object_metadata = object_metadata
+        
+        # Cache robot info
+        self.robot = env.robots[0]
+        self.robot_joint_names = list(self.robot.robot_joints)
+        self.robot_link_names = self._get_robot_link_names()
+        self.n_arm_joints = len(self.robot_joint_names)
+        
+        # Get gripper joints count
+        if hasattr(self.robot, 'gripper'):
+            gripper = self.robot.gripper
+            if hasattr(gripper, 'joints'):
+                self.n_ee_joints = len(gripper.joints)
+            elif isinstance(gripper, dict) and 'joints' in gripper:
+                self.n_ee_joints = len(gripper['joints'])
+            else:
+                # Count gripper DoF from actuators
+                self.n_ee_joints = len([j for j in self.robot.robot_joints if 'gripper' in j or 'finger' in j])
+        else:
+            self.n_ee_joints = 0
+    
+    def _get_robot_link_names(self) -> List[str]:
+        """Get list of robot link names."""
+        try:
+            link_names = []
+            for i in range(self.sim.model.nbody):
+                body_name = self.sim.model.body_id2name(i)
+                if body_name and self.robot.robot_model.naming_prefix in body_name:
+                    link_names.append(body_name)
+            return link_names
+        except Exception:
+            return []
     
     def capture_robot_state(self) -> Dict[str, np.ndarray]:
         """
-        Capture robot end-effector and gripper state.
+        Capture complete robot state including joints and end-effector.
         
         Returns:
             Dictionary with robot state information
@@ -49,19 +80,39 @@ class StateCapture:
         
         eef_quat = self._mat_to_quat(eef_mat)
         
-        # Get gripper joint positions
-        gripper_qpos = []
+        # Get end-effector velocity (linear)
         try:
-            for joint in robot.gripper.joints:
-                joint_id = self.sim.model.joint_name2id(joint)
-                gripper_qpos.append(self.sim.data.qpos[self.sim.model.jnt_qposadr[joint_id]])
-            gripper_qpos = np.array(gripper_qpos)
+            eef_vel = self.sim.data.get_site_xvelp(grip_site_name).copy()
         except Exception:
+            eef_vel = np.zeros(3)
+        
+        # Get joint positions, velocities, and torques
+        try:
+            # Arm joints
+            arm_joint_ids = [self.sim.model.joint_name2id(joint) for joint in robot.robot_joints]
+            joint_pos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[jid]] for jid in arm_joint_ids])
+            joint_vel = np.array([self.sim.data.qvel[self.sim.model.jnt_dofadr[jid]] for jid in arm_joint_ids])
+            
+            # Torques (control)
+            joint_torque = self.sim.data.ctrl[:len(arm_joint_ids)].copy()
+            
+            # Gripper joints
+            gripper_joint_ids = [self.sim.model.joint_name2id(joint) for joint in robot.gripper.joints]
+            gripper_qpos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[jid]] for jid in gripper_joint_ids])
+        except Exception as e:
+            # Fallback to simple observation-based approach
+            joint_pos = self.env._joint_positions if hasattr(self.env, '_joint_positions') else np.zeros(7)
+            joint_vel = self.env._joint_velocities if hasattr(self.env, '_joint_velocities') else np.zeros(7)
+            joint_torque = np.zeros(7)
             gripper_qpos = np.array([])
         
         return {
             'eef_pos': eef_pos,
             'eef_quat': eef_quat,
+            'eef_vel': eef_vel,
+            'joint_pos': joint_pos,
+            'joint_vel': joint_vel,
+            'joint_torque': joint_torque,
             'gripper_qpos': gripper_qpos,
         }
     

@@ -94,3 +94,4 @@ ENV/
 robosuite/data_capture/data/
 robosuite/data_capture/test_episodes/
 robosuite/MUJOCO_LOG.txt
+robosuite/dataset/

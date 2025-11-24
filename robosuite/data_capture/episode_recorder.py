@@ -11,13 +11,17 @@ Phases Complete:
 
 import numpy as np
 import pickle
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
-from metadata_extractor import MetadataExtractor
-from state_capture import StateCapture
-from data_formatter import DataFormatter
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from data_capture.metadata_extractor import MetadataExtractor
+from data_capture.state_capture import StateCapture
+from data_capture.data_formatter import DataFormatter
 from robosuite.utils.pointcloud_generator import PointCloudGenerator
 
 
@@ -59,7 +63,6 @@ class EpisodeRecorder:
         # Initialize helper modules
         self.metadata_extractor = MetadataExtractor(self.sim)
         self.pcd_generator = PointCloudGenerator(voxel_size=voxel_size, bounds=self.workspace_bounds)
-        
         # State tracking
         self.timestep_data = []
         self.action_history = []
@@ -86,7 +89,7 @@ class EpisodeRecorder:
         
         # Initialize state capture and formatter with metadata
         self.state_capture = StateCapture(self.env, self.object_metadata)
-        self.data_formatter = DataFormatter(self.object_metadata, self.num_points)
+        self.data_formatter = DataFormatter(self.object_metadata, self.num_points, self.state_capture)
         
         # Capture initial state (t=0)
         self._capture_timestep_state(action=None, obs=None)
