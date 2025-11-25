@@ -91,7 +91,7 @@ ENV/
 .DS_Store
 
 Points2Plans/Training/
-robosuite/data_capture/data/
+robosuite/data_capture/dataset/
 robosuite/data_capture/test_episodes/
-robosuite/MUJOCO_LOG.txt
+*MUJOCO_LOG.txt
 robosuite/dataset/
