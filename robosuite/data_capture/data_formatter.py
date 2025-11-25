@@ -262,8 +262,18 @@ class DataFormatter:
             return points[indices]
     
     def _to_block_name(self, idx: int) -> str:
-        """Convert object index to block name (block_01, block_02, ...)."""
-        return f"block_{idx + 1:02d}"
+        """
+        Convert object index to block name following Points2Plans convention.
+        - Uses "block_1", "block_2", ... "block_9" for 1-9 objects
+        - Uses "block_01", "block_02", ... only when 10+ objects total
+        """
+        total_objects = len(self.object_metadata)
+        obj_num = idx + 1
+        
+        if total_objects >= 10 and obj_num < 10:
+            return f"block_0{obj_num}"
+        else:
+            return f"block_{obj_num}"
     
     def _compute_extents_ranges(self, extents: List[float]) -> List[List[float]]:
         """Compute extents_ranges from extents."""
