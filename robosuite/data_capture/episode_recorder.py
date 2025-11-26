@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
+import re
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -298,12 +299,34 @@ class EpisodeRecorder:
         else:
             skill_type = 'move'
         
-        # Detect manipulated object
+        # Detect manipulated object (attempt to return an integer index)
         manipulated_object = self.state_capture.detect_manipulated_object(obs)
-        
+
+        object_id = None
+        if manipulated_object is None:
+            object_id = None
+        elif isinstance(manipulated_object, int):
+            object_id = manipulated_object
+        elif isinstance(manipulated_object, str):
+            # Try to match by exact object name first (preserve insertion order of metadata)
+            keys = list(self.object_metadata.keys())
+            if manipulated_object in keys:
+                object_id = keys.index(manipulated_object)
+            else:
+                # Fallback: extract trailing number (e.g. 'block_1' -> 1)
+                m = re.search(r"(\d+)$", manipulated_object)
+                if m:
+                    n = int(m.group(1))
+                    if 1 <= n <= len(keys):
+                        object_id = n - 1
+                else:
+                    object_id = None
+        else:
+            object_id = None
+
         return {
             'skill_type': skill_type,
-            'object_id': manipulated_object,
+            'object_id': object_id,
             'position_delta': action[:3].copy() if len(action) >= 3 else np.zeros(3),
             'gripper_action': gripper_action,
             'raw_action': action.copy(),

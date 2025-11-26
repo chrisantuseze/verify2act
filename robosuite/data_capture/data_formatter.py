@@ -6,6 +6,7 @@ This module handles building data and attrs dictionaries in Points2Plans format.
 
 import numpy as np
 from typing import Dict, List, Any
+import re
 
 
 class DataFormatter:
@@ -235,17 +236,33 @@ class DataFormatter:
         for action_dict in action_history:
             if action_dict is None:
                 continue
-            
             skill_type = action_dict['skill_type']
-            obj_idx = action_dict['object_id']
-            
-            if obj_idx is not None and 0 <= obj_idx < len(self.object_metadata):
-                obj_name = self._to_block_name(obj_idx)
+
+            # Map recorded skill labels to the loader's expected labels
+            if skill_type in ('grasp', 'release'):
+                skill_mapped = 'pickplace'
+            elif skill_type == 'move':
+                skill_mapped = 'push'
             else:
-                obj_name = 'unknown'
-            
-            continuous_params = action_dict['position_delta'].tolist()
-            action_list.append([skill_type, obj_name, continuous_params])
+                skill_mapped = skill_type
+
+            obj_idx = action_dict['object_id']
+            # Prefer a compact numeric-id-as-string because PerSceneLoader
+            # checks membership with `str(i+1) in current_action_list[1]`.
+            if isinstance(obj_idx, int) and obj_idx is not None and 0 <= obj_idx < len(self.object_metadata):
+                obj_id_str = str(obj_idx + 1)
+            elif isinstance(obj_idx, str):
+                m = re.search(r"(\d+)$", obj_idx)
+                if m:
+                    obj_id_str = m.group(1)
+                else:
+                    obj_id_str = obj_idx
+            else:
+                obj_id_str = 'unknown'
+
+            continuous_params = action_dict.get('position_delta', np.zeros(3))
+            continuous_params = np.asarray(continuous_params).tolist()
+            action_list.append([skill_mapped, obj_id_str, continuous_params])
         
         return action_list
     

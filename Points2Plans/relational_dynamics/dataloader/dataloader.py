@@ -580,7 +580,11 @@ class PerSceneLoader(object):
             for each_step_id in range(1, len(self.all_relation_list)):
                 
                 self.support_surface_id.append([])
-                
+
+                print("each_step_id:", each_step_id)
+                print("self.all_gt_pose_list[each_step_id]:", self.all_gt_pose_list[each_step_id])
+                print("self.move_obj_list[0]:", self.move_obj_list[0])
+
                 if self.all_gt_pose_list[each_step_id][self.move_obj_list[0]][-1] - self.all_gt_pose_list[each_step_id - 1][self.move_obj_list[0]][-1] > 0.10:
                     
                     if not np.array_equal(relation_arr_list[each_step_id][:, 6], relation_arr_list[each_step_id - 1][:, 6]):
@@ -1601,10 +1605,13 @@ class DataLoader(object):
                 if train_dir_list is not None else config.args.train_dir
 
             
-            
+            print('train dir list:', self.train_dir_list)
             files = sorted(os.listdir(self.train_dir_list[0]))       
             self.train_pcd_path = [
-                os.path.join(self.train_dir_list[0], p) for p in files if 'demo' in p]
+                # os.path.join(self.train_dir_list[0], p) for p in files if 'demo' in p]
+                os.path.join(self.train_dir_list[0], p) for p in files if 'episode' in p]
+
+            print('total train pcd path:', len(self.train_pcd_path))
             for train_dir in self.train_pcd_path[start_id:start_id+max_size]:
                 self.current_goal_relations = self.all_goal_relations[self.train_id] # simplify for without test end_relations
                 self.current_predicted_relations = self.all_predicted_relations[self.train_id]
@@ -1615,7 +1622,12 @@ class DataLoader(object):
                 with open(train_dir, 'rb') as f:
                     data, attrs = pickle.load(f)
                 
-                print('loaded data:', train_dir)    
+                print('\nloaded data:', data.keys())
+                # print('\nloaded attrs:', attrs.keys())
+                print("\nattrs['objects']:", attrs['objects'].keys())
+                print("\nattrs['sudo_action_list']:", attrs['sudo_action_list'])
+
+                # print('loaded data:', train_dir)    
                 total_objects = 0
                 for k, v in data.items():
                     if 'point_cloud' in k and 'sampling' in k and 'last' not in k:
@@ -1661,7 +1673,7 @@ class DataLoader(object):
 
                             idx_to_data_dict[demo_idx]['goal_relations'] = self.current_goal_relations
 
-                            print('current goal relations:', self.current_goal_relations)
+                            # print('current goal relations:', self.current_goal_relations)
                             idx_to_data_dict[demo_idx]['predicted_relations'] = self.current_predicted_relations
                             idx_to_data_dict[demo_idx]['index_i'] = self.current_index_i
                             idx_to_data_dict[demo_idx]['index_j'] = self.current_index_j
@@ -1722,7 +1734,7 @@ class DataLoader(object):
                        
                 with open(test_dir, 'rb') as f:
                     data, attrs = pickle.load(f)
-                print('loaded data:', test_dir)     
+                # print('loaded data:', test_dir)     
                 leap = 1
 
                 

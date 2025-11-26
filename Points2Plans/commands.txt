@@ -3,3 +3,20 @@ python LLM/scripts/llm_planner.py --model-config LLM/configs/models/pretrained/g
 python relational_dynamics/main.py --result_dir pretrained_model/ --checkpoint_path pretrained_model/checkpoint/pretrained.pth --test_dir test_scenes/ --test_max_size 5 
 
 python relational_dynamics/main.py --result_dir out/ --train_dir Training/cupboard_0 --batch_size 2 --num_epochs 5 --max_size 10  
+
+
+
+python relational_dynamics/main.py \
+    --result_dir ckpt  \
+    --train_dir Training/cupboard_0 \
+    --batch_size 1 \
+    --num_epochs 2 \
+    --max_size 100
+
+
+python relational_dynamics/main.py \
+    --result_dir ckpt  \
+    --train_dir robosuite/data_capture/dataset/episodes \
+    --batch_size 1 \
+    --num_epochs 2 \
+    --max_size 100
