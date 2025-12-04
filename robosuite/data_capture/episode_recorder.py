@@ -283,21 +283,52 @@ class EpisodeRecorder:
     
     def _capture_point_clouds(self) -> Dict[str, np.ndarray]:
         """Capture and segment point clouds for all objects."""
-        try:
-            # Generate full scene point cloud
-            full_pcd = self.pcd_generator.generate(self.env, self.camera_names)
-            full_points = np.asarray(full_pcd.points)
+        # For now, return random point clouds for each object
+        object_point_clouds = {}
+        
+        for obj_name, obj_meta in self.object_metadata.items():
+            # Generate random points around object position
+            body_id = obj_meta['body_id']
+            obj_pos = self.sim.data.body_xpos[body_id].copy()
+            extents = obj_meta['extents']
             
-            if len(full_points) == 0:
-                return {}
+            if extents is None:
+                continue
             
-            # Segment by proximity to objects
-            return self._segment_points_by_proximity(full_points)
+            # Generate random points within object bounding box
+            num_random_points = np.random.randint(50, 200)
+            random_points = []
             
-        except Exception as e:
-            if self.current_timestep < 2:
-                print(f"Warning: Point cloud capture failed at t={self.current_timestep}: {e}")
-            return {}
+            for _ in range(num_random_points):
+                # Random offset within bounding box
+                offset = np.array([
+                    np.random.uniform(-extents[0]/2, extents[0]/2),
+                    np.random.uniform(-extents[1]/2, extents[1]/2),
+                    np.random.uniform(-extents[2]/2, extents[2]/2)
+                ])
+                point = obj_pos + offset
+                random_points.append(point)
+            
+            object_point_clouds[obj_name] = np.array(random_points)
+        
+        return object_point_clouds
+        
+        # Original point cloud capture (commented out for now)
+        # try:
+        #     # Generate full scene point cloud
+        #     full_pcd = self.pcd_generator.generate(self.env, self.camera_names)
+        #     full_points = np.asarray(full_pcd.points)
+        #     
+        #     if len(full_points) == 0:
+        #         return {}
+        #     
+        #     # Segment by proximity to objects
+        #     return self._segment_points_by_proximity(full_points)
+        #     
+        # except Exception as e:
+        #     if self.current_timestep < 2:
+        #         print(f"Warning: Point cloud capture failed at t={self.current_timestep}: {e}")
+        #     return {}
     
     def _segment_points_by_proximity(self, points: np.ndarray) -> Dict[str, np.ndarray]:
         """Assign points to objects based on bounding box proximity."""

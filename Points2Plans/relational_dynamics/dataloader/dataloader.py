@@ -539,6 +539,8 @@ class PerSceneLoader(object):
                             for i in range(self.max_objects):
                                 self.all_action_list[each_action_step_id].append(0)
                             for i in range(total_objects):
+                                print("current_action_list[1]:", current_action_list[1])
+                                print("i+1:", i+1)
                                 if str(i+1) in current_action_list[1]:
                                     move_obj = i
                             self.move_obj_list.append(move_obj)
@@ -1625,7 +1627,6 @@ class DataLoader(object):
                 print('\nloaded data:', data.keys())
                 # print('\nloaded attrs:', attrs.keys())
                 print("\nattrs['objects']:", attrs['objects'].keys())
-                print("\nattrs['sudo_action_list']:", attrs['sudo_action_list'])
 
                 # print('loaded data:', train_dir)    
                 total_objects = 0

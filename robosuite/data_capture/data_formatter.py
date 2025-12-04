@@ -262,16 +262,25 @@ class DataFormatter:
             else:
                 skill_mapped = skill_type
 
-            # Convert object index to block name matching Points2Plans format
+            # Convert object index to numeric string for Points2Plans format
             # The dataloader checks `if str(i+1) in current_action_list[1]`
-            # So 'block_2' works because '2' in 'block_2' returns True
+            # So we need '1', '2', '3' etc. as strings
             if isinstance(obj_idx, int) and 0 <= obj_idx < len(self.object_metadata):
-                # Use the actual object name from metadata
-                obj_names = list(self.object_metadata.keys())
-                obj_id_str = obj_names[obj_idx]
+                # Convert 0-based index to 1-based string
+                obj_id_str = str(obj_idx + 1)
             elif isinstance(obj_idx, str):
-                # Already a string, use as-is
-                obj_id_str = obj_idx
+                # Try to find this object name in metadata and get its index
+                obj_names = list(self.object_metadata.keys())
+                if obj_idx in obj_names:
+                    obj_id_str = str(obj_names.index(obj_idx) + 1)
+                else:
+                    # Try to extract number from string like 'cubeA_main' or 'block_2'
+                    m = re.search(r"(\d+)$", obj_idx)
+                    if m:
+                        obj_id_str = m.group(1)
+                    else:
+                        # Can't determine, skip this action
+                        continue
             else:
                 # Should not reach here due to earlier filtering, but safety fallback
                 continue

@@ -16,7 +16,7 @@ python relational_dynamics/main.py \
 
 python relational_dynamics/main.py \
     --result_dir ckpt  \
-    --train_dir robosuite/data_capture/dataset/episodes \
+    --train_dir ../robosuite/data_capture/dataset/episodes \
     --batch_size 1 \
     --num_epochs 2 \
     --max_size 100
