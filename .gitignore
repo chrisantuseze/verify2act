@@ -95,3 +95,5 @@ robosuite/data_capture/dataset/
 robosuite/data_capture/test_episodes/
 *MUJOCO_LOG.txt
 *dataset/
+
+*.pickle

@@ -70,6 +70,7 @@ class EpisodeRecorder:
         self.object_metadata = {}
         self.episode_active = False
         self.current_timestep = 0
+        self.last_manipulated_object = None  # Track last known manipulated object
         
         # Will be initialized after metadata extraction
         self.state_capture = None
@@ -84,6 +85,7 @@ class EpisodeRecorder:
         self.current_timestep = 0
         self.timestep_data = []
         self.action_history = []
+        self.last_manipulated_object = None
         
         # Extract object metadata
         self.object_metadata = self.metadata_extractor.extract_all_objects()
@@ -132,16 +134,18 @@ class EpisodeRecorder:
         
         return data_dict, attrs_dict
     
-    def save_episode(self, output_dir: str, episode_name: Optional[str] = None) -> str:
+    def save_episode(self, output_dir: str, episode_name: Optional[str] = None, 
+                    save_subsampled: bool = False) -> str:
         """
         Save recorded episode to pickle file.
         
         Args:
             output_dir: Directory to save episode
             episode_name: Custom name (uses timestamp if None)
+            save_subsampled: If True, also save a subsampled version with only key states
             
         Returns:
-            Path to saved file
+            Path to saved file (full version)
         """
         if self.episode_active:
             raise RuntimeError("Episode still active. Call end_episode() first.")
@@ -158,25 +162,77 @@ class EpisodeRecorder:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             episode_name = f"episode_{timestamp}"
         
-        if not episode_name.endswith('.pkl'):
-            episode_name = f"{episode_name}.pkl"
+        base_name = episode_name.replace('.pkl', '')
         
-        output_file = output_path / episode_name
-        
-        # Package and save
+        # Save full version
+        full_file = output_path / f"{base_name}_full.pkl"
         data_dict = self.data_formatter.build_data_dict(self.timestep_data)
         attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
         episode_data = (data_dict, attrs_dict)
         
-        with open(output_file, 'wb') as f:
+        with open(full_file, 'wb') as f:
             pickle.dump(episode_data, f)
         
-        file_size_mb = output_file.stat().st_size / (1024 * 1024)
-        
-        print(f"\n✓ Saved: {output_file}")
+        file_size_mb = full_file.stat().st_size / (1024 * 1024)
+        print(f"\n✓ Saved (full): {full_file}")
         print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Objects: {len(self.object_metadata)}")
         
-        return str(output_file)
+        # Save subsampled version if requested
+        if save_subsampled:
+            subsampled_data, filtered_actions = self.subsample_to_key_states()
+            subsampled_file = output_path / f"{base_name}_subsampled.pkl"
+            
+            data_dict_sub = self.data_formatter.build_data_dict(subsampled_data)
+            attrs_dict_sub = self.data_formatter.build_attrs_dict(filtered_actions)
+            episode_data_sub = (data_dict_sub, attrs_dict_sub)
+            
+            with open(subsampled_file, 'wb') as f:
+                pickle.dump(episode_data_sub, f)
+            
+            file_size_mb_sub = subsampled_file.stat().st_size / (1024 * 1024)
+            print(f"✓ Saved (subsampled): {subsampled_file}")
+            print(f"  Size: {file_size_mb_sub:.2f} MB | Timesteps: {len(subsampled_data)} | Actions: {len(filtered_actions)}")
+        
+        return str(full_file)
+    
+    def subsample_to_key_states(self) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Subsample timesteps to key states only (Points2Plans format).
+        
+        Returns N+1 timesteps for N actions:
+        - Timestep 0: Initial state
+        - Timestep i: State after action i-1 completes
+        
+        Returns:
+            Tuple of (subsampled_timestep_data, filtered_action_history)
+        """
+        if len(self.timestep_data) == 0:
+            return [], []
+        
+        key_timesteps = [0]  # Always include initial state
+        filtered_actions = []
+        
+        # Find timesteps where meaningful actions occur (grasp or release)
+        for i, timestep_state in enumerate(self.timestep_data):
+            action = timestep_state.get('action')
+            if action and action['object_id'] is not None:
+                skill_type = action['skill_type']
+                # Include timestep after grasp (when object is picked)
+                # and after release (when object is placed)
+                if skill_type in ('grasp', 'release'):
+                    # Add the NEXT timestep (result of this action)
+                    if i + 1 < len(self.timestep_data):
+                        key_timesteps.append(i + 1)
+                        filtered_actions.append(action)
+        
+        # If no actions found, return just initial and final state
+        if len(key_timesteps) == 1:
+            key_timesteps.append(len(self.timestep_data) - 1)
+        
+        # Extract key timesteps
+        subsampled_data = [self.timestep_data[i] for i in key_timesteps]
+        
+        return subsampled_data, filtered_actions
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get episode statistics."""
@@ -300,7 +356,18 @@ class EpisodeRecorder:
             skill_type = 'move'
         
         # Detect manipulated object (attempt to return an integer index)
-        manipulated_object = self.state_capture.detect_manipulated_object(obs)
+        current_manipulated = self.state_capture.detect_manipulated_object(obs)
+
+        # Update last known manipulated object if we detected one
+        if current_manipulated is not None:
+            self.last_manipulated_object = current_manipulated
+        
+        # Use current if available, otherwise use last known
+        manipulated_object = current_manipulated if current_manipulated is not None else self.last_manipulated_object
+        
+        # Reset after release to allow new object detection
+        if skill_type == 'release':
+            self.last_manipulated_object = None
 
         object_id = None
         if manipulated_object is None:
@@ -368,7 +435,7 @@ if __name__ == "__main__":
         recorder.record_step(action, obs)
         print(f"  Step {step+1}/5 captured")
     
-    # Save episode
+    # Save episode (both versions)
     print("\\nPackaging and saving...")
     data, attrs = recorder.end_episode()
     
@@ -376,17 +443,17 @@ if __name__ == "__main__":
     for key, value in recorder.get_statistics().items():
         print(f"{key}: {value}")
     
-    # Save and verify
-    saved_path = recorder.save_episode("./test_episodes", "test_episode")
+    # Save both full and subsampled versions
+    saved_path = recorder.save_episode("./test_episodes", "test_episode", save_subsampled=True)
     
     print("\\n=== Verification ===")
     loaded_data, loaded_attrs = EpisodeRecorder.load_episode(saved_path)
     print(f"Loaded successfully: {set(loaded_data.keys()) == set(data.keys())}")
     
-    print("\\n✓ All phases working!")
-    print("  - State capture: ✓")
-    print("  - Point cloud capture: ✓")
-    print("  - Data formatting: ✓")
-    print("  - Save/load: ✓")
+    print("\\n\u2713 All phases working!")
+    print("  - State capture: \u2713")
+    print("  - Point cloud capture: \u2713")
+    print("  - Data formatting: \u2713")
+    print("  - Save/load (full + subsampled): \u2713")
     
     env.close()

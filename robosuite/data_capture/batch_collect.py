@@ -37,6 +37,7 @@ class BatchCollector:
     """
     
     def __init__(self, 
+                 args,
                  env_name: str = "Stack",
                  output_dir: str = "./data_capture/dataset",
                  camera_names: Optional[List[str]] = None,
@@ -46,12 +47,14 @@ class BatchCollector:
         Initialize batch collector.
         
         Args:
+            args: Parsed command-line arguments
             env_name: Environment name ("Stack", "Stack3", "Stack4")
             output_dir: Root directory for dataset
             camera_names: Camera names for point cloud capture
             num_points: Points per object point cloud
             voxel_size: Voxel size for downsampling
         """
+        self.args = args
         self.env_name = env_name
         self.output_dir = Path(output_dir)
         self.camera_names = camera_names or ["frontview", "agentview"]
@@ -236,7 +239,8 @@ class BatchCollector:
         
         # Save episode
         episode_name = f"episode_{episode_idx:05d}"
-        saved_path = recorder.save_episode(str(self.episodes_dir), episode_name)
+        print("self.args.save_subsampled:", self.args.save_subsampled)
+        saved_path = recorder.save_episode(str(self.episodes_dir), episode_name, save_subsampled=self.args.save_subsampled)
         
         # Update statistics
         episode_stats = recorder.get_statistics()
@@ -346,7 +350,7 @@ def main():
     parser.add_argument(
         '--num-episodes',
         type=int,
-        default=10,
+        default=2,
         help='Number of episodes to collect'
     )
     
@@ -391,11 +395,19 @@ def main():
         action='store_true',
         help='Suppress verbose output'
     )
+
+    parser.add_argument(
+        '--save-subsampled',
+        action='store_true',
+        help='Save a subsampled version of the episode with only key states'
+    )
     
     args = parser.parse_args()
+    args.save_subsampled = True
     
     # Create collector
     collector = BatchCollector(
+        args=args,
         env_name=args.env,
         output_dir=args.output_dir,
         camera_names=args.cameras,

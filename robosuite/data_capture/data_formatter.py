@@ -230,13 +230,29 @@ class DataFormatter:
         return attrs
     
     def _build_action_list(self, action_history: List[Dict]) -> List[List]:
-        """Build action list in Points2Plans format."""
+        """
+        Build action list in Points2Plans format.
+        
+        Only includes meaningful manipulation actions (grasp/place) where the object
+        is known. Filters out approach movements and timesteps without a target object.
+        """
         action_list = []
         
         for action_dict in action_history:
             if action_dict is None:
                 continue
+            
             skill_type = action_dict['skill_type']
+            obj_idx = action_dict['object_id']
+            
+            # Skip actions with unknown objects (approach phase, no contact yet)
+            if obj_idx is None:
+                continue
+            
+            # Only include grasp and release actions (actual manipulation events)
+            # Skip 'move' actions unless they have a valid object (for push tasks)
+            if skill_type == 'move' and obj_idx is None:
+                continue
 
             # Map recorded skill labels to the loader's expected labels
             if skill_type in ('grasp', 'release'):
@@ -246,19 +262,19 @@ class DataFormatter:
             else:
                 skill_mapped = skill_type
 
-            obj_idx = action_dict['object_id']
-            # Prefer a compact numeric-id-as-string because PerSceneLoader
-            # checks membership with `str(i+1) in current_action_list[1]`.
-            if isinstance(obj_idx, int) and obj_idx is not None and 0 <= obj_idx < len(self.object_metadata):
-                obj_id_str = str(obj_idx + 1)
+            # Convert object index to block name matching Points2Plans format
+            # The dataloader checks `if str(i+1) in current_action_list[1]`
+            # So 'block_2' works because '2' in 'block_2' returns True
+            if isinstance(obj_idx, int) and 0 <= obj_idx < len(self.object_metadata):
+                # Use the actual object name from metadata
+                obj_names = list(self.object_metadata.keys())
+                obj_id_str = obj_names[obj_idx]
             elif isinstance(obj_idx, str):
-                m = re.search(r"(\d+)$", obj_idx)
-                if m:
-                    obj_id_str = m.group(1)
-                else:
-                    obj_id_str = obj_idx
+                # Already a string, use as-is
+                obj_id_str = obj_idx
             else:
-                obj_id_str = 'unknown'
+                # Should not reach here due to earlier filtering, but safety fallback
+                continue
 
             continuous_params = action_dict.get('position_delta', np.zeros(3))
             continuous_params = np.asarray(continuous_params).tolist()
