@@ -255,7 +255,7 @@ class DataFormatter:
                 continue
 
             # Map recorded skill labels to the loader's expected labels
-            if skill_type in ('grasp', 'release'):
+            if skill_type in ('grasp', 'release', 'pickplace'):
                 skill_mapped = 'pickplace'
             elif skill_type == 'move':
                 skill_mapped = 'push'
@@ -268,6 +268,7 @@ class DataFormatter:
             if isinstance(obj_idx, int) and 0 <= obj_idx < len(self.object_metadata):
                 # Convert 0-based index to 1-based string
                 obj_id_str = str(obj_idx + 1)
+                # print("obj_id_str:", obj_id_str)
             elif isinstance(obj_idx, str):
                 # Try to find this object name in metadata and get its index
                 obj_names = list(self.object_metadata.keys())

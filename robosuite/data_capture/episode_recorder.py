@@ -199,9 +199,11 @@ class EpisodeRecorder:
         """
         Subsample timesteps to key states only (Points2Plans format).
         
-        Returns N+1 timesteps for N actions:
+        Returns N+1 timesteps for N pick-place operations:
         - Timestep 0: Initial state
-        - Timestep i: State after action i-1 completes
+        - Timestep i: State after pick-place operation i completes (after release)
+        
+        Each pick-place operation (grasp + move + release) = 1 action in the list
         
         Returns:
             Tuple of (subsampled_timestep_data, filtered_action_history)
@@ -212,18 +214,48 @@ class EpisodeRecorder:
         key_timesteps = [0]  # Always include initial state
         filtered_actions = []
         
-        # Find timesteps where meaningful actions occur (grasp or release)
+        # Track pick-place operations: look for grasp->release pairs
+        # A valid pick-place requires BOTH a grasp AND a release
+        in_manipulation = False
+        last_grasped_object_id = None
+        grasp_action = None
+        
         for i, timestep_state in enumerate(self.timestep_data):
             action = timestep_state.get('action')
-            if action and action['object_id'] is not None:
+            if action:
                 skill_type = action['skill_type']
-                # Include timestep after grasp (when object is picked)
-                # and after release (when object is placed)
-                if skill_type in ('grasp', 'release'):
-                    # Add the NEXT timestep (result of this action)
-                    if i + 1 < len(self.timestep_data):
-                        key_timesteps.append(i + 1)
-                        filtered_actions.append(action)
+                object_id = action['object_id']
+                
+                if skill_type == 'grasp' and object_id is not None:
+                    # Start of pick-place operation
+                    in_manipulation = True
+                    last_grasped_object_id = object_id
+                    grasp_action = action
+                    
+                elif skill_type == 'release' and in_manipulation:
+                    # End of pick-place operation - this is a key state
+                    # Use the last grasped object_id (persists even if detection fails at release)
+                    final_object_id = last_grasped_object_id
+                    
+                    if final_object_id is not None:
+                        # Add the timestep AFTER release (final placed state)
+                        if i + 1 < len(self.timestep_data):
+                            key_timesteps.append(i + 1)
+                            # Create a single 'pickplace' action for this operation
+                            # Use the release position as the target
+                            combined_action = {
+                                'skill_type': 'pickplace',
+                                'object_id': final_object_id,
+                                'position_delta': action['position_delta'],
+                                'gripper_action': action['gripper_action'],
+                                'raw_action': action['raw_action'],
+                            }
+                            filtered_actions.append(combined_action)
+                    
+                    # Reset for next operation
+                    in_manipulation = False
+                    last_grasped_object_id = None
+                    grasp_action = None
         
         # If no actions found, return just initial and final state
         if len(key_timesteps) == 1:
@@ -231,6 +263,9 @@ class EpisodeRecorder:
         
         # Extract key timesteps
         subsampled_data = [self.timestep_data[i] for i in key_timesteps]
+        
+        print(f"Subsampling: {len(self.timestep_data)} timesteps → {len(subsampled_data)} key states")
+        print(f"  Actions: {len(filtered_actions)} pick-place operations")
         
         return subsampled_data, filtered_actions
     
@@ -387,7 +422,8 @@ class EpisodeRecorder:
             skill_type = 'move'
         
         # Detect manipulated object (attempt to return an integer index)
-        current_manipulated = self.state_capture.detect_manipulated_object(obs)
+        # Pass is_grasp_action flag for more lenient detection during grasp
+        current_manipulated = self.state_capture.detect_manipulated_object(obs, is_grasp_action=(skill_type == 'grasp'))
 
         # Update last known manipulated object if we detected one
         if current_manipulated is not None:

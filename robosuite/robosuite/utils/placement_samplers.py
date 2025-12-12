@@ -125,6 +125,10 @@ class UniformRandomSampler(ObjectPositionSampler):
 
         z_offset (float): Add a small z-offset to placements. This is useful for fixed objects
             that do not move (i.e. no free joint) to place them above the table.
+
+        min_distance_between_objects (float): Minimum distance (in meters) to maintain between object edges.
+            Defaults to 0.0 (objects can touch but not overlap). Set to positive values (e.g., 0.05 for 5cm)
+            to enforce spacing between objects.
     """
 
     def __init__(
@@ -139,12 +143,14 @@ class UniformRandomSampler(ObjectPositionSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.0,
+        min_distance_between_objects=0.05,
         rng=None,
     ):
         self.x_range = x_range
         self.y_range = y_range
         self.rotation = rotation
         self.rotation_axis = rotation_axis
+        self.min_distance_between_objects = min_distance_between_objects
 
         super().__init__(
             name=name,
@@ -278,13 +284,13 @@ class UniformRandomSampler(ObjectPositionSampler):
                 if on_top:
                     object_z -= bottom_offset[-1]
 
-                # objects cannot overlap
+                # objects cannot overlap (with minimum distance enforced)
                 location_valid = True
                 if self.ensure_valid_placement:
                     for (x, y, z), _, other_obj in placed_objects.values():
                         if (
                             np.linalg.norm((object_x - x, object_y - y))
-                            <= other_obj.horizontal_radius + horizontal_radius
+                            <= other_obj.horizontal_radius + horizontal_radius + self.min_distance_between_objects
                         ) and (object_z - z <= other_obj.top_offset[-1] - bottom_offset[-1]):
                             location_valid = False
                             break

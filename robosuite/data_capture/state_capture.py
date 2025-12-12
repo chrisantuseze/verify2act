@@ -188,7 +188,7 @@ class StateCapture:
         
         return contacts
     
-    def detect_manipulated_object(self, obs: Optional[Dict[str, Any]]) -> Optional[int]:
+    def detect_manipulated_object(self, obs: Optional[Dict[str, Any]], is_grasp_action: bool = False) -> Optional[int]:
         """
         Detect which object is being manipulated using contact persistence and gripper state.
         
@@ -200,6 +200,7 @@ class StateCapture:
         
         Args:
             obs: Current observations
+            is_grasp_action: If True, uses more lenient detection for grasp timesteps
             
         Returns:
             Object index of manipulated object, or None
@@ -214,7 +215,7 @@ class StateCapture:
         gripper_width = self._get_gripper_width()
         is_closing = False
         if self.last_gripper_width is not None:
-            is_closing = gripper_width < self.last_gripper_width - 0.001  # Threshold for closing detection
+            is_closing = gripper_width < self.last_gripper_width - 0.005  # More lenient threshold
         self.last_gripper_width = gripper_width
         
         # Get current contacts
@@ -242,8 +243,10 @@ class StateCapture:
                 best_obj = max(current_contacts, key=lambda x: self.contact_history.get(x, 0))
                 return best_obj
             
-            # Otherwise, return object with most persistent contact (>= 3 consecutive frames)
-            persistent_contacts = {obj: count for obj, count in self.contact_history.items() if count >= 3}
+            # For grasp actions, be more lenient (>= 1 frame)
+            # For other actions, require more persistence (>= 3 frames)
+            min_persistence = 1 if is_grasp_action else 3
+            persistent_contacts = {obj: count for obj, count in self.contact_history.items() if count >= min_persistence}
             if persistent_contacts:
                 # Return object with highest contact count
                 best_obj = max(persistent_contacts.items(), key=lambda x: x[1])[0]
@@ -281,8 +284,9 @@ class StateCapture:
                     min_dist = dist
                     closest_obj_idx = idx
             
-            # Only return if very close (within 8cm for approach detection)
-            if min_dist < 0.08:
+            # For grasp actions, use larger proximity margin (12cm vs 8cm)
+            proximity_threshold = 0.12 if is_grasp_action else 0.08
+            if min_dist < proximity_threshold:
                 return closest_obj_idx
         
         return None

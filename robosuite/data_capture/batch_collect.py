@@ -342,7 +342,7 @@ def main():
     parser.add_argument(
         '--env',
         type=str,
-        default='Stack',
+        default='Stack3',
         choices=['Stack', 'Stack3', 'Stack4'],
         help='Environment name'
     )
@@ -350,7 +350,7 @@ def main():
     parser.add_argument(
         '--num-episodes',
         type=int,
-        default=2,
+        default=4,
         help='Number of episodes to collect'
     )
     
