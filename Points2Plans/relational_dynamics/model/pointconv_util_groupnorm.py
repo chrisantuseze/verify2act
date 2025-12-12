@@ -9,6 +9,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from time import time
 import numpy as np
+
+# Workaround for "Illegal instruction" errors on older CPUs
+# Disable MKL-DNN which can cause issues with certain CPU instruction sets
+try:
+    torch.backends.mkldnn.enabled = False
+    print("MKL-DNN disabled to prevent CPU instruction incompatibility")
+except:
+    pass
+
+# Set conservative number of threads to avoid CPU instruction issues
+try:
+    torch.set_num_threads(2)
+    print(f"Set PyTorch to use 2 threads")
+except:
+    pass
 # from sklearn.neighbors.kde import KernelDensity
 
 def timeit(tag, t):
@@ -222,7 +237,19 @@ class DensityNet(nn.Module):
     def forward(self, density_scale):
         for i, conv in enumerate(self.mlp_convs):
             bn = self.mlp_bns[i]
-            density_scale =  bn(conv(density_scale))
+            
+            # CPU fallback for CUDA issues
+            original_device = density_scale.device
+            if density_scale.is_cuda:
+                ds_cpu = density_scale.cpu()
+                conv_cpu = conv.cpu()
+                bn_cpu = bn.cpu()
+                density_scale = bn_cpu(conv_cpu(ds_cpu)).to(original_device)
+                conv.to(original_device)
+                bn.to(original_device)
+            else:
+                density_scale = bn(conv(density_scale))
+            
             if i == len(self.mlp_convs):
                 density_scale = F.sigmoid(density_scale)
             else:
@@ -255,7 +282,18 @@ class WeightNet(nn.Module):
         weights = localized_xyz
         for i, conv in enumerate(self.mlp_convs):
             bn = self.mlp_bns[i]
-            weights =  F.relu(bn(conv(weights)))
+            
+            # CPU fallback for CUDA issues
+            original_device = weights.device
+            if weights.is_cuda:
+                weights_cpu = weights.cpu()
+                conv_cpu = conv.cpu()
+                bn_cpu = bn.cpu()
+                weights = F.relu(bn_cpu(conv_cpu(weights_cpu))).to(original_device)
+                conv.to(original_device)
+                bn.to(original_device)
+            else:
+                weights = F.relu(bn(conv(weights)))
 
         return weights
 
@@ -298,9 +336,23 @@ class PointConvSetAbstraction(nn.Module):
         # new_xyz: sampled points position data, [B, npoint, C]
         # new_points: sampled points data, [B, npoint, nsample, C+D]
         new_points = new_points.permute(0, 3, 2, 1) # [B, C+D, nsample,npoint]
+        new_points = new_points.contiguous()
+        
         for i, conv in enumerate(self.mlp_convs):
             bn = self.mlp_bns[i]
-            new_points =  F.relu(bn(conv(new_points)))
+            
+            # CPU fallback for CUDA issues
+            original_device = new_points.device
+            # if new_points.is_cuda:
+            #     new_points_cpu = new_points.cpu()
+            #     conv_cpu = conv.cpu()
+            #     bn_cpu = bn.cpu()
+            #     new_points = F.relu(bn_cpu(conv_cpu(new_points_cpu))).to(original_device)
+            #     conv.to(original_device)
+            #     bn.to(original_device)
+            # else:
+            #     new_points = F.relu(bn(conv(new_points)))
+            new_points = F.relu(bn(conv(new_points)))
 
         grouped_xyz = grouped_xyz_norm.permute(0, 3, 2, 1)
         weights = self.weightnet(grouped_xyz)
@@ -356,16 +408,52 @@ class PointConvDensitySetAbstraction(nn.Module):
             new_xyz, new_points, grouped_xyz_norm, _, grouped_density = sample_and_group(self.npoint, self.nsample, xyz, points, inverse_density.view(B, N, 1))
         # new_xyz: sampled points position data, [B, npoint, C]
         # new_points: sampled points data, [B, npoint, nsample, C+D]
+        print("New xyz shape:", new_xyz.shape, "New points shape:", new_points.shape, "len(self.mlp_convs):", len(self.mlp_convs))
         new_points = new_points.permute(0, 3, 2, 1) # [B, C+D, nsample,npoint]
+        
+        # IMPORTANT: Ensure tensor is contiguous to avoid illegal instruction errors
+        new_points = new_points.contiguous()
+        
         for i, conv in enumerate(self.mlp_convs):
+            print("MLP layer", i, "input shape:", new_points.shape)
             bn = self.mlp_bns[i]
-            new_points =  F.relu(bn(conv(new_points)))
+            
+            # Workaround for CUDA illegal instruction errors
+            # Move to CPU, compute, then move back to original device
+            original_device = new_points.device
+            is_cuda = new_points.is_cuda
+            
+            # if is_cuda:
+            #     # Use CPU for this operation to avoid CUDA kernel issues
+            #     new_points_cpu = new_points.cpu()
+            #     conv_cpu = conv.cpu() if hasattr(conv, 'cpu') else conv
+            #     bn_cpu = bn.cpu() if hasattr(bn, 'cpu') else bn
+                
+            #     conv_out = conv_cpu(new_points_cpu)
+            #     bn_out = bn_cpu(conv_out)
+            #     new_points = F.relu(bn_out)
+                
+            #     # Move back to CUDA
+            #     new_points = new_points.to(original_device)
+            #     conv.to(original_device)
+            #     bn.to(original_device)
+            # else:
+            #     # Normal CPU path
+            #     conv_out = conv(new_points)
+            #     bn_out = bn(conv_out)
+            #     new_points = F.relu(bn_out)
 
+            conv_out = conv(new_points)
+            bn_out = bn(conv_out)
+            new_points = F.relu(bn_out)
+
+        # print("New points after MLP shape:", new_points.shape)
         inverse_max_density = grouped_density.max(dim = 2, keepdim=True)[0]
         density_scale = grouped_density / inverse_max_density
         density_scale = self.densitynet(density_scale.permute(0, 3, 2, 1))
         new_points = new_points * density_scale
 
+        # print("Density scale shape:", density_scale.shape)
         grouped_xyz = grouped_xyz_norm.permute(0, 3, 2, 1)
         weights = self.weightnet(grouped_xyz)     
         new_points = torch.matmul(input=new_points.permute(0, 3, 1, 2), other = weights.permute(0, 3, 2, 1)).view(B, self.npoint, -1)

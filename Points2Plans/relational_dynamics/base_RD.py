@@ -246,8 +246,12 @@ class RelationalDynamics(object):
         for this_step in range(total_steps):
             voxel_data_single = x_tensor_dict['batch_voxel_list_single'][:, this_step, :, : ,:]
             reshaped_voxel_data_single = voxel_data_single.reshape(voxel_data_single.shape[0]*voxel_data_single.shape[1], voxel_data_single.shape[2], voxel_data_single.shape[3])
+            
+            print("reshaped_voxel_data_single shape:", reshaped_voxel_data_single.shape)
             img_emb_single = self.emb_model(reshaped_voxel_data_single)
             img_emb_single = img_emb_single.reshape(voxel_data_single.shape[0], voxel_data_single.shape[1], img_emb_single.shape[1])
+
+            print("img_emb_single shape:", img_emb_single.shape)
 
             one_hot_encoding_tensor = x_tensor_dict['batch_one_hot_encoding']
             latent_one_hot_encoding = self.classif_model.one_hot_encoding_embed(torch.argmax(one_hot_encoding_tensor, dim = 2))
@@ -255,6 +259,8 @@ class RelationalDynamics(object):
             node_pose = torch.cat([img_emb_single, latent_one_hot_encoding], dim = -1)
 
             outs_decoder = self.classif_model_decoder(node_pose, self.edge_index)
+
+            print("outs_decoder keys:", outs_decoder.keys())
 
             current_latent_list.append([node_pose])
             current_output_classifier_list.append(outs_decoder['pred_sigmoid'][:])
@@ -385,6 +391,8 @@ class RelationalDynamics(object):
 
         # Construct padding mask where env identity is -1 (invalid/missing nodes)
         self.src_key_padding_mask = (x_tensor_dict['batch_env_identity'][:, :, :, 0]==-1)
+
+        print("src_key_padding_mask shape:", self.src_key_padding_mask.shape)
         
         # Ensure at least one node is not fully masked per sequence element so
         # transformer/graph modules don't receive an all-masked input row.
@@ -397,6 +405,8 @@ class RelationalDynamics(object):
         self.dynamic_src_padding_mask = torch.zeros(self.src_key_padding_mask.shape[0], self.src_key_padding_mask.shape[1], self.src_key_padding_mask.shape[2] + 2).to(device)
         self.dynamic_src_padding_mask[:,:,:-2] = self.src_key_padding_mask
 
+        print("dynamic_src_padding_mask shape:", self.dynamic_src_padding_mask.shape)
+
 
         # Compute per-time-step embeddings and decoder outputs (helper)
         (current_latent_list,
@@ -405,11 +415,15 @@ class RelationalDynamics(object):
          current_env_identity_list,
          current_grasp_identity_list) = self._compute_time_step_outputs(x_tensor_dict, total_steps)
 
+        print("Finished computing time step outputs")
+
         # For training we use the first sequence element (seq=0) to compute
         # action-conditioned dynamics predictions (helper builds embeddings)
         seq = 0
         (current_latent, discrete_action, continuous_action, current_action_continuous,
          current_action, skill_label) = self._get_action_embeddings(x_tensor_dict, seq, current_latent_list)
+
+        print("Finished getting action embeddings")
 
 
         # Concatenate node latents with action features to form graph node inputs - @Chris: This is where we chain the inputs to the dynamics model
@@ -836,6 +850,7 @@ class RelationalDynamics(object):
         args = self.config.args
         data = None
         data, data_next = dataloader.get_next_all_object_pairs_for_scene(train)
+        print("get_next_data_from_dataloader")
         
         return data, data_next
    
@@ -845,6 +860,7 @@ class RelationalDynamics(object):
         device = self.config.get_device()
 
         train_data_size = dataloader.number_of_scene_data(train)
+        print("Train data size: {}".format(train_data_size))
 
         self.set_model_device(device)
 
@@ -873,15 +889,26 @@ class RelationalDynamics(object):
                     batch_data_next = []
 
                     while len(batch_data) < batch_size and data_idx < train_data_size:  # in current version, we totally ignore batch size
+                        print("About to fetch next data from dataloader")
                         data, data_next = self.get_next_data_from_dataloader(dataloader, train)
+                        print("Fetched next data from dataloader")
                         batch_data.append(data)
+                        print("Appended data to batch_data")
                         batch_data_next.append(data_next)
+                        print("Appended data to batch_data_next")
                         data_idx = data_idx + 1
+                        print("Incremented data_idx")
+
+                        print("len(batch_data):", len(batch_data), "batch_size:", batch_size, "data_idx:", data_idx, "train_data_size:", train_data_size)
+
+                        # print(f"Epoch {e+1}/{num_epochs}, Batch {batch_idx+1}/{num_batches}, Data idx {data_idx}/{train_data_size}", end='\r')
 
 
                     if train:
                         x_tensor_dict = model_utils.process_data(self.config, batch_data)
                         x_tensor_dict_next = model_utils.process_data(self.config, batch_data_next)
+
+                        print("Processed batch_data and batch_data_next into tensors")
                     else:
                         x_tensor_dict = model_utils.process_data_plan(self.config, batch_data)
                         x_tensor_dict_next = model_utils.process_data_plan(self.config, batch_data_next)

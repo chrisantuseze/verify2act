@@ -533,6 +533,8 @@ class PerSceneLoader(object):
                         else:
                             each_action_step_id = each_action_step
                         self.all_action_list.append([])
+
+                        print("attrs['sudo_action_list']:", attrs['sudo_action_list'])
                         current_action_list = attrs['sudo_action_list'][each_action_step]
                         
                         if current_action_list[0] == 'pickplace' or current_action_list[0] == 'stack':
@@ -1611,7 +1613,7 @@ class DataLoader(object):
             files = sorted(os.listdir(self.train_dir_list[0]))       
             self.train_pcd_path = [
                 # os.path.join(self.train_dir_list[0], p) for p in files if 'demo' in p]
-                os.path.join(self.train_dir_list[0], p) for p in files if 'episode' in p]
+                os.path.join(self.train_dir_list[0], p) for p in files if 'episode' in p or 'demo' in p]
 
             print('total train pcd path:', len(self.train_pcd_path))
             for train_dir in self.train_pcd_path[start_id:start_id+max_size]:
@@ -1696,13 +1698,17 @@ class DataLoader(object):
                 len(self.train_idx_to_data_dict)))
 
         self.test_idx_to_data_dict = {}
+        print("0. config.args.test_dir:", config.args.test_dir)
         if config.args.test_dir != None:
+            print("1. config.args.test_dir:", config.args.test_dir)
             self.test_dir_list = test_dir_list \
                 if test_dir_list is not None else config.args.test_dir
             
+            print("2. config.args.test_dir:", config.args.test_dir)
             idx_to_data_dict = {}
 
             files = sorted(os.listdir(self.test_dir_list[0]))
+            print('test dir list:', self.test_dir_list, files)
             
             self.test_pcd_path = [
                 os.path.join(self.test_dir_list[0], p) for p in files if 'demo' in p]
@@ -1735,7 +1741,7 @@ class DataLoader(object):
                        
                 with open(test_dir, 'rb') as f:
                     data, attrs = pickle.load(f)
-                # print('loaded data:', test_dir)     
+                print('loaded data:', test_dir)     
                 leap = 1
 
                 
@@ -1825,6 +1831,7 @@ class DataLoader(object):
     
     def get_demo_data_dict(self, train=True):
         data_dict = self.train_idx_to_data_dict if train else self.test_idx_to_data_dict
+        print("get_demo_data_dict, train:", train, "data_dict len:", len(data_dict))
         return data_dict
     
     
@@ -1976,7 +1983,7 @@ class DataLoader(object):
         # Get the actual scene index.
         scene_idx = sample_order_dict['order'][sample_idx]
         
-
+        print("Getting scene index:", scene_idx, "train:", train)
         data, data_next = self.get_all_object_pairs_for_scene_index(scene_idx, train=train)
         sample_order_dict['idx'] += 1
         
