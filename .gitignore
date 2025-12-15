@@ -91,6 +91,7 @@ ENV/
 .DS_Store
 
 Points2Plans/Training/
+Points2Plans/ckpt/
 robosuite/data_capture/dataset/
 robosuite/data_capture/test_episodes/
 *MUJOCO_LOG.txt
