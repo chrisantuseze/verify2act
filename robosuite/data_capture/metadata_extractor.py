@@ -68,11 +68,12 @@ class MetadataExtractor:
         object_bodies = {}
         
         # Keywords to identify relevant objects
-        object_keywords = ['cube', 'table', 'block', 'object', 'can', 'milk', 'peg', 'box']
+        object_keywords = ['cube', 'table', 'block', 'object', 'can', 'milk', 'peg', 'box', 
+                          'bin', 'cereal', 'bread']
         
         # Keywords to exclude (robot parts and non-objects)
         exclude_keywords = ['robot', 'gripper', 'link', 'joint', 'world', 'floor',
-                           'mount', 'controller', 'base', 'pedestal']
+                           'mount', 'controller', 'pedestal', 'visual', 'base']
         
         for body_id in range(self.model.nbody):
             body_name = self.model.body(body_id).name

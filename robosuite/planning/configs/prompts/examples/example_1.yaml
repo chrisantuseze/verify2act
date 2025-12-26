@@ -1,0 +1,21 @@
+# Task
+task: example_1
+instruction: "Put the milk on the table."
+objects: 
+  - "milk"
+  - "table"
+  - "counter"
+predicates:
+  - "On(milk, counter)"
+
+# Behaviors
+goals: [["On(milk, table)"]]
+plans: [["Pick(milk, counter)", "Place(milk, table)"]]
+hypotheses: Null
+geometric: Null
+
+# OpenAI
+role: system
+name: Null
+name_query: example_user
+name_response: example_assistant

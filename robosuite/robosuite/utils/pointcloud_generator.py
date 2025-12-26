@@ -284,15 +284,15 @@ class PointCloudGenerator:
         height = env.camera_heights[0] if hasattr(env, 'camera_heights') else 256
         
         # Get RGB-D
-        obs_dict = env.sim.render(
+        rgb, depth = env.sim.render(
             camera_name=camera_name,
             width=width,
             height=height,
             depth=True
         )
         
-        color = obs_dict[:, :, :3]  # RGB
-        depth = obs_dict[:, :, 3]    # Depth channel
+        color = rgb[:, :, :3]  # RGB (already in correct format)
+        # depth is already a 2D array
         
         # Get segmentation mask
         # Robosuite uses MuJoCo's segmentation which provides geom IDs

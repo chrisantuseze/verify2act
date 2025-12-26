@@ -22,8 +22,11 @@ import sys
 
 # Add robosuite paths
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "robosuite" / "utils"))
 
-from robosuite.utils.pointcloud_generator import PointCloudGenerator
+from pointcloud_generator import PointCloudGenerator
+# from robosuite.utils.pointcloud_generator import PointCloudGenerator
+
 from data_capture.metadata_extractor import MetadataExtractor
 
 
@@ -72,16 +75,31 @@ class StateConverter:
         
         # Extract object metadata (once at initialization)
         self.metadata_extractor = MetadataExtractor(self.sim)
-        self.object_metadata = self.metadata_extractor.extract_all_objects()
+        raw_metadata = self.metadata_extractor.extract_all_objects()
+        
+        # Normalize object names: strip MuJoCo suffixes like "_main" for cleaner semantics
+        # Store mapping from clean names to full MuJoCo names for internal use
+        self.mujoco_name_map = {}  # clean_name -> full_mujoco_name
+        self.object_metadata = {}  # clean_name -> metadata
+        
+        for full_name, metadata in raw_metadata.items():
+            # Extract base name (e.g., "cubeA_main" -> "cubeA", "Milk_main" -> "Milk")
+            clean_name = full_name.split('_')[0] if '_' in full_name else full_name
+            self.mujoco_name_map[clean_name] = full_name
+            self.object_metadata[clean_name] = metadata
+        
         self.num_objects = len(self.object_metadata)
         
-        # Create consistent object ordering
+        # Use clean names everywhere
         self.object_names = sorted(self.object_metadata.keys())
         self.object_name_to_id = {name: idx for idx, name in enumerate(self.object_names)}
         
+        print(f"Detected objects (clean names): {self.object_names}")
+        print(f"MuJoCo name mapping: {self.mujoco_name_map}")
+        
         # Build object type to index mapping (for one-hot encoding)
         self.object_types = sorted(list(set(
-            meta['type'] for meta in self.object_metadata.values()
+            meta.get('object_type', 'unknown') for meta in self.object_metadata.values()
         )))
         self.type_to_idx = {obj_type: idx for idx, obj_type in enumerate(self.object_types)}
         
@@ -132,6 +150,8 @@ class StateConverter:
             'batch_edge_attr': torch.LongTensor(edge_indices),  # [2, E]
             'batch_num_objects': self.num_objects,
         }
+
+        state_dict['object_names'] = self.get_object_list()
         
         return state_dict
     
@@ -150,36 +170,28 @@ class StateConverter:
         """
         point_clouds = []
         
-        # Capture RGB-D from all cameras
-        all_pcds = []
-        for cam_name in self.camera_names:
-            rgb, depth = self.pcd_generator.capture_rgbd(self.sim, [cam_name])
-            pcd = self.pcd_generator.rgbd_to_pointcloud(rgb[0], depth[0], cam_name)
-            all_pcds.append(pcd)
-        
-        # Merge point clouds from all cameras
-        if len(all_pcds) > 1:
-            full_pcd = np.vstack(all_pcds)
-        else:
-            full_pcd = all_pcds[0]
-        
-        # Segment by object
-        segmented = self.pcd_generator.segment_by_objects(
-            full_pcd,
-            self.sim,
-            self.object_metadata
+        # Generate segmented point clouds for all objects
+        # Pass MuJoCo names to generator since it works with sim directly
+        mujoco_names = [self.mujoco_name_map[name] for name in self.object_names]
+        object_pcds = self.pcd_generator.generate_segmented(
+            self.env,
+            self.camera_names,
+            object_names=mujoco_names
         )
         
-        # Resample each object's point cloud to fixed size
-        for obj_name in self.object_names:
-            obj_pcd = segmented.get(obj_name, None)
+        # Convert to numpy arrays and resample to fixed size
+        for clean_name in self.object_names:
+            full_name = self.mujoco_name_map[clean_name]
+            pcd = object_pcds.get(full_name, None)
             
-            if obj_pcd is None or len(obj_pcd) == 0:
+            if pcd is None or len(pcd.points) == 0:
                 # No points for this object, use zeros
                 resampled = np.zeros((self.num_points, 3))
             else:
+                # Convert Open3D point cloud to numpy
+                points = np.asarray(pcd.points)
                 # Resample to target size
-                resampled = self._resample_point_cloud(obj_pcd, self.num_points)
+                resampled = self._resample_point_cloud(points, self.num_points)
             
             point_clouds.append(resampled)
         
@@ -222,22 +234,24 @@ class StateConverter:
         """
         poses = []
         
-        for obj_name in self.object_names:
+        for clean_name in self.object_names:
+            full_name = self.mujoco_name_map[clean_name]
+            
             # Get position
-            pos_key = f"{obj_name}_pos"
+            pos_key = f"{full_name}_pos"
             if pos_key in obs:
                 pos = obs[pos_key]
             else:
-                # Try to get from sim directly
-                obj_id = self.sim.model.body_name2id(obj_name)
+                # Try to get from sim directly using MuJoCo name
+                obj_id = self.sim.model.body_name2id(full_name)
                 pos = self.sim.data.body_xpos[obj_id]
             
             # Get orientation (as quaternion, convert to euler)
-            quat_key = f"{obj_name}_quat"
+            quat_key = f"{full_name}_quat"
             if quat_key in obs:
                 quat = obs[quat_key]
             else:
-                obj_id = self.sim.model.body_name2id(obj_name)
+                obj_id = self.sim.model.body_name2id(full_name)
                 quat = self.sim.data.body_xquat[obj_id]
             
             # Convert quaternion to euler angles (roll, pitch, yaw)
@@ -293,7 +307,7 @@ class StateConverter:
         encodings = np.zeros((self.num_objects, num_types))
         
         for obj_idx, obj_name in enumerate(self.object_names):
-            obj_type = self.object_metadata[obj_name]['type']
+            obj_type = self.object_metadata[obj_name].get('object_type', 'unknown')
             type_idx = self.type_to_idx[obj_type]
             encodings[obj_idx, type_idx] = 1.0
         
@@ -319,5 +333,40 @@ class StateConverter:
         return self.object_names.copy()
     
     def get_object_id(self, obj_name: str) -> int:
-        """Get object ID from name."""
-        return self.object_name_to_id.get(obj_name, -1)
+        """
+        Get object ID from name (case-insensitive).
+        
+        Args:
+            obj_name: Object name (e.g., "cubeA", "cubea", "Milk", "milk")
+        
+        Returns:
+            Object ID (index), or -1 if not found
+        """
+        # Try exact match first
+        if obj_name in self.object_name_to_id:
+            return self.object_name_to_id[obj_name]
+        
+        # Try case-insensitive match
+        obj_lower = obj_name.lower()
+        for name in self.object_names:
+            if name.lower() == obj_lower:
+                return self.object_name_to_id[name]
+        
+        # Try partial match
+        for name in self.object_names:
+            if obj_lower in name.lower() or name.lower() in obj_lower:
+                return self.object_name_to_id[name]
+        
+        return -1
+    
+    def get_mujoco_name(self, clean_name: str) -> str:
+        """
+        Get full MuJoCo body name from clean name.
+        
+        Args:
+            clean_name: Clean object name (e.g., "cubeA")
+        
+        Returns:
+            Full MuJoCo name (e.g., "cubeA_main") or clean_name if not found
+        """
+        return self.mujoco_name_map.get(clean_name, clean_name)

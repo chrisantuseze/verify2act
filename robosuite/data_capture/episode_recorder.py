@@ -20,10 +20,13 @@ import re
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "robosuite" / "utils"))
+from pointcloud_generator import PointCloudGenerator
+
 from data_capture.metadata_extractor import MetadataExtractor
 from data_capture.state_capture import StateCapture
 from data_capture.data_formatter import DataFormatter
-from robosuite.utils.pointcloud_generator import PointCloudGenerator
+# from robosuite.utils.pointcloud_generator import PointCloudGenerator
 
 
 class EpisodeRecorder:

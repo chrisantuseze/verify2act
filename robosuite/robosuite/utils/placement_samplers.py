@@ -143,7 +143,7 @@ class UniformRandomSampler(ObjectPositionSampler):
         ensure_valid_placement=True,
         reference_pos=(0, 0, 0),
         z_offset=0.0,
-        min_distance_between_objects=0.05,
+        min_distance_between_objects=0.02,#0.05,
         rng=None,
     ):
         self.x_range = x_range

@@ -44,7 +44,7 @@ from relational_dynamics.config.base_config import BaseConfig
 from itertools import permutations
 from torch.utils.tensorboard import SummaryWriter
 
-import model_utils
+from relational_dynamics import model_utils
 
 
 class RelationalDynamics(object):
@@ -349,6 +349,8 @@ class RelationalDynamics(object):
         print(bcolors.c_red("Save checkpoint: {}".format(cp_filepath)))
 
     def load_checkpoint(self, checkpoint_path):
+        checkpoint_path = "/home/scratch1/cheze/verify2act/Points2Plans/ckpt/checkpoint/cp_1.pth"
+        print(bcolors.c_yellow("Load checkpoint: {}".format(checkpoint_path)))
         cp_models = torch.load(checkpoint_path, map_location=torch.device('cpu'))
         
         self.emb_model.load_state_dict(cp_models['emb_model'])

@@ -1,0 +1,22 @@
+# Task
+task: example_2
+instruction: "Stack the cereal on top of the bread."
+objects: 
+  - "cereal"
+  - "bread"
+  - "table"
+predicates:
+  - "On(cereal, table)"
+  - "On(bread, table)"
+
+# Behaviors
+goals: [["Stacked(cereal, bread)"]]
+plans: [["Pick(cereal, table)", "Place(cereal, bread)"]]
+hypotheses: Null
+geometric: Null
+
+# OpenAI
+role: system
+name: Null
+name_query: example_user
+name_response: example_assistant

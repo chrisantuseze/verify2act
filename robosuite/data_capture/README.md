@@ -26,7 +26,7 @@ python data_capture/verify_saved_format.py test_episodes/test_episode.pkl
 python data_capture/batch_collect.py \
     --num-episodes 100 \
     --output-dir datasets/stack_v1 \
-    --max-episode-steps 400
+    # --max-episode-steps 400
 ```
 **Output**: 100 episodes in Points2Plans format
 

@@ -33,6 +33,9 @@ from relational_dynamics.base_RD import RelationalDynamics
 from relational_dynamics.config.base_config import BaseConfig
 from relational_dynamics.utils import parse_util
 
+# Import collision checker
+from collision_checker import CollisionChecker
+
 
 class DynamicsModelPlanner:
     """
@@ -51,7 +54,12 @@ class DynamicsModelPlanner:
                  checkpoint_path: str,
                  config_args: Optional[Dict] = None,
                  num_samples: int = 50,
-                 device: str = "cuda" if torch.cuda.is_available() else "cpu"):
+                 device: str = "cuda" if torch.cuda.is_available() else "cpu",
+                 state_converter=None,
+                 enable_collision_checking: bool = True,
+                 x_collision: float = 0.05,
+                 y_collision: float = 0.05,
+                 lookahead_depth: int = 1):
         """
         Initialize dynamics model planner.
         
@@ -61,10 +69,26 @@ class DynamicsModelPlanner:
             config_args: Optional config overrides (dict)
             num_samples: Number of action samples for rejection sampling (default 50)
             device: Device for model
+            state_converter: Optional StateConverter instance for consistent object ID lookup
+            enable_collision_checking: Whether to enable collision detection (default True)
+            x_collision: Half-width of bounding box in X dimension for collision checking
+            y_collision: Half-width of bounding box in Y dimension for collision checking
+            lookahead_depth: Number of primitives to simulate ahead (1=greedy, 2-3=multi-step)
         """
         self.checkpoint_path = checkpoint_path
         self.num_samples = num_samples
         self.device = torch.device(device)
+        self.state_converter = state_converter
+        self.enable_collision_checking = enable_collision_checking
+        self.lookahead_depth = max(1, min(lookahead_depth, 3))  # Clamp between 1-3
+        
+        # Initialize collision checker
+        if self.enable_collision_checking:
+            self.collision_checker = CollisionChecker(
+                x_collision=x_collision,
+                y_collision=y_collision,
+                verbose=False  # Set to True for debugging
+            )
         
         # Load model
         args = self._create_default_args()
@@ -97,20 +121,22 @@ class DynamicsModelPlanner:
         print(f"  Checkpoint: {checkpoint_path}")
         print(f"  Num samples: {num_samples}")
         print(f"  Device: {device}")
+        print(f"  Collision checking: {self.enable_collision_checking}")
+        print(f"  Lookahead depth: {self.lookahead_depth} primitive(s)")
     
     def plan_next_primitive(self,
                            state_dict: Dict,
                            goal_predicates: np.ndarray,
                            primitive_plan: List[str]) -> Tuple[str, np.ndarray, float]:
         """
-        Plan next primitive action using rejection sampling.
+        Plan next primitive action using rejection sampling with multi-step lookahead.
         
-        Closed-loop planning:
+        Closed-loop planning with lookahead:
         1. Take current state observation
         2. Know what goals to achieve (from LLM, remains constant)
         3. Sample K candidate actions for next primitive in plan
-        4. Simulate each action through dynamics model
-        5. Check feasibility: does predicted state match goals?
+        4. Simulate each action through dynamics model (with lookahead_depth primitives)
+        5. Check feasibility: does predicted TERMINAL state match goals?
         6. Return first feasible action (or best if none feasible)
         
         Args:
@@ -133,25 +159,60 @@ class DynamicsModelPlanner:
         
         next_primitive = primitive_plan[0]
         
-        # Parse primitive: "Pick(milk, table)" -> ["Pick", "milk", "table"]
-        action_type, obj_name, target_name = self._parse_primitive(next_primitive)
+        # Determine how many primitives to look ahead
+        num_primitives_in_plan = len(primitive_plan)
+        actual_lookahead = min(self.lookahead_depth, num_primitives_in_plan)
         
-        # Get object IDs from state
+        # Parse primitives for lookahead sequence
+        lookahead_primitives = []
+        for i in range(actual_lookahead):
+            prim = primitive_plan[i]
+            action_type, obj_name, target_name = self._parse_primitive(prim)
+            obj_id = self._get_object_id(obj_name, state_dict)
+            target_id = self._get_object_id(target_name, state_dict)
+            
+            # Handle table case
+            if target_id is None and target_name.lower() == "table":
+                target_id = obj_id  # Use obj_id as placeholder for table
+            
+            if obj_id is None:
+                print(f"Warning: Object '{obj_name}' not found in primitive {i+1}")
+                # Truncate lookahead
+                actual_lookahead = i
+                break
+            
+            lookahead_primitives.append((action_type, obj_name, target_name, obj_id, target_id))
+        
+        if actual_lookahead == 0:
+            print(f"Warning: Cannot plan, no valid primitives")
+            return next_primitive, np.zeros(3), 0.0
+        
+        # Parse the FIRST primitive (what we'll actually execute)
+        action_type, obj_name, target_name = self._parse_primitive(next_primitive)
         obj_id = self._get_object_id(obj_name, state_dict)
         target_id = self._get_object_id(target_name, state_dict)
         
-        if obj_id is None or target_id is None:
-            print(f"Warning: Object not found. obj={obj_name}({obj_id}), target={target_name}({target_id})")
-            # Return primitive as-is with zero action
-            return next_primitive, np.zeros(3), 0.0
+        # Handle special case: "table" is not a tracked object
+        use_table_location = False
+        if target_id is None and target_name.lower() == "table":
+            use_table_location = True
+            poses = state_dict['batch_6DOF_pose']
+            if isinstance(poses, torch.Tensor):
+                poses = poses.cpu().numpy()
+            if poses.ndim == 3:
+                poses = poses[0]
+            table_location = poses[obj_id].copy()
+            table_location[2] = 0.8
         
         # Rejection sampling: sample K candidate actions
         best_action = None
         best_params = None
         best_feasibility = -1.0
         
-        print(f"\n=== Planning for: {next_primitive} ===")
-        print(f"  Object ID: {obj_id}, Target ID: {target_id}")
+        lookahead_str = f"{actual_lookahead}-step" if actual_lookahead > 1 else "1-step (greedy)"
+        print(f"\n=== Planning for: {next_primitive} ({lookahead_str} lookahead) ===")
+        print(f"  Looking ahead: {[p for _, p, _, _, _ in lookahead_primitives[:actual_lookahead]]}")
+        print(f"  Object ID: {obj_id}, Target ID: {target_id if not use_table_location else 'table (special)'}")
         print(f"  Sampling {self.num_samples} candidate actions...")
         
         with torch.no_grad():
@@ -159,27 +220,62 @@ class DynamicsModelPlanner:
             node_embedding = self._encode_state(state_dict)
             
             for sample_idx in range(self.num_samples):
-                # Sample action around target location
-                action_params = self._sample_action(
-                    state_dict,
-                    obj_id,
-                    target_id,
-                    action_type
-                )
+                # Sample action for FIRST primitive
+                if use_table_location:
+                    action_params = self._sample_action_for_table(
+                        state_dict, obj_id, action_type
+                    )
+                else:
+                    action_params = self._sample_action(
+                        state_dict, obj_id, target_id, action_type
+                    )
                 
-                # Forward simulate through dynamics model
-                predicted_state = self._forward_simulate(
-                    node_embedding,
-                    state_dict,
-                    action_params,
-                    obj_id
-                )
+                # Build action sequence for lookahead
+                if actual_lookahead == 1:
+                    # Single-step (original behavior)
+                    predicted_state = self._forward_simulate(
+                        node_embedding, state_dict, action_params, obj_id, 
+                        target_id if target_id is not None else obj_id
+                    )
+                else:
+                    # Multi-step lookahead
+                    action_sequence = []
+                    
+                    # First action: use sampled params
+                    action_sequence.append((
+                        action_type, action_params, obj_id, 
+                        target_id if target_id is not None else obj_id
+                    ))
+                    
+                    # Subsequent actions: sample around their targets
+                    for i in range(1, actual_lookahead):
+                        _, _, _, next_obj_id, next_target_id = lookahead_primitives[i]
+                        
+                        # Sample action for this future primitive
+                        future_action_params = self._sample_action(
+                            state_dict, next_obj_id, 
+                            next_target_id if next_target_id is not None else next_obj_id,
+                            lookahead_primitives[i][0]
+                        )
+                        
+                        action_sequence.append((
+                            lookahead_primitives[i][0], future_action_params, 
+                            next_obj_id, next_target_id if next_target_id is not None else next_obj_id
+                        ))
+                    
+                    # Simulate entire sequence
+                    _, predicted_state = self._forward_simulate_sequence(
+                        node_embedding, state_dict, action_sequence, 
+                        state_dict['batch_num_objects']
+                    )
                 
-                # Check feasibility: does predicted state match goals?
+                # Check feasibility of TERMINAL state
                 feasibility = self._check_feasibility(
                     predicted_state,
                     goal_predicates,
-                    state_dict['batch_num_objects']
+                    state_dict['batch_num_objects'],
+                    obj_id=obj_id,
+                    target_id=target_id if not use_table_location else None
                 )
                 
                 # Keep best action
@@ -190,11 +286,11 @@ class DynamicsModelPlanner:
                 
                 # Early exit if found feasible action
                 if feasibility >= 0.5:
-                    print(f"  ✓ Found feasible action at sample {sample_idx + 1}")
+                    print(f"  ✓ Found feasible {actual_lookahead}-step sequence at sample {sample_idx + 1}")
                     break
         
         if best_feasibility < 0.5:
-            print(f"  ⚠ No feasible action found. Best feasibility: {best_feasibility:.3f}")
+            print(f"  ⚠ No feasible sequence found. Best feasibility: {best_feasibility:.3f}")
         
         return best_action, best_params, best_feasibility
     
@@ -203,7 +299,10 @@ class DynamicsModelPlanner:
         voxel_data = state_dict['batch_voxel_list_single'][0]
         
         if not isinstance(voxel_data, torch.Tensor):
-            voxel_data = torch.FloatTensor(voxel_data).to(self.device)
+            voxel_data = torch.FloatTensor(voxel_data)
+        
+        # Move to device and transpose to PointConv format: [N_objects, N_points, 3] -> [N_objects, 3, N_points]
+        voxel_data = voxel_data.to(self.device).permute(0, 2, 1)
         
         # Per-object point cloud encoding
         img_emb = self.model.emb_model(voxel_data)
@@ -211,7 +310,12 @@ class DynamicsModelPlanner:
         # One-hot object encoding
         one_hot_encoding = state_dict['batch_one_hot_encoding']
         if not isinstance(one_hot_encoding, torch.Tensor):
-            one_hot_encoding = torch.FloatTensor(one_hot_encoding).to(self.device)
+            one_hot_encoding = torch.FloatTensor(one_hot_encoding)
+        else:
+            # Remove batch dimension if present
+            if one_hot_encoding.dim() == 3:
+                one_hot_encoding = one_hot_encoding[0]
+        one_hot_encoding = one_hot_encoding.to(self.device)
         
         latent_one_hot = self.model.classif_model.one_hot_encoding_embed(
             torch.argmax(one_hot_encoding, dim=1)
@@ -236,6 +340,10 @@ class DynamicsModelPlanner:
         For Pick/Place: Sample relative position offset from object to target.
         """
         poses = state_dict['batch_6DOF_pose']
+        if isinstance(poses, torch.Tensor):
+            poses = poses.cpu().numpy()
+        if poses.ndim == 3:
+            poses = poses[0]  # Remove batch dimension
         
         # Get current positions
         obj_pos = poses[obj_id][:3]
@@ -257,11 +365,111 @@ class DynamicsModelPlanner:
         
         return action_params
     
+    def _sample_action_for_table(self,
+                                 state_dict: Dict,
+                                 obj_id: int,
+                                 action_type: str) -> np.ndarray:
+        """
+        Sample action parameters for table-related actions (e.g., Pick from table).
+        
+        For Pick(obj, table): Sample small movement (lift slightly above current position)
+        """
+        poses = state_dict['batch_6DOF_pose']
+        if isinstance(poses, torch.Tensor):
+            poses = poses.cpu().numpy()
+        if poses.ndim == 3:
+            poses = poses[0]  # Remove batch dimension
+        
+        # Get current position
+        obj_pos = poses[obj_id][:3]
+        
+        # For Pick from table: small upward movement with small xy variation
+        if action_type.lower() == "pick":
+            delta_x = np.random.uniform(-0.02, 0.02)  # 2cm variation
+            delta_y = np.random.uniform(-0.02, 0.02)
+            delta_z = np.random.uniform(0.05, 0.15)  # Lift 5-15cm
+            
+            action_params = np.array([delta_x, delta_y, delta_z])
+        else:
+            # For other actions, use small random motion
+            action_params = np.random.uniform(-0.05, 0.05, size=3)
+        
+        return action_params
+    
+    def _forward_simulate_sequence(self,
+                                   initial_node_embedding: torch.Tensor,
+                                   state_dict: Dict,
+                                   primitive_sequence: List[Tuple[str, np.ndarray, int, int]],
+                                   num_objects: int) -> Tuple[torch.Tensor, Dict]:
+        """
+        Forward simulate a sequence of primitives through the dynamics model.
+        
+        This implements multi-step lookahead by rolling out 2-3 primitives
+        and returning the terminal state for feasibility checking.
+        
+        Args:
+            initial_node_embedding: Initial state embedding [1, N_objects, embed_dim]
+            state_dict: Current state dictionary
+            primitive_sequence: List of (action_type, action_params, obj_id, target_id)
+            num_objects: Number of objects in scene
+        
+        Returns:
+            final_latent: Predicted latent state after sequence [1, N_objects, embed_dim]
+            final_decoder_output: Predicted predicates and poses at terminal state
+        """
+        current_latent = initial_node_embedding
+        
+        # Roll out each primitive in sequence
+        for step_idx, (action_type, action_params, obj_id, target_id) in enumerate(primitive_sequence):
+            # Build discrete action: which object to move
+            discrete_action = self.model.classif_model.one_hot_encoding_embed(
+                torch.LongTensor([obj_id]).to(self.device)
+            )
+            
+            # Build continuous action: x,y movement deltas
+            continuous_action = self.model.classif_model.continuous_action_emb(
+                torch.FloatTensor(action_params[:2]).unsqueeze(0).to(self.device)
+            )
+            
+            # Combine discrete + continuous
+            current_action_continuous = torch.cat([discrete_action, continuous_action], dim=-1)
+            current_action_continuous = current_action_continuous.view(1, 1, -1)
+            
+            # Build place action
+            if target_id == obj_id or target_id is None:
+                discrete_place_id_tensor = torch.zeros_like(discrete_action)
+            else:
+                discrete_place_id_tensor = self.model.classif_model.one_hot_encoding_embed(
+                    torch.LongTensor([target_id]).to(self.device)
+                )
+            
+            current_action = torch.cat([discrete_place_id_tensor, continuous_action], dim=-1)
+            current_action = current_action.view(1, 1, -1)
+            
+            # Concatenate: [node embeddings, action embeddings]
+            graph_node_action = torch.cat([current_latent, current_action_continuous, current_action], dim=1)
+            
+            # Forward through dynamics model (Pick/Place uses graph_dynamics_0)
+            next_latent = self.model.classif_model.graph_dynamics_0(graph_node_action)
+            
+            # Extract predicted node embeddings (exclude action tokens)
+            current_latent = next_latent[:, :-2, :]
+        
+        # Decode final state
+        edge_nodes = list(range(num_objects))
+        edge_list = list(permutations(edge_nodes, 2))
+        edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
+        
+        final_decoder_output = self.model.classif_model_decoder(current_latent, edge_index)
+        
+        return current_latent, final_decoder_output
+    
     def _forward_simulate(self,
                          node_embedding: torch.Tensor,
                          state_dict: Dict,
                          action_params: np.ndarray,
-                         obj_id: int) -> Dict:
+                         obj_id: int,
+                         target_id: int) -> Dict:
         """
         Forward simulate action through dynamics model.
         
@@ -269,47 +477,63 @@ class DynamicsModelPlanner:
         """
         num_objects = state_dict['batch_num_objects']
         
-        # Create action tensor
-        action_tensor = torch.zeros(1, num_objects, 3).to(self.device)
-        action_tensor[0, obj_id, :] = torch.FloatTensor(action_params)
+        # Build discrete action: which object to move (one-hot encoded)
+        discrete_action = self.model.classif_model.one_hot_encoding_embed(
+            torch.LongTensor([obj_id]).to(self.device)
+        )
         
-        # Build edge index for graph
-        nodes = list(range(num_objects))
-        edges = list(permutations(nodes, 2))
-        edge_index = torch.LongTensor(np.array(edges).T).to(self.device)
+        # Build continuous action: x,y movement deltas
+        continuous_action = self.model.classif_model.continuous_action_emb(
+            torch.FloatTensor(action_params[:2]).unsqueeze(0).to(self.device)
+        )
         
-        # Get action embedding
-        if hasattr(self.model.classif_model, 'continuous_action_emb'):
-            action_emb = self.model.classif_model.continuous_action_emb(action_tensor)
+        # Combine discrete + continuous for "which object, how to move it"
+        current_action_continuous = torch.cat([discrete_action, continuous_action], dim=-1)
+        current_action_continuous = current_action_continuous.view(1, 1, -1)
+        
+        # Build place action: where to place it (target object ID + movement)
+        if target_id == obj_id:
+            # Placing on table/same location
+            discrete_place_id_tensor = torch.zeros_like(discrete_action)
         else:
-            action_emb = action_tensor
-        
-        # Dynamics forward pass (Pick/Place uses graph_dynamics_0)
-        if hasattr(self.model.classif_model, 'graph_dynamics_0'):
-            next_embedding = self.model.classif_model.graph_dynamics_0(
-                node_embedding,
-                action_emb,
-                edge_index
+            # Placing on another object
+            discrete_place_id_tensor = self.model.classif_model.one_hot_encoding_embed(
+                torch.LongTensor([target_id]).to(self.device)
             )
-        else:
-            # Fallback: simple addition
-            next_embedding = node_embedding + action_emb
+        
+        current_action = torch.cat([discrete_place_id_tensor, continuous_action], dim=-1)
+        current_action = current_action.view(1, 1, -1)
+        
+        # Concatenate: [node embeddings, action embeddings]
+        graph_node_action = torch.cat([node_embedding, current_action_continuous, current_action], dim=1)
+        
+        # Forward through dynamics model (Pick/Place uses graph_dynamics_0)
+        next_latent = self.model.classif_model.graph_dynamics_0(graph_node_action)
+        
+        # Extract predicted node embeddings (exclude action tokens)
+        next_latent = next_latent[:, :-2, :]
         
         # Decode predicted state
-        decoder_output = self.model.classif_model_decoder(next_embedding, edge_index)
+        edge_nodes = list(range(num_objects))
+        edge_list = list(permutations(edge_nodes, 2))
+        edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
+        
+        decoder_output = self.model.classif_model_decoder(next_latent, edge_index)
         
         return decoder_output
     
     def _check_feasibility(self,
                           predicted_state: Dict,
                           goal_predicates: np.ndarray,
-                          num_objects: int) -> float:
+                          num_objects: int,
+                          obj_id: int = None,
+                          target_id: int = None) -> float:
         """
-        Check if predicted state matches goal predicates (binary feasibility).
+        Check if predicted state matches goal predicates and has no collisions.
         
         Returns feasibility score [0, 1].
         """
-        # Get predicted relations from decoder
+        # 1. Check goal matching (existing logic)
         pred_relations = predicted_state['pred_sigmoid'].detach().cpu().numpy()
         
         # Reshape: [batch, num_edges, num_predicates] -> [num_objects, num_objects, num_predicates]
@@ -331,13 +555,42 @@ class DynamicsModelPlanner:
             pred_relations_matrix[:, :, :goal_predicates.shape[-1]] > 0.5
         )
         
-        # Feasibility = proportion of goals satisfied
+        # Goal feasibility = proportion of goals satisfied
         if goal_mask.sum() == 0:
-            return 1.0  # No goals, always feasible
+            goal_feasibility = 1.0  # No goals, always feasible
+        else:
+            goal_feasibility = matches.sum() / goal_mask.sum()
         
-        feasibility = matches.sum() / goal_mask.sum()
+        # 2. Check collision feasibility (new)
+        collision_feasibility = 1.0
+        if self.enable_collision_checking:
+            # Extract predicted poses from decoder output
+            if 'predicted_pose' in predicted_state:
+                predicted_poses = predicted_state['predicted_pose'].detach().cpu().numpy()
+            else:
+                # If no predicted poses, skip collision check
+                predicted_poses = None
+            
+            # Check collisions using point clouds or poses
+            if predicted_poses is not None:
+                # Simple collision check on predicted positions
+                is_feasible, reason = self.collision_checker.check_predicted_state_collisions(
+                    predicted_point_clouds=None,  # We'll use poses instead
+                    predicted_poses=predicted_poses,
+                    target_object_id=target_id,
+                    placement_height=None
+                )
+                
+                if not is_feasible:
+                    collision_feasibility = 0.0
+                    # Optionally print reason for debugging
+                    # print(f"    Collision detected: {reason}")
         
-        return float(feasibility)
+        # Combined feasibility: both must pass
+        # If collision detected, overall feasibility is 0 regardless of goal match
+        total_feasibility = goal_feasibility * collision_feasibility
+        
+        return float(total_feasibility)
     
     def _parse_primitive(self, primitive: str) -> Tuple[str, str, str]:
         """
@@ -361,37 +614,112 @@ class DynamicsModelPlanner:
     
     def _get_object_id(self, obj_name: str, state_dict: Dict) -> Optional[int]:
         """
-        Get object ID from name.
+        Get object ID from name using StateConverter if available, else fallback logic.
         
-        This assumes state_dict has object name mappings.
-        You may need to adjust based on your actual state representation.
+        Args:
+            obj_name: Object name (e.g., "cubeA", "Milk", "table")
+            state_dict: State dictionary containing object_names
+        
+        Returns:
+            Object ID (int) or None if not found
         """
-        # For now, simple heuristic: parse object name if it has ID suffix
-        # e.g., "milk_0" -> 0, "bin_1" -> 1
+        # Use StateConverter's method if available (preferred - consistent lookup)
+        if self.state_converter:
+            obj_id = self.state_converter.get_object_id(obj_name)
+            if obj_id >= 0:
+                return obj_id
+            # Continue to fallback if not found
         
-        # Try to find in object list if provided
-        if 'object_names' in state_dict:
-            names = state_dict['object_names']
-            if obj_name in names:
-                return names.index(obj_name)
+        # Fallback: search in state_dict object_names
+        if 'object_names' not in state_dict:
+            print(f"Warning: No object_names in state_dict")
+            return None
+            
+        names = state_dict['object_names']
         
-        # Fallback: try to extract numeric suffix
-        if '_' in obj_name:
-            try:
-                return int(obj_name.split('_')[-1])
-            except ValueError:
-                pass
+        # 1. Exact match
+        if obj_name in names:
+            return names.index(obj_name)
         
-        # Last resort: match by partial name
-        # This is a placeholder - you should implement proper object ID mapping
-        # based on your StateConverter's object tracking
-        print(f"Warning: Could not find object ID for {obj_name}, returning None")
+        # 2. Case-insensitive match
+        obj_lower = obj_name.lower()
+        for idx, name in enumerate(names):
+            if name.lower() == obj_lower:
+                return idx
+        
+        # 3. Partial match
+        for idx, name in enumerate(names):
+            if obj_lower in name.lower() or name.lower() in obj_lower:
+                return idx
+        
         return None
+    
+    def predict_predicates(self, state_dict: Dict) -> Optional[np.ndarray]:
+        """
+        Predict current predicates from state using decoder.
+        
+        This is used for goal checking: compare predicted predicates with goal.
+        
+        Args:
+            state_dict: Current state from StateConverter
+        
+        Returns:
+            Predicted predicates array [num_objects, num_objects, num_predicates]
+            or None if prediction fails
+        """
+        try:
+            # Encode current state
+            with torch.no_grad():
+                node_embedding = self._encode_state(state_dict)
+                
+                # Build edge indices for decoder
+                num_objects = state_dict['batch_num_objects']
+                edge_nodes = list(range(num_objects))
+                edge_list = list(permutations(edge_nodes, 2))
+                edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
+                
+                # Decode predicates
+                decoder_output = self.model.classif_model_decoder(node_embedding, edge_index)
+                pred_sigmoid = decoder_output['pred_sigmoid']  # [batch, num_edges, num_predicates]
+            
+            # Convert to numpy
+            pred_relations = pred_sigmoid.detach().cpu().numpy()
+            
+            # Reshape to matrix form
+            pred_relations_matrix = np.zeros((num_objects, num_objects, pred_relations.shape[-1]))
+            
+            edge_idx = 0
+            for i in range(num_objects):
+                for j in range(num_objects):
+                    if i != j:
+                        pred_relations_matrix[i, j, :] = pred_relations[0, edge_idx, :]
+                        edge_idx += 1
+            
+            return pred_relations_matrix
+        
+        except Exception as e:
+            print(f"Error predicting predicates: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def _create_default_args(self):
         """Create default args for BaseConfig."""
+        # Create parser and parse with explicit minimal args
         parser = parse_util.get_parser()
-        args = parser.parse_args([])
+        
+        # Create a temporary dummy training directory (required but not used for inference)
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        
+        # Provide minimal required arguments
+        minimal_args = [
+            '--result_dir', temp_dir,
+            '--train_dir', temp_dir,
+            '--test_dir', temp_dir
+        ]
+        
+        args = parser.parse_args(minimal_args)
         
         # Set reasonable defaults for inference
         args.cuda = torch.cuda.is_available()

@@ -17,11 +17,18 @@ class StateCapture:
         
         Args:
             env: Robosuite environment instance
-            object_metadata: Dictionary of object metadata
+            object_metadata: Dictionary of object metadata (with MuJoCo names)
         """
         self.env = env
         self.sim = env.sim
-        self.object_metadata = object_metadata
+        self.object_metadata = object_metadata  # Keep MuJoCo names for internal use
+        
+        # Build mapping from MuJoCo names to clean names for dataset export
+        self.clean_name_map = {}  # mujoco_name -> clean_name
+        for mujoco_name in object_metadata.keys():
+            # Strip _main suffix: "cubeA_main" -> "cubeA", "Milk_main" -> "Milk"
+            clean_name = mujoco_name.split('_')[0] if '_' in mujoco_name else mujoco_name
+            self.clean_name_map[mujoco_name] = clean_name
         
         # Cache robot info
         self.robot = env.robots[0]
@@ -125,7 +132,8 @@ class StateCapture:
         Capture states of all tracked objects.
         
         Returns:
-            Dictionary mapping object names to their states
+            Dictionary mapping clean object names to their states
+            (MuJoCo suffixes like '_main' are stripped for dataset consistency)
         """
         object_states = {}
         
@@ -137,7 +145,9 @@ class StateCapture:
             velocity = self.sim.data.body_xvelp[body_id].copy() if hasattr(self.sim.data, 'body_xvelp') else np.zeros(3)
             angular_vel = self.sim.data.body_xvelr[body_id].copy() if hasattr(self.sim.data, 'body_xvelr') else np.zeros(3)
             
-            object_states[obj_name] = {
+            # Use clean name for dataset export
+            clean_name = self.clean_name_map[obj_name]
+            object_states[clean_name] = {
                 'position': position,
                 'orientation': quat,
                 'velocity': velocity,

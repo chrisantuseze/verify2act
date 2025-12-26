@@ -290,7 +290,6 @@ class PointConv(nn.Module):
 
     def forward(self, xyz):
         # Set Abstraction layers
-        print("Input xyz shape:", xyz.shape)
         B,C,N = xyz.shape
         if self.normal_channel:
             l0_points = xyz
@@ -299,13 +298,9 @@ class PointConv(nn.Module):
             l0_points = xyz
             l0_xyz = xyz[:, :3, :]
         
-        print("l0_xyz shape:", l0_xyz.shape, "l0_points shape:", l0_points.shape)
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
-        print("l1_xyz shape:", l1_xyz.shape, "l1_points shape:", l1_points.shape)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        print("l2_xyz shape:", l2_xyz.shape, "l2_points shape:", l2_points.shape)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)        
-        print("l3_xyz shape:", l3_xyz.shape, "l3_points shape:", l3_points.shape)
         x = l3_points.view(B, self.output_dim)
 
         return x
