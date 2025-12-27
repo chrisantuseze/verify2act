@@ -4,8 +4,17 @@ Batch Data Collection Script for Points2Plans Dataset
 Integrates with HeuristicStackPolicy from run_stack.py to automatically
 collect multiple episodes with progress tracking and error recovery.
 
+xvfb-run -a python data_capture/batch_collect.py \
+    --num-episodes 2 \
+    --output-dir data_capture/dataset/stack_v1
+
 Phase 4: Batch Collection ✓
 """
+
+import os
+# Set rendering backend before robosuite imports
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import os
@@ -22,6 +31,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from run_stack import HeuristicStackPolicy, create_environment
 from episode_recorder import EpisodeRecorder
+
+import robosuite as suite
+from robosuite.controllers import load_composite_controller_config
 
 
 class BatchCollector:
@@ -101,6 +113,27 @@ class BatchCollector:
         print(f"  Episodes: {self.episodes_dir}")
         print(f"  Metadata: {self.metadata_dir}")
         print(f"  Logs: {self.logs_dir}")
+
+    def _create_env(self):
+        controller_config = load_composite_controller_config(controller="BASIC")
+        env = suite.make(
+            env_name=self.env_name,
+            robots="Panda",
+            controller_configs=controller_config,
+            has_renderer=True,  # Disable on-screen rendering
+            has_offscreen_renderer=True,  # Enable offscreen for point cloud generation
+            use_camera_obs=True,  # Enable camera observations
+            use_object_obs=True,
+            camera_names=["frontview", "agentview"],
+            camera_heights=256,
+            camera_widths=256,
+            camera_depths=True,               # Enable depth
+            control_freq=20,
+            horizon=1000,
+            ignore_done=True,
+            reward_shaping=True,
+        )
+        return env
     
     def collect(self, 
                 num_episodes: int,
@@ -126,7 +159,8 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        env = create_environment(self.env_name)
+        # env = create_environment(self.env_name)
+        env = self._create_env()
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,
@@ -239,7 +273,6 @@ class BatchCollector:
         
         # Save episode
         episode_name = f"episode_{episode_idx:05d}"
-        print("self.args.save_subsampled:", self.args.save_subsampled)
         saved_path = recorder.save_episode(str(self.episodes_dir), episode_name, save_subsampled=self.args.save_subsampled)
         
         # Update statistics
@@ -344,7 +377,7 @@ def main():
         type=str,
         default='Stack3',
         choices=['Stack', 'Stack3', 'Stack4'],
-        help='Environment name'
+        help='Environment name (Stack=2 cubes, Stack3=3 cubes, Stack4=4 cubes)'
     )
     
     parser.add_argument(

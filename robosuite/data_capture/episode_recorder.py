@@ -167,18 +167,19 @@ class EpisodeRecorder:
         
         base_name = episode_name.replace('.pkl', '')
         
+        # ORIGINAL FULL SAVE COMMENTED OUT TO SAVE SPACE
         # Save full version
         full_file = output_path / f"{base_name}_full.pkl"
-        data_dict = self.data_formatter.build_data_dict(self.timestep_data)
-        attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
-        episode_data = (data_dict, attrs_dict)
+        # data_dict = self.data_formatter.build_data_dict(self.timestep_data)
+        # attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
+        # episode_data = (data_dict, attrs_dict)
         
-        with open(full_file, 'wb') as f:
-            pickle.dump(episode_data, f)
+        # with open(full_file, 'wb') as f:
+        #     pickle.dump(episode_data, f)
         
-        file_size_mb = full_file.stat().st_size / (1024 * 1024)
-        print(f"\n✓ Saved (full): {full_file}")
-        print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Objects: {len(self.object_metadata)}")
+        # file_size_mb = full_file.stat().st_size / (1024 * 1024)
+        # print(f"\n✓ Saved (full): {full_file}")
+        # print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Objects: {len(self.object_metadata)}")
         
         # Save subsampled version if requested
         if save_subsampled:
@@ -202,9 +203,14 @@ class EpisodeRecorder:
         """
         Subsample timesteps to key states only (Points2Plans format).
         
-        Returns N+1 timesteps for N pick-place operations:
+        Returns key timesteps for pick-place operations:
         - Timestep 0: Initial state
-        - Timestep i: State after pick-place operation i completes (after release)
+        - For each pick-place operation:
+            * First timestep after grasp begins (object picked up)
+            * Last timestep after release completes (object placed down)
+        
+        For a Stack task with 2 cubes, this gives 5 timesteps:
+        1. Initial, 2. After pick cube1, 3. After place cube1, 4. After pick cube2, 5. After place cube2
         
         Each pick-place operation (grasp + move + release) = 1 action in the list
         
@@ -217,58 +223,94 @@ class EpisodeRecorder:
         key_timesteps = [0]  # Always include initial state
         filtered_actions = []
         
-        # Track pick-place operations: look for grasp->release pairs
-        # A valid pick-place requires BOTH a grasp AND a release
-        in_manipulation = False
-        last_grasped_object_id = None
-        grasp_action = None
+        # Track states for each pick-place operation
+        prev_skill = None
+        in_grasp_sequence = False
+        in_release_sequence = False
+        grasp_start_idx = None
+        release_start_idx = None
+        current_object_id = None
         
         for i, timestep_state in enumerate(self.timestep_data):
             action = timestep_state.get('action')
-            if action:
-                skill_type = action['skill_type']
-                object_id = action['object_id']
+            if not action:
+                continue
                 
-                if skill_type == 'grasp' and object_id is not None:
-                    # Start of pick-place operation
-                    in_manipulation = True
-                    last_grasped_object_id = object_id
-                    grasp_action = action
+            skill_type = action['skill_type']
+            object_id = action['object_id']
+            
+            # Detect START of grasp sequence (transition TO grasp)
+            if skill_type == 'grasp' and prev_skill != 'grasp':
+                if object_id is not None:
+                    in_grasp_sequence = True
+                    grasp_start_idx = i
+                    current_object_id = object_id
+                    # Add the first grasp timestep as a key state
+                    key_timesteps.append(i)
                     
-                elif skill_type == 'release' and in_manipulation:
-                    # End of pick-place operation - this is a key state
-                    # Use the last grasped object_id (persists even if detection fails at release)
-                    final_object_id = last_grasped_object_id
+            # Detect END of grasp sequence (transition FROM grasp)
+            elif prev_skill == 'grasp' and skill_type != 'grasp':
+                in_grasp_sequence = False
+                
+            # Detect START of release sequence (transition TO release)
+            elif skill_type == 'release' and prev_skill != 'release':
+                in_release_sequence = True
+                release_start_idx = i
+                
+            # Detect END of release sequence (transition FROM release)
+            elif prev_skill == 'release' and skill_type != 'release':
+                # Add the LAST release timestep (i-1) as a key state
+                if current_object_id is not None and release_start_idx is not None:
+                    key_timesteps.append(i - 1)
                     
-                    if final_object_id is not None:
-                        # Add the timestep AFTER release (final placed state)
-                        if i + 1 < len(self.timestep_data):
-                            key_timesteps.append(i + 1)
-                            # Create a single 'pickplace' action for this operation
-                            # Use the release position as the target
-                            combined_action = {
-                                'skill_type': 'pickplace',
-                                'object_id': final_object_id,
-                                'position_delta': action['position_delta'],
-                                'gripper_action': action['gripper_action'],
-                                'raw_action': action['raw_action'],
-                            }
-                            filtered_actions.append(combined_action)
+                    # Get the release action
+                    release_action = self.timestep_data[i - 1].get('action')
                     
-                    # Reset for next operation
-                    in_manipulation = False
-                    last_grasped_object_id = None
-                    grasp_action = None
+                    # Create a 'pickplace' action for this operation
+                    combined_action = {
+                        'skill_type': 'pickplace',
+                        'object_id': current_object_id,
+                        'position_delta': release_action['position_delta'] if release_action else np.zeros(3),
+                        'gripper_action': release_action['gripper_action'] if release_action else -1,
+                        'raw_action': release_action['raw_action'] if release_action else np.zeros(7),
+                    }
+                    filtered_actions.append(combined_action)
+                    
+                # Reset for next pick-place
+                in_release_sequence = False
+                release_start_idx = None
+                current_object_id = None
+                
+            prev_skill = skill_type
+        
+        # Handle case where episode ends during release
+        if prev_skill == 'release' and current_object_id is not None:
+            # Add the final timestep
+            key_timesteps.append(len(self.timestep_data) - 1)
+            
+            last_action = self.timestep_data[-1].get('action')
+            combined_action = {
+                'skill_type': 'pickplace',
+                'object_id': current_object_id,
+                'position_delta': last_action['position_delta'] if last_action else np.zeros(3),
+                'gripper_action': last_action['gripper_action'] if last_action else -1,
+                'raw_action': last_action['raw_action'] if last_action else np.zeros(7),
+            }
+            filtered_actions.append(combined_action)
         
         # If no actions found, return just initial and final state
         if len(key_timesteps) == 1:
             key_timesteps.append(len(self.timestep_data) - 1)
+        
+        # Remove duplicates and sort
+        key_timesteps = sorted(set(key_timesteps))
         
         # Extract key timesteps
         subsampled_data = [self.timestep_data[i] for i in key_timesteps]
         
         print(f"Subsampling: {len(self.timestep_data)} timesteps → {len(subsampled_data)} key states")
         print(f"  Actions: {len(filtered_actions)} pick-place operations")
+        print(f"  Key timesteps: {key_timesteps[:10]}{'...' if len(key_timesteps) > 10 else ''}")
         
         return subsampled_data, filtered_actions
     

@@ -4,3 +4,10 @@ conda activate verify2act
 
 cd /robosuite
 pip install -e .
+
+or through Points2Plans
+
+conda env create -f conda_env.yml
+
+cd /robosuite
+pip install -e .

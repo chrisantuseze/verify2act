@@ -103,11 +103,24 @@ class DataFormatter:
             # Object states
             object_states = timestep_state['object_states']
             for obj_idx, obj_name in enumerate(object_names):
+                block_name = self._to_block_name(obj_idx)
                 if obj_name in object_states:
                     state = object_states[obj_name]
-                    block_name = self._to_block_name(obj_idx)
                     data['objects'][block_name]['position'].append(state['position'])
                     data['objects'][block_name]['orientation'].append(state['orientation'])
+                else:
+                    # Object not found in this timestep - this shouldn't happen!
+                    # Append NaN or use previous position if available
+                    if len(data['objects'][block_name]['position']) > 0:
+                        # print(f"WARNING: MISSING OBJECT '{obj_name}' - using last known position.")
+                        # Use last known position
+                        data['objects'][block_name]['position'].append(data['objects'][block_name]['position'][-1])
+                        data['objects'][block_name]['orientation'].append(data['objects'][block_name]['orientation'][-1])
+                    else:
+                        # print(f"WARNING: MISSING OBJECT '{obj_name}' with no previous data at this timestep.")
+                        # No previous data - use zeros (this object doesn't exist in scene)
+                        data['objects'][block_name]['position'].append(np.zeros(3))
+                        data['objects'][block_name]['orientation'].append(np.array([0, 0, 0, 1]))  # identity quaternion
             
             # Contacts
             data['contact'].append(timestep_state['contacts'])
