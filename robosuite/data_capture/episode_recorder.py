@@ -234,6 +234,7 @@ class EpisodeRecorder:
         for i, timestep_state in enumerate(self.timestep_data):
             action = timestep_state.get('action')
             if not action:
+                prev_skill = None
                 continue
                 
             skill_type = action['skill_type']
