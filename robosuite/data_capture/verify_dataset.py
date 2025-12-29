@@ -26,10 +26,11 @@ def verify_episode(filepath):
         
         obs = data[0]
         metadata = data[1]
+        print(metadata)
         
         # Expected format for Stack3 (2 stacking operations)
         expected_timesteps = 5
-        expected_actions = 2
+        expected_actions = 5 #2
         expected_behaviors = ['release', 'grasp', 'release', 'grasp', 'release']
         
         # Get actual values

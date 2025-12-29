@@ -254,9 +254,10 @@ class BatchCollector:
             
             # Execute action
             obs, reward, done, info = env.step(action)
+            episode_done = policy.stage == "done" or policy.stage == "move_horizontal_to_next"
             
             # Record timestep
-            recorder.record_step(action, obs)
+            recorder.record_step(action, obs, done=episode_done)
             
             # Update policy observations
             policy.obs = obs

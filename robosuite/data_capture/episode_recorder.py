@@ -87,6 +87,8 @@ class EpisodeRecorder:
         # Will be initialized after metadata extraction
         self.state_capture = None
         self.data_formatter = None
+
+        self.done = False
         
         print(f"EpisodeRecorder initialized for: {env.__class__.__name__}")
         print(f"  Cameras: {len(self.camera_names)}, Points/object: {num_points}")
@@ -104,6 +106,8 @@ class EpisodeRecorder:
         self.in_grasp_sequence = False
         self.grasp_start_timestep = None
         self.current_grasped_object = None
+
+        self.done = False
         
         # Extract object metadata
         self.object_metadata = self.metadata_extractor.extract_all_objects()
@@ -119,7 +123,7 @@ class EpisodeRecorder:
         for name, meta in self.object_metadata.items():
             print(f"  - {name}: extents={meta['extents']}, static={meta['fix_base_link']}")
     
-    def record_step(self, action: np.ndarray, obs: Dict[str, Any]):
+    def record_step(self, action: np.ndarray, obs: Dict[str, Any], done: bool = False):
         """
         Record data for a timestep after env.step().
         
@@ -130,6 +134,7 @@ class EpisodeRecorder:
         if not self.episode_active:
             raise RuntimeError("Episode not started. Call start_episode() first.")
         
+        self.done = done
         self.current_timestep += 1
         
         if self.key_timesteps_only:
@@ -167,6 +172,7 @@ class EpisodeRecorder:
         #             self.action_history.append(combined_action)
         
         self.episode_active = False
+        self.done = False
         
         data_dict = self.data_formatter.build_data_dict(self.timestep_data)
         attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
@@ -597,9 +603,14 @@ class EpisodeRecorder:
             # print(f"  T{self.current_timestep}: Continuing manipulation of object {self.last_manipulated_object}")
             pass
         
-        # During release, maintain the object being released - actually, no need to do this
-        elif skill_type == 'release' and self.last_manipulated_object is not None:
+        # During release, maintain the object being released
+        elif skill_type == 'release' and self.last_manipulated_object is not None and not self.done:
             # print(f"  T{self.current_timestep}: Releasing object {self.last_manipulated_object}")
+            pass
+
+        # once release is done, before start of new episode or grasp of next object, clear the manipulated object
+        elif skill_type == 'release' and self.done:
+            # Episode done, clear manipulated object
             self.last_manipulated_object = None
 
         # Convert to object_id format

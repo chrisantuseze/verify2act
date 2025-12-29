@@ -303,6 +303,12 @@ class DataFormatter:
             continuous_params = action_dict.get('position_delta', np.zeros(3))
             continuous_params = np.asarray(continuous_params).tolist()
             action_list.append([skill_mapped, obj_id_str, continuous_params])
+
+        # Pad the action list to match the number of timesteps
+        # The dataloader expects sudo_action_list to have one entry per timestep
+        placeholder = ['move', '0', [0.0, 0.0, 0.0]]
+        while len(action_list) < len(action_history):
+            action_list.append(placeholder)
         
         return action_list
     
