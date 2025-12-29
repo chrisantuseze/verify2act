@@ -386,18 +386,18 @@ class EpisodeRecorder:
         # Start of episode
         if skill_type == 'release' and self.prev_skill_type == None:
             print(f"  T{self.current_timestep}: Release action with no tracked object - Likely pre or post -grasp")
-            self._capture_timestep_state(action=action, obs=obs)
+            self._capture_timestep_state(action=action, obs=obs, parsed_action=parsed_action)
 
         # Immediately after grasp
         elif skill_type == 'grasp' and self.prev_skill_type != 'grasp':
             if object_id is not None:
                 print(f"  T{self.current_timestep}: Detected grasp target → object {object_id}")
-                self._capture_timestep_state(action=action, obs=obs)
+                self._capture_timestep_state(action=action, obs=obs, parsed_action=parsed_action)
 
         # Immediately after release
         elif skill_type == 'release' and self.prev_skill_type != 'release':
             print(f"  T{self.current_timestep}: Releasing object {self.last_manipulated_object}")
-            self._capture_timestep_state(action=action, obs=obs)
+            self._capture_timestep_state(action=action, obs=obs, parsed_action=parsed_action)
 
         else:
             pass
@@ -455,7 +455,7 @@ class EpisodeRecorder:
         if should_save:
             self._capture_timestep_state(action=action, obs=obs)
     
-    def _capture_timestep_state(self, action: Optional[np.ndarray], obs: Optional[Dict[str, Any]]):
+    def _capture_timestep_state(self, action: Optional[np.ndarray], obs: Optional[Dict[str, Any]], parsed_action: Optional[Dict[str, Any]] = None):
         """Capture complete state for current timestep."""
         timestep_state = {
             'timestep': self.current_timestep,
@@ -463,7 +463,7 @@ class EpisodeRecorder:
             'object_states': self.state_capture.capture_object_states(),
             'contacts': self.state_capture.capture_contacts(),
             'point_clouds': self._capture_point_clouds(),
-            'action': self._parse_action(action, obs) if action is not None else None,
+            'action': parsed_action if parsed_action is not None else (self._parse_action(action, obs) if action is not None else None),
         }
         
         self.timestep_data.append(timestep_state)
