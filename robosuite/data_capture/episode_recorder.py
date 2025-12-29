@@ -42,7 +42,8 @@ class EpisodeRecorder:
     """
     
     def __init__(self, env, camera_names: Optional[List[str]] = None, 
-                 voxel_size: float = 0.005, num_points: int = 128):
+                 voxel_size: float = 0.005, num_points: int = 128,
+                 key_timesteps_only: bool = False):
         """
         Initialize episode recorder.
         
@@ -51,11 +52,13 @@ class EpisodeRecorder:
             camera_names: Camera names for RGB-D capture
             voxel_size: Voxel size for point cloud downsampling (meters)
             num_points: Target number of points per object point cloud
+            key_timesteps_only: If True, only save key timesteps during rollout (more efficient)
         """
         self.env = env
         self.sim = env.sim
         self.camera_names = camera_names or ["frontview", "agentview"]
         self.num_points = num_points
+        self.key_timesteps_only = key_timesteps_only
         
         # Workspace bounds for point cloud filtering
         self.workspace_bounds = np.array([
@@ -75,6 +78,12 @@ class EpisodeRecorder:
         self.current_timestep = 0
         self.last_manipulated_object = None  # Track last known manipulated object
         
+        # Key timestep tracking (for key_timesteps_only mode)
+        self.prev_skill_type = None
+        self.in_grasp_sequence = False
+        self.grasp_start_timestep = None
+        self.current_grasped_object = None
+        
         # Will be initialized after metadata extraction
         self.state_capture = None
         self.data_formatter = None
@@ -90,6 +99,12 @@ class EpisodeRecorder:
         self.action_history = []
         self.last_manipulated_object = None
         
+        # Reset key timestep tracking
+        self.prev_skill_type = None
+        self.in_grasp_sequence = False
+        self.grasp_start_timestep = None
+        self.current_grasped_object = None
+        
         # Extract object metadata
         self.object_metadata = self.metadata_extractor.extract_all_objects()
         
@@ -97,8 +112,8 @@ class EpisodeRecorder:
         self.state_capture = StateCapture(self.env, self.object_metadata)
         self.data_formatter = DataFormatter(self.object_metadata, self.num_points, self.state_capture)
         
-        # Capture initial state (t=0)
-        self._capture_timestep_state(action=None, obs=None)
+        # # Capture initial state (t=0) - Why save NONE???
+        # self._capture_timestep_state(action=None, obs=None)
         
         print(f"Recording started. Objects: {len(self.object_metadata)}")
         for name, meta in self.object_metadata.items():
@@ -116,7 +131,11 @@ class EpisodeRecorder:
             raise RuntimeError("Episode not started. Call start_episode() first.")
         
         self.current_timestep += 1
-        self._capture_timestep_state(action=action, obs=obs)
+        
+        if self.key_timesteps_only:
+            self._save_key_timesteps_only(action=action, obs=obs)
+        else:
+            self._capture_timestep_state(action=action, obs=obs)
     
     def end_episode(self) -> Tuple[Dict, Dict]:
         """
@@ -128,17 +147,35 @@ class EpisodeRecorder:
         if not self.episode_active:
             raise RuntimeError("No active episode to end.")
         
+        # # Handle edge case: episode ends during release sequence
+        # if self.key_timesteps_only and self.prev_skill_type == 'release' and self.current_grasped_object is not None:
+        #     print(f"[KEY] Episode ended during release (object {self.current_grasped_object})")
+        #     # Capture final state
+        #     self._capture_timestep_state(action=None, obs=None)
+            
+        #     # Create final pick-place action
+        #     if len(self.timestep_data) > 0:
+        #         last_action = self.timestep_data[-1].get('action')
+        #         if last_action:
+        #             combined_action = {
+        #                 'skill_type': 'pickplace',
+        #                 'object_id': self.current_grasped_object,
+        #                 'position_delta': last_action['position_delta'],
+        #                 'gripper_action': last_action['gripper_action'],
+        #                 'raw_action': last_action['raw_action'],
+        #             }
+        #             self.action_history.append(combined_action)
+        
         self.episode_active = False
         
         data_dict = self.data_formatter.build_data_dict(self.timestep_data)
         attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
         
-        print(f"Recording ended. Captured {len(self.timestep_data)} timesteps.")
+        print(f"Recording ended. Captured {len(self.timestep_data)} timesteps, {len(self.action_history)} actions.")
         
         return data_dict, attrs_dict
     
-    def save_episode(self, output_dir: str, episode_name: Optional[str] = None, 
-                    save_subsampled: bool = False) -> str:
+    def save_episode(self, output_dir: str, episode_name: Optional[str] = None) -> str:
         """
         Save recorded episode to pickle file.
         
@@ -146,9 +183,10 @@ class EpisodeRecorder:
             output_dir: Directory to save episode
             episode_name: Custom name (uses timestamp if None)
             save_subsampled: If True, also save a subsampled version with only key states
+                            (ignored if key_timesteps_only=True, as data is already subsampled)
             
         Returns:
-            Path to saved file (full version)
+            Path to saved file
         """
         if self.episode_active:
             raise RuntimeError("Episode still active. Call end_episode() first.")
@@ -167,37 +205,24 @@ class EpisodeRecorder:
         
         base_name = episode_name.replace('.pkl', '')
         
-        # ORIGINAL FULL SAVE COMMENTED OUT TO SAVE SPACE
-        # Save full version
-        full_file = output_path / f"{base_name}_full.pkl"
-        # data_dict = self.data_formatter.build_data_dict(self.timestep_data)
-        # attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
-        # episode_data = (data_dict, attrs_dict)
+        # If key_timesteps_only mode, data is already in key format
+        if self.key_timesteps_only:
+            file = output_path / f"{base_name}_subsampled.pkl"
+        else:
+            file = output_path / f"{base_name}_full.pkl"
+
+        data_dict = self.data_formatter.build_data_dict(self.timestep_data)
+        attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
+        episode_data = (data_dict, attrs_dict)
         
-        # with open(full_file, 'wb') as f:
-        #     pickle.dump(episode_data, f)
+        with open(file, 'wb') as f:
+            pickle.dump(episode_data, f)
         
-        # file_size_mb = full_file.stat().st_size / (1024 * 1024)
-        # print(f"\n✓ Saved (full): {full_file}")
-        # print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Objects: {len(self.object_metadata)}")
+        file_size_mb = file.stat().st_size / (1024 * 1024)
+        print(f"\n✓ Saved: {file}")
+        print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Actions: {len(self.action_history)}")
         
-        # Save subsampled version if requested
-        if save_subsampled:
-            subsampled_data, filtered_actions = self.subsample_to_key_states()
-            subsampled_file = output_path / f"{base_name}_subsampled.pkl"
-            
-            data_dict_sub = self.data_formatter.build_data_dict(subsampled_data)
-            attrs_dict_sub = self.data_formatter.build_attrs_dict(filtered_actions)
-            episode_data_sub = (data_dict_sub, attrs_dict_sub)
-            
-            with open(subsampled_file, 'wb') as f:
-                pickle.dump(episode_data_sub, f)
-            
-            file_size_mb_sub = subsampled_file.stat().st_size / (1024 * 1024)
-            print(f"✓ Saved (subsampled): {subsampled_file}")
-            print(f"  Size: {file_size_mb_sub:.2f} MB | Timesteps: {len(subsampled_data)} | Actions: {len(filtered_actions)}")
-        
-        return str(full_file)
+        return str(file)
     
     def subsample_to_key_states(self) -> Tuple[List[Dict], List[Dict]]:
         """
@@ -345,6 +370,84 @@ class EpisodeRecorder:
         return episode_data
     
     # ========== Internal Methods ==========
+
+    def _save_key_timesteps_only(self, action: np.ndarray, obs: Dict[str, Any]):
+        # Parse action to get skill type and object
+        parsed_action = self._parse_action(action, obs)
+        skill_type = parsed_action['skill_type']
+        object_id = parsed_action['object_id']
+        
+        # Start of episode
+        if skill_type == 'release' and self.prev_skill_type == None:
+            print(f"  T{self.current_timestep}: Release action with no tracked object - Likely pre or post -grasp")
+            self._capture_timestep_state(action=action, obs=obs)
+
+        # Immediately after grasp
+        elif skill_type == 'grasp' and self.prev_skill_type != 'grasp':
+            if object_id is not None:
+                print(f"  T{self.current_timestep}: Detected grasp target → object {object_id}")
+                self._capture_timestep_state(action=action, obs=obs)
+
+        # Immediately after release
+        elif skill_type == 'release' and self.prev_skill_type != 'release':
+            print(f"  T{self.current_timestep}: Releasing object {self.last_manipulated_object}")
+            self._capture_timestep_state(action=action, obs=obs)
+
+        else:
+            pass
+
+        self.prev_skill_type = skill_type
+    
+    def _record_key_timestep_if_needed(self, action: np.ndarray, obs: Dict[str, Any]):
+        """
+        Intelligently record only key timesteps during rollout.
+        Key timesteps are:
+        - First timestep after grasp begins (transition to grasp with valid object)
+        - Last timestep after release completes (transition from release with valid object)
+        """
+        # Parse action to get skill type and object
+        parsed_action = self._parse_action(action, obs)
+        skill_type = parsed_action['skill_type']
+        object_id = parsed_action['object_id']
+        
+        should_save = False
+        
+        # Detect START of grasp sequence (transition TO grasp with valid object)
+        if skill_type == 'grasp' and self.prev_skill_type != 'grasp':
+            if object_id is not None:
+                self.in_grasp_sequence = True
+                self.grasp_start_timestep = self.current_timestep
+                self.current_grasped_object = object_id
+                should_save = True  # Save first grasp timestep
+                print(f"[KEY] T{self.current_timestep}: Grasp START (object {object_id})")
+        
+        # Detect END of release sequence (transition FROM release with valid object)
+        elif self.prev_skill_type == 'release' and skill_type != 'release':
+            # Save the state at the end of release if we had a valid object
+            if self.current_grasped_object is not None:
+                should_save = True
+                print(f"[KEY] T{self.current_timestep}: Release END (object {self.current_grasped_object})")
+                
+                # Create combined pick-place action
+                combined_action = {
+                    'skill_type': 'pickplace',
+                    'object_id': self.current_grasped_object,
+                    'position_delta': parsed_action['position_delta'],
+                    'gripper_action': parsed_action['gripper_action'],
+                    'raw_action': parsed_action['raw_action'],
+                }
+                self.action_history.append(combined_action)
+                
+                # Reset for next pick-place
+                self.in_grasp_sequence = False
+                self.current_grasped_object = None
+        
+        # Update tracking state
+        self.prev_skill_type = skill_type
+        
+        # Save timestep if it's a key state
+        if should_save:
+            self._capture_timestep_state(action=action, obs=obs)
     
     def _capture_timestep_state(self, action: Optional[np.ndarray], obs: Optional[Dict[str, Any]]):
         """Capture complete state for current timestep."""
@@ -456,32 +559,51 @@ class EpisodeRecorder:
         return object_point_clouds
     
     def _parse_action(self, action: np.ndarray, obs: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse action into Points2Plans format."""
+        """
+        Parse action into Points2Plans format with improved object tracking.
+        
+        Key insight: Once an object is grasped, maintain that object_id throughout
+        the entire pick-place sequence (grasp → move → release) until the gripper
+        fully opens and the object is placed.
+        """
         gripper_action = action[6] if len(action) > 6 else action[-1]
         
-        # Determine skill type
-        if gripper_action > 0:
+        # Determine skill type based on gripper action. -1 = open, +1 = close
+        if gripper_action > 0: 
             skill_type = 'grasp'
         elif gripper_action < 0:
             skill_type = 'release'
         else:
             skill_type = 'move'
         
-        # Detect manipulated object (attempt to return an integer index)
-        # Pass is_grasp_action flag for more lenient detection during grasp
-        current_manipulated = self.state_capture.detect_manipulated_object(obs, is_grasp_action=(skill_type == 'grasp'))
+        # State machine for object tracking
+        # States: None (no object), grasping (closing on object), holding (has object), releasing (opening gripper)
 
-        # Update last known manipulated object if we detected one
-        if current_manipulated is not None:
-            self.last_manipulated_object = current_manipulated
+        if skill_type == 'release' and self.last_manipulated_object is None:
+            # print(f"  T{self.current_timestep}: Release action with no tracked object - Likely pre or post -grasp")
+            pass
+                
+        # If transitioning TO grasp, detect new target object
+        elif skill_type == 'grasp' and self.last_manipulated_object is None:
+            # Start of new grasp sequence - detect target object
+            current_manipulated = self.state_capture.detect_manipulated_object(obs, is_grasp_action=True)
+            if current_manipulated is not None:
+                self.last_manipulated_object = current_manipulated
+                # print(f"  T{self.current_timestep}: Detected grasp target → object {current_manipulated}")
         
-        # Use current if available, otherwise use last known
-        manipulated_object = current_manipulated if current_manipulated is not None else self.last_manipulated_object
+        # If currently grasping or holding, maintain the same object
+        elif skill_type in ['grasp', 'move'] and self.last_manipulated_object is not None:
+            # Continue using the grasped object (no re-detection)
+            # print(f"  T{self.current_timestep}: Continuing manipulation of object {self.last_manipulated_object}")
+            pass
         
-        # Reset after release to allow new object detection
-        if skill_type == 'release':
+        # During release, maintain the object being released - actually, no need to do this
+        elif skill_type == 'release' and self.last_manipulated_object is not None:
+            # print(f"  T{self.current_timestep}: Releasing object {self.last_manipulated_object}")
             self.last_manipulated_object = None
 
+        # Convert to object_id format
+        manipulated_object = self.last_manipulated_object
         object_id = None
         if manipulated_object is None:
             object_id = None

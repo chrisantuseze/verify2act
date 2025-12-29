@@ -11,10 +11,10 @@ xvfb-run -a python data_capture/batch_collect.py \
 Phase 4: Batch Collection ✓
 """
 
-import os
-# Set rendering backend before robosuite imports
-if 'MUJOCO_GL' not in os.environ:
-    os.environ['MUJOCO_GL'] = 'glx'
+# import os
+# # Set rendering backend before robosuite imports
+# if 'MUJOCO_GL' not in os.environ:
+#     os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import os
@@ -159,13 +159,14 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        # env = create_environment(self.env_name)
-        env = self._create_env()
+        env = create_environment(self.env_name)
+        # env = self._create_env()
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,
             num_points=self.num_points,
-            voxel_size=self.voxel_size
+            voxel_size=self.voxel_size,
+            key_timesteps_only=True  # Enable key timestep mode
         )
         
         try:
@@ -271,9 +272,9 @@ class BatchCollector:
         # End recording
         data_dict, attrs_dict = recorder.end_episode()
         
-        # Save episode
+        # Save episode (no need for save_subsampled since we're already in key timestep mode)
         episode_name = f"episode_{episode_idx:05d}"
-        saved_path = recorder.save_episode(str(self.episodes_dir), episode_name, save_subsampled=self.args.save_subsampled)
+        saved_path = recorder.save_episode(str(self.episodes_dir), episode_name)
         
         # Update statistics
         episode_stats = recorder.get_statistics()

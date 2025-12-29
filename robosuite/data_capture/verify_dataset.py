@@ -30,7 +30,7 @@ def verify_episode(filepath):
         # Expected format for Stack3 (2 stacking operations)
         expected_timesteps = 5
         expected_actions = 2
-        expected_behaviors = ['none', 'grasp', 'release', 'grasp', 'release']
+        expected_behaviors = ['release', 'grasp', 'release', 'grasp', 'release']
         
         # Get actual values
         actual_timesteps = obs['joint_position'].shape[0]

@@ -81,6 +81,7 @@ class DataFormatter:
         # Extract time-series data
         for timestep_state in timestep_data:
             # Robot state
+            # print(f"action: {timestep_state.get('action')}")
             robot_state = timestep_state['robot_state']
             data['joint_position'].append(robot_state['joint_pos'])
             data['joint_velocity'].append(robot_state['joint_vel'])
@@ -93,7 +94,7 @@ class DataFormatter:
             data['target_joint_position'].append(robot_state['joint_pos'])
             data['target_ee_discrete'].append(np.zeros(3))  # Placeholder
             
-            # Camera data (placeholders)
+            # Camera data (placeholders) CHRIS - TODO 
             data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
             data['depth'].append(np.zeros((480, 640), dtype=np.float32))
             data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
