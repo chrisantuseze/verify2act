@@ -94,12 +94,41 @@ class DataFormatter:
             data['target_joint_position'].append(robot_state['joint_pos'])
             data['target_ee_discrete'].append(np.zeros(3))  # Placeholder
             
-            # Camera data (placeholders) CHRIS - TODO 
-            data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
-            data['depth'].append(np.zeros((480, 640), dtype=np.float32))
-            data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
-            data['projection_matrix'].append(np.eye(4))
-            data['view_matrix'].append(np.eye(4))
+            # Camera data - use actual observations if available
+            camera_obs = timestep_state.get('camera_obs')
+            if camera_obs and camera_obs.get('rgb') is not None:
+                # Use actual camera observations
+                rgb = camera_obs['rgb']
+                depth = camera_obs['depth']
+                seg = camera_obs['segmentation']
+                proj_mat = camera_obs['projection_matrix']
+                view_mat = camera_obs['view_matrix']
+                
+                # Ensure correct shapes and types
+                if rgb is not None and len(rgb.shape) == 3:
+                    data['rgb'].append(rgb.astype(np.uint8))
+                else:
+                    data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
+                
+                if depth is not None and len(depth.shape) == 2:
+                    data['depth'].append(depth.astype(np.float32))
+                else:
+                    data['depth'].append(np.zeros((480, 640), dtype=np.float32))
+                
+                if seg is not None and len(seg.shape) == 2:
+                    data['segmentation'].append(seg.astype(np.int32))
+                else:
+                    data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
+                
+                data['projection_matrix'].append(proj_mat if proj_mat is not None else np.eye(4))
+                data['view_matrix'].append(view_mat if view_mat is not None else np.eye(4))
+            else:
+                # Fallback to placeholders if camera data not available
+                data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
+                data['depth'].append(np.zeros((480, 640), dtype=np.float32))
+                data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
+                data['projection_matrix'].append(np.eye(4))
+                data['view_matrix'].append(np.eye(4))
             
             # Object states
             object_states = timestep_state['object_states']

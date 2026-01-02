@@ -17,7 +17,6 @@ Phase 4: Batch Collection ✓
 #     os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
-import os
 import time
 import argparse
 import numpy as np
@@ -159,8 +158,8 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        env = create_environment(self.env_name)
-        # env = self._create_env()
+        # env = create_environment(self.env_name)
+        env = self._create_env()
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,
