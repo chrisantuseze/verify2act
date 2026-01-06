@@ -9,6 +9,7 @@ import numpy as np
 import open3d as o3d
 from typing import List, Optional, Tuple, Dict
 from robosuite.environments.base import make
+from robosuite.utils.camera_utils import render_camera
 
 
 class PointCloudGenerator:
@@ -24,8 +25,9 @@ class PointCloudGenerator:
         """
         self.voxel_size = voxel_size
         self.bounds = bounds
+        self.camera_renderers: Dict[str, any] = {}  # Cache for MuJoCo renderers keyed by camera name
     
-    def generate(self, env, camera_names: List[str]) -> o3d.geometry.PointCloud:
+    def generate(self, env, camera_renderers: Dict[str, any], camera_names: List[str]) -> o3d.geometry.PointCloud:
         """
         Generate a fused point cloud from multiple camera views.
         
@@ -38,6 +40,8 @@ class PointCloudGenerator:
         """
         points_list = []
         colors_list = []
+
+        self.camera_renderers = camera_renderers  # Store the renderers for use in observation capture
         
         for cam_name in camera_names:
             # Get observations from camera
@@ -280,36 +284,10 @@ class PointCloudGenerator:
         Returns:
             Tuple of (color, depth, segmentation, intrinsics, extrinsics) or None if camera not found
         """
-        width = env.camera_widths[0] if hasattr(env, 'camera_widths') else 256
-        height = env.camera_heights[0] if hasattr(env, 'camera_heights') else 256
+        width, height = 640, 480
+        cam_obs, _ = render_camera(env.sim, self.camera_renderers, camera_name, width, height)
         
-        # Get RGB-D
-        rgb, depth = env.sim.render(
-            camera_name=camera_name,
-            width=width,
-            height=height,
-            depth=True
-        )
-        
-        color = rgb[:, :, :3]  # RGB (already in correct format)
-        # depth is already a 2D array
-        
-        # Get segmentation mask
-        # Robosuite uses MuJoCo's segmentation which provides geom IDs
-        seg_mask = env.sim.render(
-            camera_name=camera_name,
-            width=width,
-            height=height,
-            depth=False,
-            segmentation=True
-        )[:, :, 0]  # First channel contains object IDs
-        
-        # Get camera parameters
-        camera_id = env.sim.model.camera_name2id(camera_name)
-        intrinsics = self._get_camera_intrinsics(env, camera_name)
-        extrinsics = self._get_camera_extrinsics(env, camera_id)
-        
-        return color, depth, seg_mask, intrinsics, extrinsics
+        return cam_obs.rgb, cam_obs.depth, cam_obs.intrinsics, cam_obs.extrinsics
     
     def _get_object_id_mapping(self, env) -> Dict[int, str]:
         """
@@ -390,25 +368,17 @@ class PointCloudGenerator:
         Returns:
             Tuple of (color, depth, intrinsics, extrinsics) or None if camera not found
         """
-        # Get camera observations from environment
-        # obs_dict = env.sim.render(
-        #     camera_name=camera_name,
-        #     width=env.camera_widths[0] if hasattr(env, 'camera_widths') else 256,
-        #     height=env.camera_heights[0] if hasattr(env, 'camera_heights') else 256,
-        #     depth=True
-        # )
+        # color, depth = self._capture_camera_data(env, camera_name)
+        
+        # # Get camera parameters
+        # camera_id = env.sim.model.camera_name2id(camera_name)
+        # intrinsics = self._get_camera_intrinsics(env, camera_name)
+        # extrinsics = self._get_camera_extrinsics(env, camera_id)
 
-        color, depth = self._capture_camera_data(env, camera_name)
+        width, height = 640, 480
+        cam_obs, _ = render_camera(env.sim, self.camera_renderers, camera_name, width, height)
         
-        # color = obs_dict[:, :, :3]  # RGB
-        # depth = obs_dict[:, :, 3]    # Depth channel
-        
-        # Get camera parameters
-        camera_id = env.sim.model.camera_name2id(camera_name)
-        intrinsics = self._get_camera_intrinsics(env, camera_name)
-        extrinsics = self._get_camera_extrinsics(env, camera_id)
-        
-        return color, depth, intrinsics, extrinsics
+        return cam_obs.rgb, cam_obs.depth, cam_obs.intrinsics, cam_obs.extrinsics
     
     def _get_camera_intrinsics(self, env, camera_name: str) -> np.ndarray:
         """

@@ -116,13 +116,14 @@ class PrimitiveExecutor:
         
         # Extract object and source location from primitive
         # "Pick(milk, table)" -> object_name="milk", source="table"
-        content = primitive.split('(')[1].split(')')[0]
-        parts = [p.strip() for p in content.split(',')]
+        content = primitive.split('(')[1].split(')')[0] # "milk, table"
+        parts = [p.strip() for p in content.split(',')] # ["milk", "table"]
         object_name, source_name = parts[0], parts[1]
         
         # Get object position from observation
         # Try to find object position in obs
-        object_pos = self._get_object_position(obs, object_name)
+        object_pos = self._get_object_position(obs, object_name) # Ordinarily, this should be action_params, but we can also try to get it from obs for more accuracy since we don't care about best action prediction.
+        print(f"  Target object: {object_name}, source: {source_name}, position: {object_pos}")
         
         if object_pos is None:
             # Use action_params as fallback (planner's target)
@@ -194,7 +195,7 @@ class PrimitiveExecutor:
         object_name, target_name = parts[0], parts[1]
         
         # Get target position from observation or use action_params
-        target_pos = self._get_object_position(obs, target_name)
+        target_pos = self._get_object_position(obs, target_name) # Similar to pick, we can also try to get the target position from obs for more accuracy, since we don't care about best action prediction.
         
         if target_pos is None:
             # Use action_params as target position

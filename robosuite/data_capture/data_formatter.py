@@ -44,7 +44,7 @@ class DataFormatter:
             'rgb': [],
             'depth': [],
             'segmentation': [],
-            'projection_matrix': [],
+            # 'projection_matrix': [],
             'view_matrix': [],
             
             # Robot state
@@ -96,39 +96,18 @@ class DataFormatter:
             
             # Camera data - use actual observations if available
             camera_obs = timestep_state.get('camera_obs')
-            if camera_obs and camera_obs.get('rgb') is not None:
-                # Use actual camera observations
-                rgb = camera_obs['rgb']
-                depth = camera_obs['depth']
-                seg = camera_obs['segmentation']
-                proj_mat = camera_obs['projection_matrix']
-                view_mat = camera_obs['view_matrix']
-                
-                # Ensure correct shapes and types
-                if rgb is not None and len(rgb.shape) == 3:
-                    data['rgb'].append(rgb.astype(np.uint8))
-                else:
-                    data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
-                
-                if depth is not None and len(depth.shape) == 2:
-                    data['depth'].append(depth.astype(np.float32))
-                else:
-                    data['depth'].append(np.zeros((480, 640), dtype=np.float32))
-                
-                if seg is not None and len(seg.shape) == 2:
-                    data['segmentation'].append(seg.astype(np.int32))
-                else:
-                    data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
-                
-                data['projection_matrix'].append(proj_mat if proj_mat is not None else np.eye(4))
-                data['view_matrix'].append(view_mat if view_mat is not None else np.eye(4))
-            else:
-                # Fallback to placeholders if camera data not available
-                data['rgb'].append(np.zeros((480, 640, 3), dtype=np.uint8))
-                data['depth'].append(np.zeros((480, 640), dtype=np.float32))
-                data['segmentation'].append(np.zeros((480, 640), dtype=np.int32))
-                data['projection_matrix'].append(np.eye(4))
-                data['view_matrix'].append(np.eye(4))
+            rgb = camera_obs['rgb']
+            depth = camera_obs['depth']
+            seg = camera_obs['segmentation']
+            # proj_mat = camera_obs['projection_matrix']
+            view_mat = camera_obs['view_matrix']
+            
+            data['rgb'].append(rgb.astype(np.uint8))
+            data['depth'].append(depth.astype(np.float32))
+            data['segmentation'].append(seg.astype(np.int32))
+            
+            # data['projection_matrix'].append(proj_mat if proj_mat is not None else np.eye(4))
+            data['view_matrix'].append(view_mat if view_mat is not None else np.eye(4))
             
             # Object states
             object_states = timestep_state['object_states']
@@ -191,13 +170,14 @@ class DataFormatter:
                     data[f'point_cloud_{obj_idx + 1}sampling'].append(zero_cloud)
                     data[f'point_cloud_{obj_idx + 1}sampling_noise'].append(zero_cloud)
                     hidden_labels.append(1)  # Hidden
+                    print(f"\033[93mWARNING: Missing point cloud for object '{obj_name}' at this timestep. Marking as hidden.\033[0m")
             
             data['hidden_label'].append(hidden_labels)
         
         # Convert lists to numpy arrays
         for key in ['joint_position', 'joint_velocity', 'joint_torque', 'target_joint_position',
                     'target_ee_discrete', 'ee_position', 'ee_orientation', 'ee_velocity',
-                    'rgb', 'depth', 'segmentation', 'projection_matrix', 'view_matrix']:
+                    'rgb', 'depth', 'segmentation', 'view_matrix']:  # Removed 'projection_matrix' for now
             data[key] = np.array(data[key])
         
         # Convert object states to arrays

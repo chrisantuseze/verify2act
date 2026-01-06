@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "robosuite" / "utils"))
 from pointcloud_generator import PointCloudGenerator
+from camera_utils import render_camera
 
 from data_capture.metadata_extractor import MetadataExtractor
 from data_capture.state_capture import StateCapture
@@ -56,7 +57,7 @@ class EpisodeRecorder:
         """
         self.env = env
         self.sim = env.sim
-        self.camera_names = camera_names or ["frontview", "agentview"]
+        self.camera_names = camera_names or ["agentview", "robot0_robotview", "robot0_eye_in_hand"]
         self.num_points = num_points
         self.key_timesteps_only = key_timesteps_only
         
@@ -87,6 +88,9 @@ class EpisodeRecorder:
         # Will be initialized after metadata extraction
         self.state_capture = None
         self.data_formatter = None
+
+        # Cache MuJoCo renderers per camera/size for RGB/Depth/Seg
+        self._camera_renderers: Dict[str, Any] = {}
 
         self.done = False
         
@@ -474,97 +478,36 @@ class EpisodeRecorder:
     
     def _capture_camera_observations(self, obs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Extract camera observations by rendering directly from sim."""
-        camera_obs = {
-            'rgb': None,
-            'depth': None,
-            'segmentation': None,
-            'projection_matrix': None,
-            'view_matrix': None,
-        }
-        
-        # Use the first camera from camera_names
-        primary_camera = self.camera_names[0] if self.camera_names else None
-        
-        if primary_camera:
-            # Render RGB and depth directly from sim
-            width = 640
-            height = 480
-            
-            # Render RGB and depth
-            rgb, depth = self.sim.render(
-                camera_name=primary_camera,
-                width=width,
-                height=height,
-                depth=True
-            )
-            
-            # RGB is already (H, W, 3) uint8, flip vertically for correct orientation
-            camera_obs['rgb'] = rgb[::-1]
-            
-            # Depth is (H, W) float32, flip vertically
-            camera_obs['depth'] = depth[::-1]
-            
-            # Render segmentation
-            seg = self.sim.render(
-                camera_name=primary_camera,
-                width=width,
-                height=height,
-                segmentation=True
-            )
-            # Segmentation returns (H, W, 2) where [:,:,0] is object type and [:,:,1] is object id
-            # Use object id channel and flip vertically
-            camera_obs['segmentation'] = seg[::-1, :, 1].astype(np.int32)
-            
-            # Debug: Save first few RGB images to visualize
-            if self.current_timestep <= 3:
-                self._save_debug_image(camera_obs['rgb'], f"camera_{primary_camera}_t{self.current_timestep}.png")
-            
-            # Get camera matrices from sim
-            camera_id = self.sim.model.camera_name2id(primary_camera)
-            
-            # Get projection matrix (intrinsics approximation)
-            fovy = self.sim.model.cam_fovy[camera_id]
-            aspect = width / height
-            f = height / (2 * np.tan(np.deg2rad(fovy) / 2))
-            
-            projection_matrix = np.array([
-                [f/aspect, 0, width/2, 0],
-                [0, f, height/2, 0],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1]
-            ])
-            camera_obs['projection_matrix'] = projection_matrix
-            
-            # Get view matrix (extrinsics)
-            cam_pos = self.sim.data.cam_xpos[camera_id]
-            cam_mat = self.sim.data.cam_xmat[camera_id].reshape(3, 3)
-            view_matrix = np.eye(4)
-            view_matrix[:3, :3] = cam_mat.T
-            view_matrix[:3, 3] = -cam_mat.T @ cam_pos
-            camera_obs['view_matrix'] = view_matrix
-                
-        return camera_obs
+        # primary_camera = self.camera_names[0] if self.camera_names else None
+        primary_camera = "robot0_eye_in_hand"
+        if not primary_camera:
+            return None
+
+        print(f"  Capturing camera '{primary_camera}' at T{self.current_timestep}")
+        width, height = 640, 480
+        cam_obs, self._camera_renderers = render_camera(self.env.sim, self._camera_renderers, primary_camera, width, height)
+
+        if cam_obs:
+            # self._save_debug_image(cam_obs.rgb, f"camera_{primary_camera}_t{self.current_timestep}.png")
+            pass
+
+        return cam_obs.as_dict() if cam_obs else None
     
     def _save_debug_image(self, image: np.ndarray, filename: str):
         """Save an image for debugging/visualization purposes."""
         try:
-            from PIL import Image
             
             # Create debug directory
             debug_dir = Path("./debug_camera_images")
             debug_dir.mkdir(exist_ok=True)
-            
-            # Convert to uint8 if needed
-            if image.dtype != np.uint8:
-                if image.max() <= 1.0:
-                    image = (image * 255).astype(np.uint8)
-                else:
-                    image = image.astype(np.uint8)
-            
-            # Save image
-            img = Image.fromarray(image)
+
+            import matplotlib
+            matplotlib.use('Agg')  # Non-GUI backend for macOS compatibility
+            import matplotlib.pyplot as plt
+
             save_path = debug_dir / filename
-            img.save(save_path)
+            plt.imsave(save_path, image)
+            # plt.imsave(save_path, image, cmap='viridis')
             print(f"  [DEBUG] Saved camera image: {save_path}")
             
         except Exception as e:
@@ -573,51 +516,51 @@ class EpisodeRecorder:
     def _capture_point_clouds(self) -> Dict[str, np.ndarray]:
         """Capture and segment point clouds for all objects."""
         # For now, return random point clouds for each object
-        object_point_clouds = {}
+        # object_point_clouds = {}
+        # for obj_name, obj_meta in self.object_metadata.items():
+        #     # Generate random points around object position
+        #     body_id = obj_meta['body_id']
+        #     obj_pos = self.sim.data.body_xpos[body_id].copy()
+        #     extents = obj_meta['extents']
+            
+        #     if extents is None:
+        #         continue
+            
+        #     # Generate random points within object bounding box
+        #     num_random_points = np.random.randint(50, 200)
+        #     random_points = []
+            
+        #     for _ in range(num_random_points):
+        #         # Random offset within bounding box
+        #         offset = np.array([
+        #             np.random.uniform(-extents[0]/2, extents[0]/2),
+        #             np.random.uniform(-extents[1]/2, extents[1]/2),
+        #             np.random.uniform(-extents[2]/2, extents[2]/2)
+        #         ])
+        #         point = obj_pos + offset
+        #         random_points.append(point)
+            
+        #     object_point_clouds[obj_name] = np.array(random_points)
         
-        for obj_name, obj_meta in self.object_metadata.items():
-            # Generate random points around object position
-            body_id = obj_meta['body_id']
-            obj_pos = self.sim.data.body_xpos[body_id].copy()
-            extents = obj_meta['extents']
-            
-            if extents is None:
-                continue
-            
-            # Generate random points within object bounding box
-            num_random_points = np.random.randint(50, 200)
-            random_points = []
-            
-            for _ in range(num_random_points):
-                # Random offset within bounding box
-                offset = np.array([
-                    np.random.uniform(-extents[0]/2, extents[0]/2),
-                    np.random.uniform(-extents[1]/2, extents[1]/2),
-                    np.random.uniform(-extents[2]/2, extents[2]/2)
-                ])
-                point = obj_pos + offset
-                random_points.append(point)
-            
-            object_point_clouds[obj_name] = np.array(random_points)
+        # return object_point_clouds
         
-        return object_point_clouds
-        
-        # Original point cloud capture (commented out for now)
-        # try:
-        #     # Generate full scene point cloud
-        #     full_pcd = self.pcd_generator.generate(self.env, self.camera_names)
-        #     full_points = np.asarray(full_pcd.points)
-        #     
-        #     if len(full_points) == 0:
-        #         return {}
-        #     
-        #     # Segment by proximity to objects
-        #     return self._segment_points_by_proximity(full_points)
-        #     
-        # except Exception as e:
-        #     if self.current_timestep < 2:
-        #         print(f"Warning: Point cloud capture failed at t={self.current_timestep}: {e}")
-        #     return {}
+        # TODO: Original point cloud capture (commented out for now)
+        try:
+            # Generate full scene point cloud
+            full_pcd = self.pcd_generator.generate(self.env, self._camera_renderers, self.camera_names)
+            full_points = np.asarray(full_pcd.points)
+            print(f"  Captured full point cloud with {len(full_points)} points at T{self.current_timestep}")
+            
+            if len(full_points) == 0:
+                return {}
+            
+            # Segment by proximity to objects
+            return self._segment_points_by_proximity(full_points)
+            
+        except Exception as e:
+            if self.current_timestep < 2:
+                print(f"Warning: Point cloud capture failed at t={self.current_timestep}: {e}")
+            return {}
     
     def _segment_points_by_proximity(self, points: np.ndarray) -> Dict[str, np.ndarray]:
         """Assign points to objects based on bounding box proximity."""

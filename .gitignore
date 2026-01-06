@@ -98,3 +98,4 @@ robosuite/data_capture/test_episodes/
 *dataset/
 
 *.pickle
+*.png

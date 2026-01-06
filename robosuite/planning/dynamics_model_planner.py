@@ -202,7 +202,7 @@ class DynamicsModelPlanner:
             if poses.ndim == 3:
                 poses = poses[0]
             table_location = poses[obj_id].copy()
-            table_location[2] = 0.8
+            table_location[2] = 0.8 # Assume table height is 0.8m, can be adjusted based on env
         
         # Rejection sampling: sample K candidate actions
         best_action = None

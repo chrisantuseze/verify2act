@@ -626,3 +626,162 @@ class DemoPlaybackCameraMover(CameraMover):
 
         # Stack all frames and return
         return {k: np.stack(frames) for k, frames in frames_dict.items()}
+
+
+################################ CHRIS ###########################################
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass
+
+
+@dataclass
+class CameraIntrinsics:
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    fovx_rad: float
+    fovy_rad: float
+    near: float
+    far: float
+    width: int
+    height: int
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            'fx': self.fx,
+            'fy': self.fy,
+            'cx': self.cx,
+            'cy': self.cy,
+            'fovx_rad': self.fovx_rad,
+            'fovy_rad': self.fovy_rad,
+            'near': self.near,
+            'far': self.far,
+            'width': self.width,
+            'height': self.height,
+        }
+
+
+@dataclass
+class CameraObservation:
+    camera: str
+    rgb: np.ndarray
+    depth: np.ndarray
+    segmentation: np.ndarray
+    intrinsics: np.ndarray  #CameraIntrinsics
+    extrinsics: np.ndarray
+    view_matrix: np.ndarray
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            'camera': self.camera,
+            'rgb': self.rgb,
+            'depth': self.depth,
+            'segmentation': self.segmentation,
+            'intrinsics': self.intrinsics, #self.intrinsics.as_dict(),
+            'extrinsics': self.extrinsics,
+            'view_matrix': self.view_matrix,
+        }
+
+
+def get_camera_intrinsics(sim, camera_name: str, width: int, height: int) -> CameraIntrinsics:
+    camera_id = sim.model.camera_name2id(camera_name)
+    if camera_id == -1:
+        raise ValueError(f"Camera '{camera_name}' not found in model")
+
+    fovy_deg = sim.model.cam_fovy[camera_id]
+    near = sim.model.vis.map.znear
+    far = sim.model.vis.map.zfar
+
+    fovy_rad = np.deg2rad(fovy_deg)
+    fy = height / (2.0 * np.tan(fovy_rad / 2.0))
+    fovx_rad = 2.0 * np.arctan((width / height) * np.tan(fovy_rad / 2.0))
+    fx = width / (2.0 * np.tan(fovx_rad / 2.0))
+    cx = (width - 1) / 2.0
+    cy = (height - 1) / 2.0
+
+    return CameraIntrinsics(
+        fx=fx,
+        fy=fy,
+        cx=cx,
+        cy=cy,
+        fovx_rad=fovx_rad,
+        fovy_rad=fovy_rad,
+        near=near,
+        far=far,
+        width=width,
+        height=height,
+    )
+
+def render_camera(sim, camera_renderers, camera_name: str, width: int, height: int) -> Optional[CameraObservation]:
+    try:
+        camera_id = sim.model.camera_name2id(camera_name)
+        if camera_id == -1:
+            print(f"Camera '{camera_name}' not found in model")
+            return None
+
+        renderer_key = f"{camera_name}_{width}_{height}"
+        if renderer_key not in camera_renderers:
+            import mujoco
+            mj_model = sim.model._model if hasattr(sim.model, '_model') else sim.model
+            camera_renderers[renderer_key] = mujoco.Renderer(
+                mj_model,
+                height=height,
+                width=width,
+            )
+
+        renderer = camera_renderers[renderer_key]
+
+        mj_data = sim.data._data if hasattr(sim.data, '_data') else sim.data
+        renderer.update_scene(mj_data, camera=camera_id)
+
+        # RGB
+        renderer.disable_depth_rendering()
+        renderer.disable_segmentation_rendering()
+        rgb = renderer.render()
+
+        # Depth
+        renderer.enable_depth_rendering()
+        depth = renderer.render()
+        renderer.disable_depth_rendering()
+
+        # Segmentation (object_id, object_type)
+        renderer.enable_segmentation_rendering()
+        seg = renderer.render()
+        renderer.disable_segmentation_rendering()
+
+        if rgb is None or depth is None or seg is None:
+            print(f"Render failed for camera '{camera_name}'")
+            return None
+
+        # Copy buffers so subsequent renders don't overwrite stored frames
+        rgb = np.asarray(rgb, dtype=np.uint8).copy()
+        depth = np.asarray(depth, dtype=np.float32)
+        depth = np.where(np.isfinite(depth), depth, 0.0).copy()
+        seg = np.asarray(seg, dtype=np.int32).copy()
+
+        # View matrix (extrinsics) from sim
+        cam_pos = sim.data.cam_xpos[camera_id]
+        cam_mat = sim.data.cam_xmat[camera_id].reshape(3, 3)
+        view_matrix = np.eye(4)
+        view_matrix[:3, :3] = cam_mat.T
+        view_matrix[:3, 3] = -cam_mat.T @ cam_pos
+
+        # intr = get_camera_intrinsics(sim, camera_name, width, height)
+        intrinsics = get_camera_intrinsic_matrix(sim=sim, camera_name=camera_name, camera_height=height, camera_width=width)
+        extrinsics = get_camera_extrinsic_matrix(sim=sim, camera_name=camera_name)
+
+        return CameraObservation(
+            camera=camera_name,
+            rgb=rgb,
+            depth=depth,
+            segmentation=seg,
+            intrinsics=intrinsics,
+            extrinsics=extrinsics,
+            view_matrix=view_matrix,
+        ), camera_renderers
+    
+    except Exception as e:
+        print(f"Failed to render camera '{camera_name}': {e}")
+        import traceback
+        traceback.print_exc()
+        return None
