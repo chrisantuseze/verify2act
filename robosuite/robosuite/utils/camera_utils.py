@@ -758,6 +758,7 @@ def render_camera(sim, camera_renderers, camera_name: str, width: int, height: i
         depth = np.asarray(depth, dtype=np.float32)
         depth = np.where(np.isfinite(depth), depth, 0.0).copy()
         seg = np.asarray(seg, dtype=np.int32).copy()
+        seg = seg[..., 0]
 
         # View matrix (extrinsics) from sim
         cam_pos = sim.data.cam_xpos[camera_id]

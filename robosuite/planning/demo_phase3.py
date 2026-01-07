@@ -130,6 +130,7 @@ def demo_single_episode(
     
     # Get lookahead depth from args if available
     lookahead_depth = getattr(args, 'lookahead_depth', 2)  # Default to 2-step
+    predicate_threshold = getattr(args, 'predicate_threshold', 0.5)  # Default to 0.5
     
     controller = ClosedLoopController(
         args,
@@ -140,6 +141,7 @@ def demo_single_episode(
         max_replans_per_primitive=3,
         lookahead_depth=lookahead_depth,
         enable_collision_checking=True,
+        predicate_threshold=predicate_threshold,
         verbose=True
     )
     print("  ✓ Controller initialized")
@@ -233,6 +235,7 @@ def demo_batch_evaluation(
 
 def demo_failure_recovery(
     checkpoint_path: str = "../../Points2Plans/ckpt/checkpoint/cp_1.pth",
+    args=None
 ):
     """
     Demonstrate failure recovery with intentional errors.
@@ -249,13 +252,21 @@ def demo_failure_recovery(
     # Create environment
     env = create_environment("pickplace", render=False)
     
+    # Get predicate threshold from args if available
+    predicate_threshold = getattr(args, 'predicate_threshold', 0.3) if args else 0.3
+    
     # Create controller with aggressive replanning
     controller = ClosedLoopController(
+        args if args else type('obj', (object,), {
+            'model_config_path': '../../Points2Plans/LLM/configs/models/pretrained/generative/gpt_4_cot.yaml',
+            'prompt_config_path': 'configs/prompts/tasks/pickplace_task.yaml'
+        })(),
         env=env,
         checkpoint_path=checkpoint_path,
         num_planning_samples=20,  # Fewer samples = higher failure rate
         goal_threshold=0.2,
         max_replans_per_primitive=5,  # More replans
+        predicate_threshold=predicate_threshold,
         verbose=True
     )
     
@@ -346,6 +357,12 @@ def main():
         choices=[1, 2, 3],
         help="Number of primitives to simulate ahead (1=greedy, 2-3=multi-step)"
     )
+    parser.add_argument(
+        "--predicate-threshold",
+        type=float,
+        default=0.3,
+        help="Threshold for predicate matching (default 0.3, use lower for undertrained models)"
+    )
     
     args = parser.parse_args()
     
@@ -361,7 +378,7 @@ def main():
     try:
         if args.demo_recovery:
             # Failure recovery demo
-            success, stats = demo_failure_recovery(str(checkpoint_path))
+            success, stats = demo_failure_recovery(str(checkpoint_path), args)
         elif args.batch:
             # Batch evaluation
             results = demo_batch_evaluation(

@@ -59,7 +59,8 @@ class DynamicsModelPlanner:
                  enable_collision_checking: bool = True,
                  x_collision: float = 0.05,
                  y_collision: float = 0.05,
-                 lookahead_depth: int = 1):
+                 lookahead_depth: int = 1,
+                 predicate_threshold: float = 0.3):
         """
         Initialize dynamics model planner.
         
@@ -74,10 +75,12 @@ class DynamicsModelPlanner:
             x_collision: Half-width of bounding box in X dimension for collision checking
             y_collision: Half-width of bounding box in Y dimension for collision checking
             lookahead_depth: Number of primitives to simulate ahead (1=greedy, 2-3=multi-step)
+            predicate_threshold: Threshold for predicate matching (default 0.3, lowered from 0.5 for undertrained models)
         """
         self.checkpoint_path = checkpoint_path
         self.num_samples = num_samples
         self.device = torch.device(device)
+        self.predicate_threshold = predicate_threshold
         self.state_converter = state_converter
         self.enable_collision_checking = enable_collision_checking
         self.lookahead_depth = max(1, min(lookahead_depth, 3))  # Clamp between 1-3
@@ -214,6 +217,8 @@ class DynamicsModelPlanner:
         print(f"  Looking ahead: {[p for _, p, _, _, _ in lookahead_primitives[:actual_lookahead]]}")
         print(f"  Object ID: {obj_id}, Target ID: {target_id if not use_table_location else 'table (special)'}")
         print(f"  Sampling {self.num_samples} candidate actions...")
+
+        # print(f"  Current goal predicates:\n{goal_predicates}")
         
         with torch.no_grad():
             # Encode current state
@@ -277,6 +282,7 @@ class DynamicsModelPlanner:
                     obj_id=obj_id,
                     target_id=target_id if not use_table_location else None
                 )
+                # print(f"  Sample {sample_idx + 1}/{self.num_samples}: Feasibility = {feasibility:.3f}")
                 
                 # Keep best action
                 if feasibility > best_feasibility:
@@ -547,13 +553,19 @@ class DynamicsModelPlanner:
                     pred_relations_matrix[i, j, :] = pred_relations[0, edge_idx, :]
                     edge_idx += 1
         
+        # print(f"    Predicted relations matrix: {pred_relations_matrix}, Goal predicates: {goal_predicates}")
+        # print(f"    Goal predicates in _check_feasibility: {goal_predicates > self.predicate_threshold}")
+
         # Compare with goals: check if predicted relations match goal relations
-        # For each goal predicate that should be 1, check if prediction > 0.5
-        goal_mask = goal_predicates > 0.5
+        # For each goal predicate that should be 1, check if prediction > threshold
+        goal_mask = goal_predicates > self.predicate_threshold
+        pred_mask = pred_relations_matrix[:, :, :goal_predicates.shape[-1]] > self.predicate_threshold
         matches = np.logical_and(
             goal_mask,
-            pred_relations_matrix[:, :, :goal_predicates.shape[-1]] > 0.5
+            pred_mask
         )
+        # print(f"    Matches: {matches}, Goal mask: {goal_mask}, Pred mask: {pred_mask}")
+        # print(f"    Predicted relations: {pred_relations_matrix[:, :, :goal_predicates.shape[-1]]}")
         
         # Goal feasibility = proportion of goals satisfied
         if goal_mask.sum() == 0:

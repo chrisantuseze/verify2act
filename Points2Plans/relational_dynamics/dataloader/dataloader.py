@@ -534,15 +534,18 @@ class PerSceneLoader(object):
                             each_action_step_id = each_action_step
                         self.all_action_list.append([])
 
-                        print("attrs['sudo_action_list']:", attrs['sudo_action_list'])
+                        #@Chris - Uncomment for debugging
+                        # print(f"self.start: {self.start}, self.end: {self.end}")
+                        # print("attrs['sudo_action_list']:", attrs['sudo_action_list'], "each_action_step:", each_action_step)
                         current_action_list = attrs['sudo_action_list'][each_action_step]
                         
                         if current_action_list[0] == 'pickplace' or current_action_list[0] == 'stack':
                             for i in range(self.max_objects):
                                 self.all_action_list[each_action_step_id].append(0)
                             for i in range(total_objects):
-                                print("current_action_list[1]:", current_action_list[1])
-                                print("i+1:", i+1)
+                                #@Chris - Uncomment for debugging
+                                # print("current_action_list[1]:", current_action_list[1])
+                                # print("i+1:", i+1)
                                 if str(i+1) in current_action_list[1]:
                                     move_obj = i
                             self.move_obj_list.append(move_obj)
@@ -585,9 +588,10 @@ class PerSceneLoader(object):
                 
                 self.support_surface_id.append([])
 
-                print("each_step_id:", each_step_id)
-                print("self.all_gt_pose_list[each_step_id]:", self.all_gt_pose_list[each_step_id])
-                print("self.move_obj_list[0]:", self.move_obj_list[0])
+                #@Chris - Uncomment for debugging
+                # print("each_step_id:", each_step_id)
+                # print("self.all_gt_pose_list[each_step_id]:", self.all_gt_pose_list[each_step_id])
+                # print("self.move_obj_list[0]:", self.move_obj_list[0])
 
                 if self.all_gt_pose_list[each_step_id][self.move_obj_list[0]][-1] - self.all_gt_pose_list[each_step_id - 1][self.move_obj_list[0]][-1] > 0.10:
                     
@@ -1626,9 +1630,10 @@ class DataLoader(object):
                 with open(train_dir, 'rb') as f:
                     data, attrs = pickle.load(f)
                 
-                print('\nloaded data:', data.keys())
-                # print('\nloaded attrs:', attrs.keys())
-                print("\nattrs['objects']:", attrs['objects'].keys())
+                #@Chris - Uncomment for debugging
+                # print('\nloaded data:', data.keys())
+                # # print('\nloaded attrs:', attrs.keys())
+                # print("\nattrs['objects']:", attrs['objects'].keys())
 
                 # print('loaded data:', train_dir)    
                 total_objects = 0
@@ -1664,6 +1669,8 @@ class DataLoader(object):
                     for each_step in range(data['point_cloud_1'].shape[0] - 1):
                         self.train = True
 
+                        print(f"Processing demo: {train_dir}, step: {each_step}, total steps: {data['point_cloud_1'].shape[0]-1}")
+
                         all_pair_scene_object =  PerSceneLoader(train_dir, self.scene_type, start = each_step, end = each_step + 2, single_step_training = self.single_step_training, pick_place = self.pick_place, push = self.pushing, set_max = self.set_max, max_objects = max_objects ,train = self.train, updated_behavior_params = self.updated_behavior_params, use_shared_latent_embedding = self.use_shared_latent_embedding, push_3_steps = self.push_3_steps, use_seperate_latent_embedding = self.use_seperate_latent_embedding, train_object_identity = self.train_object_identity, use_boundary_relations = self.use_boundary_relations, consider_z_offset = self.consider_z_offset, seperate_env_id = self.seperate_env_id, max_env_num = self.max_env_num, env_first_step = self.env_first_step, use_discrete_z = self.use_discrete_z, fast_training = self.fast_training, one_bit_env = self.one_bit_env, rcpe = self.rcpe, pe = self.pe, relation_angle = self.relation_angle, bookshelf_env_shift = self.bookshelf_env_shift, push_steps = self.push_steps ,enable_return = self.enable_return, lfd_search = self.lfd_search, get_hidden_label = self.get_hidden_label, get_inside_relations = self.get_inside_relations, enable_place_inside = self.enable_place_inside, binary_grasp = self.binary_grasp, open_close_drawer = self.open_close_drawer, softmax_identity = self.softmax_identity, train_inside_feasibility = self.train_inside_feasibility, use_discrete_place = self.use_discrete_place, seperate_place = self.seperate_place, add_noise_pc = self.add_noise_pc, sudo_pickplace = self.sudo_pickplace)
                         
                         
@@ -1698,17 +1705,14 @@ class DataLoader(object):
                 len(self.train_idx_to_data_dict)))
 
         self.test_idx_to_data_dict = {}
-        print("0. config.args.test_dir:", config.args.test_dir)
         if config.args.test_dir != None:
-            print("1. config.args.test_dir:", config.args.test_dir)
             self.test_dir_list = test_dir_list \
                 if test_dir_list is not None else config.args.test_dir
             
-            print("2. config.args.test_dir:", config.args.test_dir)
             idx_to_data_dict = {}
 
             files = sorted(os.listdir(self.test_dir_list[0]))
-            print('test dir list:', self.test_dir_list, files)
+            # print('test dir list:', self.test_dir_list, files) #@Chris - Uncomment for debugging
             
             self.test_pcd_path = [
                 os.path.join(self.test_dir_list[0], p) for p in files if 'demo' in p]
@@ -1831,7 +1835,7 @@ class DataLoader(object):
     
     def get_demo_data_dict(self, train=True):
         data_dict = self.train_idx_to_data_dict if train else self.test_idx_to_data_dict
-        print("get_demo_data_dict, train:", train, "data_dict len:", len(data_dict))
+        # print("get_demo_data_dict, train:", train, "data_dict len:", len(data_dict)) #@Chris - Uncomment for debugging
         return data_dict
     
     
@@ -1983,7 +1987,7 @@ class DataLoader(object):
         # Get the actual scene index.
         scene_idx = sample_order_dict['order'][sample_idx]
         
-        print("Getting scene index:", scene_idx, "train:", train)
+        # print("Getting scene index:", scene_idx, "train:", train) #@Chris - Uncomment for debugging
         data, data_next = self.get_all_object_pairs_for_scene_index(scene_idx, train=train)
         sample_order_dict['idx'] += 1
         

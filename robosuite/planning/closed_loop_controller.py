@@ -60,6 +60,7 @@ class ClosedLoopController:
         max_replans_per_primitive: int = 3,
         lookahead_depth: int = 1,
         enable_collision_checking: bool = True,
+        predicate_threshold: float = 0.3,
         verbose: bool = True
     ):
         """
@@ -74,6 +75,7 @@ class ClosedLoopController:
             max_replans_per_primitive: Max replanning attempts if execution fails
             lookahead_depth: Number of primitives to simulate ahead (1-3)
             enable_collision_checking: Whether to enable collision detection
+            predicate_threshold: Threshold for predicate matching (default 0.3, use lower for undertrained models)
             verbose: Whether to print detailed logs
         """
         self.args = args
@@ -81,6 +83,7 @@ class ClosedLoopController:
         self.goal_threshold = goal_threshold
         self.max_replans_per_primitive = max_replans_per_primitive
         self.verbose = verbose
+        self.predicate_threshold = predicate_threshold
         
         # Initialize components
         if self.verbose:
@@ -93,7 +96,8 @@ class ClosedLoopController:
             num_samples=num_planning_samples,
             state_converter=self.state_converter,
             lookahead_depth=lookahead_depth,
-            enable_collision_checking=enable_collision_checking
+            enable_collision_checking=enable_collision_checking,
+            predicate_threshold=predicate_threshold
         )
         self.executor = PrimitiveExecutor(env)
         

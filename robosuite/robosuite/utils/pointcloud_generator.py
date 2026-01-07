@@ -287,7 +287,7 @@ class PointCloudGenerator:
         width, height = 640, 480
         cam_obs, _ = render_camera(env.sim, self.camera_renderers, camera_name, width, height)
         
-        return cam_obs.rgb, cam_obs.depth, cam_obs.intrinsics, cam_obs.extrinsics
+        return cam_obs.rgb, cam_obs.depth, cam_obs.segmentation, cam_obs.intrinsics, cam_obs.extrinsics
     
     def _get_object_id_mapping(self, env) -> Dict[int, str]:
         """

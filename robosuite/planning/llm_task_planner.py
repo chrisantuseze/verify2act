@@ -253,6 +253,8 @@ class LLMTaskPlanner:
             predicate_matrix: Binary matrix [num_objects, num_objects, num_predicates]
         """
         predicates = np.zeros((num_objects, num_objects, num_predicates))
+
+        print(f"    goals: {goals}")
         
         for goal_str in goals:
             try:
@@ -264,6 +266,7 @@ class LLMTaskPlanner:
                 # Get object indices
                 obj1_idx = object_name_to_id.get(obj1)
                 obj2_idx = object_name_to_id.get(obj2)
+                # print(f"  Parsing goal: {goal_str} -> pred_type: {pred_type}, obj1: {obj1} (idx {obj1_idx}), obj2: {obj2} (idx {obj2_idx})")
                 
                 if obj1_idx is None or obj2_idx is None:
                     print(f"Warning: Object not found in mapping for goal '{goal_str}'")
@@ -276,12 +279,13 @@ class LLMTaskPlanner:
                 # Set the predicate (obj1 has relation to obj2)
                 predicates[obj1_idx, obj2_idx, pred_idx] = 1.0
                 
-                print(f"  Set goal predicate: {pred_type}({obj1}[{obj1_idx}], {obj2}[{obj2_idx}])")
+                # print(f"  Set goal predicate: {pred_type}({obj1}[{obj1_idx}], {obj2}[{obj2_idx}])")
                 
             except Exception as e:
                 print(f"Warning: Failed to parse goal '{goal_str}': {e}")
                 continue
         
+        print(f"    Generated predicate matrix:\n{predicates}")
         return predicates
     
     def _predicate_type_to_idx(self, pred_type: str, num_predicates: int) -> int:
