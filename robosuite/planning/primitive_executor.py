@@ -271,6 +271,7 @@ class PrimitiveExecutor:
             
             # Create OSC action towards target
             action = self._create_osc_action(target_pos, gripper_open)
+            print(f"    Step {steps}: EE pos {ee_pos}, target {target_pos}, distance {distance:.3f}")
             
             # Step environment
             obs, _, _, _ = self.env.step(action)

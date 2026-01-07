@@ -37,7 +37,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 
 from llm_task_planner import LLMTaskPlanner
-from dynamics_model_planner import DynamicsModelPlanner
+# from dynamics_model_planner import DynamicsModelPlanner
 from state_converter import StateConverter
 from primitive_executor import PrimitiveExecutor
 
@@ -91,14 +91,14 @@ class ClosedLoopController:
         
         self.llm_planner = LLMTaskPlanner(args.model_config_path, args.prompt_config_path)
         self.state_converter = StateConverter(env)
-        self.dynamics_planner = DynamicsModelPlanner(
-            checkpoint_path=checkpoint_path,
-            num_samples=num_planning_samples,
-            state_converter=self.state_converter,
-            lookahead_depth=lookahead_depth,
-            enable_collision_checking=enable_collision_checking,
-            predicate_threshold=predicate_threshold
-        )
+        # self.dynamics_planner = DynamicsModelPlanner(
+        #     checkpoint_path=checkpoint_path,
+        #     num_samples=num_planning_samples,
+        #     state_converter=self.state_converter,
+        #     lookahead_depth=lookahead_depth,
+        #     enable_collision_checking=enable_collision_checking,
+        #     predicate_threshold=predicate_threshold
+        # )
         self.executor = PrimitiveExecutor(env)
         
         if self.verbose:
@@ -227,11 +227,16 @@ class ClosedLoopController:
                     self.stats['num_replans'] += 1
                 
                 # Plan
-                primitive, action_params, feasibility = self.dynamics_planner.plan_next_primitive(
-                    state_dict=state_dict,
-                    goal_predicates=goal_predicates,
-                    primitive_plan=primitive_plan
-                )
+                # primitive, action_params, feasibility = self.dynamics_planner.plan_next_primitive(
+                #     state_dict=state_dict,
+                #     goal_predicates=goal_predicates,
+                #     primitive_plan=primitive_plan
+                # )
+                
+                # print(f"  Primitive: {primitive}")
+                # print(f"  Action params: {action_params}")
+                # print(f"  Feasibility: {feasibility:.3f}")
+                primitive, action_params, feasibility = "Pick(cubeA, table)", np.array([[0.00758689, 0.01866092, 0.77499998]]), 1.00
                 
                 if primitive is None:
                     if self.verbose:
@@ -297,7 +302,8 @@ class ClosedLoopController:
         This is more accurate than manual heuristics and consistent with goal checking.
         """
         # Use decoder to predict current predicates from state
-        current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+        # current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+        current_predicates = np.random.rand(3, 3, 9)  # Placeholder random predicates for testing
         print(f"Decoded predicates shape: {current_predicates.shape if current_predicates is not None else 'None'}")
         
         if current_predicates is None:
@@ -405,7 +411,8 @@ class ClosedLoopController:
             threshold = self.goal_threshold
         
         # Get current predicates from dynamics model
-        current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+        # current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+        current_predicates = np.random.rand(3, 3, 9)  # Placeholder random predicates for testing
         
         if current_predicates is None:
             return False
