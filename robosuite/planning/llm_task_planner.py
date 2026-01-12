@@ -285,7 +285,7 @@ class LLMTaskPlanner:
                 print(f"Warning: Failed to parse goal '{goal_str}': {e}")
                 continue
         
-        print(f"    Generated predicate matrix:\n{predicates}")
+        # print(f"    Generated predicate matrix:\n{predicates}")
         return predicates
     
     def _predicate_type_to_idx(self, pred_type: str, num_predicates: int) -> int:

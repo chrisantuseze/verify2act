@@ -2,6 +2,7 @@ from typing import Any, Optional, List, Dict
 
 import os
 import time
+import httpx
 import openai
 from openai.types.chat.chat_completion import ChatCompletion
 
@@ -21,7 +22,10 @@ class OpenAIGenerativeModel(PretrainedModel[List[Dict[str, Any]]]):
         if api_key is None:
             raise ValueError("API key must be provided.")
         self._api_key = api_key
-        self._client = openai.OpenAI(api_key=self._api_key)
+        # Explicit httpx client avoids passing unsupported kwargs (e.g., proxies)
+        # into older httpx installs that can trigger TypeError in OpenAI client
+        # construction.
+        self._client = openai.OpenAI(api_key=self._api_key, http_client=httpx.Client())
         self._kwargs = kwargs
 
     def forward(self, x: List[Dict[str, Any]]) -> Dict[str, Any]:

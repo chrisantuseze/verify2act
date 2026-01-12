@@ -33,42 +33,36 @@ class PrimitiveExecutor:
     - Provides success feedback for replanning
     """
     
-    # Constants
-    P_GAIN = 5.0  # Proportional gain for position control
-    
-    # Height offsets
-    GRIP_OFFSET = 0.0      # Gripper offset for grasping
-    OBJ_OFFSET = 0.03      # Z-offset above objects before grasping
-    STACK_OFFSET = 0.02    # Small additional height for safety during stacking
-    SAFE_Z_OFFSET = 0.1    # Safe height for lifting and moving
-    
-    # Cube dimensions for precise stacking
-    CUBE_HEIGHTS = {
-        "cubeA": 0.02,   # Red cube
-        "cubeB": 0.025,  # Green cube (slightly larger)
-        "cubeC": 0.018,  # Blue cube (smaller)
-        "cubeD": 0.02,   # Dark cube
-    }
-    
-    # Counter thresholds
-    GRASP_DURATION = 50
-    RELEASE_DURATION = 50
-    
     def __init__(self,
                  env,
+                 approach_height: float = 0.15,
+                 grasp_height: float = 0.02,
+                 lift_height: float = 0.20,
+                 place_height: float = 0.05,
                  max_steps_per_primitive: int = 500,
-                 position_threshold: float = 0.01):
+                 position_threshold: float = 0.01,
+                 gripper_close_steps: int = 50):
         """
         Initialize primitive executor.
         
         Args:
             env: Robosuite environment instance
+            approach_height: Height above object for approach phase
+            grasp_height: Height offset for grasping
+            lift_height: Height to lift object after grasping
+            place_height: Height above target for placing
             max_steps_per_primitive: Maximum steps per primitive execution
             position_threshold: Distance threshold for reaching target (meters)
+            gripper_close_steps: Steps to close/open gripper
         """
         self.env = env
+        self.approach_height = approach_height
+        self.grasp_height = grasp_height
+        self.lift_height = lift_height
+        self.place_height = place_height
         self.max_steps_per_primitive = max_steps_per_primitive
         self.position_threshold = position_threshold
+        self.gripper_close_steps = gripper_close_steps
         
         # Track execution state
         self.total_steps = 0
@@ -105,20 +99,6 @@ class PrimitiveExecutor:
             print(f"Unknown primitive type: {action_type}")
             return False, 0, obs
     
-    def _parse_primitive(self, primitive: str) -> Tuple[str, str]:
-        """
-        Parse primitive string to extract object and target names.
-        
-        Args:
-            primitive: Primitive string (e.g., "Pick(milk, table)")
-            
-        Returns:
-            Tuple of (object_name, target_name)
-        """
-        content = primitive.split('(')[1].split(')')[0]
-        parts = [p.strip() for p in content.split(',')]
-        return parts[0], parts[1]
-    
     def _execute_pick(self,
                      primitive: str,
                      action_params: np.ndarray,
@@ -128,55 +108,71 @@ class PrimitiveExecutor:
         
         Pick sequence:
         1. Move above object (approach)
-        2. Lower to object (descend)
+        2. Move down to object (descend)
         3. Close gripper (grasp)
         4. Lift object (lift)
         """
         print(f"\n=== Executing: {primitive} ===")
         
-        # Parse primitive to get object and target names
-        object_name, target_name = self._parse_primitive(primitive)
+        # Extract object and target location from primitive
+        # "Pick(milk, table)" -> object_name="milk", target="table"
+        content = primitive.split('(')[1].split(')')[0] # "milk, table"
+        parts = [p.strip() for p in content.split(',')] # ["milk", "table"]
+        object_name, target_name = parts[0], parts[1]
         
-        # Get object position from observation (fallback to action_params)
-        object_pos = self._get_object_position(obs, object_name) # @Chris: Ordinarily, this should be action_params, but we can also try to get it from obs for more accuracy since we don't care about best action prediction.
+        # Get object position from observation
+        # Try to find object position in obs
+        object_pos = self._get_object_position(obs, object_name) # Ordinarily, this should be action_params, but we can also try to get it from obs for more accuracy since we don't care about best action prediction.
+        print(f"  Target object: {object_name}, target: {target_name}, position: {object_pos}")
+        
         if object_pos is None:
+            # Use action_params as fallback (planner's target)
             object_pos = action_params
             print(f"  Warning: Using planner params as object position")
         
-        print(f"  Target object: {object_name}, target: {target_name}, position: {object_pos}")
-        
         steps = 0
         
-        # Phase 1: Move above object
-        print(f"  Phase 1: Move above {object_name}")
-        desired = object_pos + np.array([0, 0, self.OBJ_OFFSET])
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=-1)
+        # Phase 1: Approach (move above object)
+        print(f"  Phase 1: Approach to {object_pos}")
+        approach_pos = object_pos.copy()
+        approach_pos[2] += self.approach_height
+        
+        success, phase_steps, obs = self._move_to_position(approach_pos, obs, gripper_value=-1.0)
         steps += phase_steps
         if not success:
             print(f"  ✗ Pick failed at approach phase")
             return False, steps, obs
         
-        # Phase 2: Lower to grasp position
-        print(f"  Phase 2: Lower to {object_name}")
-        desired = object_pos + np.array([0, 0, self.GRIP_OFFSET])
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=-1, position_threshold=0.005)
+        # Phase 2: Descend (move down to object)
+        print(f"  Phase 2: Descend to grasp")
+        grasp_pos = object_pos.copy()
+        GRIP_OFFSET = 0.0  # Gripper offset for grasping
+        grasp_pos[2] += GRIP_OFFSET #self.grasp_height
+        
+        success, phase_steps, obs = self._move_to_position(grasp_pos, obs, gripper_value=-1.0)
         steps += phase_steps
         if not success:
             print(f"  ✗ Pick failed at descend phase")
             return False, steps, obs
         
-        # Phase 3: Close gripper
-        print(f"  Phase 3: Grasp {object_name}")
-        phase_steps, obs = self._actuate_gripper(obs, gripper_value=1)
-        steps += phase_steps
-        
-        # Update object position after grasping
+        # Phase 3: Grasp (close gripper)
+        print(f"  Phase 3: Close gripper")
+        for _ in range(self.gripper_close_steps):
+            action = np.zeros(self.env.action_dim)
+            action[:3] = 0
+            action[6] = 1.0  # Close gripper
+            obs, _, _, _ = self.env.step(action)
+            steps += 1
+            self.total_steps += 1
+
         object_pos = self._get_object_position(obs, object_name)
-        
-        # Phase 4: Lift object
-        print(f"  Phase 4: Lift {object_name}")
-        desired = object_pos + np.array([0, 0, self.SAFE_Z_OFFSET])
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=1)
+
+        # Phase 4: Lift (move up with object)
+        print(f"  Phase 4: Lift object")
+        lift_pos = object_pos.copy()
+        lift_pos[2] += self.lift_height
+                
+        success, phase_steps, obs = self._move_to_position(lift_pos, obs, gripper_value=1.0)
         steps += phase_steps
         
         print(f"  ✓ Pick completed in {steps} steps")
@@ -191,59 +187,86 @@ class PrimitiveExecutor:
         
         Place sequence:
         1. Move above target location (approach)
-        2. Lower to placement height (descend)
+        2. Move down to placement height (descend)
         3. Open gripper (release)
-        4. Retract (lift back up)
+        4. Retreat (lift back up)
         """
         print(f"\n=== Executing: {primitive} ===")
         
-        # Parse primitive to get object and target names
-        object_name, target_name = self._parse_primitive(primitive)
+        # Extract object and target location from primitive
+        # "Place(milk, bin)" -> object_name="milk", target="bin"
+        content = primitive.split('(')[1].split(')')[0]
+        parts = [p.strip() for p in content.split(',')]
+        object_name, target_name = parts[0], parts[1]
         
-        # Get target position from observation (fallback to action_params)
-        target_pos = self._get_object_position(obs, target_name) # @Chris: Ordinarily, this should be action_params, but we can also try to get it from obs for more accuracy since we don't care about best action prediction.
+        # Get target position from observation or use action_params
+        target_pos = self._get_object_position(obs, target_name) # Similar to pick, we can also try to get the target position from obs for more accuracy, since we don't care about best action prediction.
+        
         if target_pos is None:
+            # Use action_params as target position
             target_pos = action_params
             print(f"  Warning: Using planner params as target position")
         
-        print(f"  Placing {object_name} onto {target_name}, position: {target_pos}")
-        
         steps = 0
         
-        # Phase 1: Move above target
-        print(f"  Phase 1: Move above {target_name}")
-        desired = target_pos + np.array([0, 0, self.SAFE_Z_OFFSET])
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=1)
+        # Phase 1: Approach (move above target)
+        print(f"  Phase 1: Approach to {target_pos}")
+        approach_pos = target_pos.copy()
+        SAFE_Z_OFFSET = 0.1  # Safe height for lifting and moving
+        approach_pos[2] += SAFE_Z_OFFSET #self.approach_height
+        
+        success, phase_steps, obs = self._move_to_position(approach_pos, obs, gripper_value=1.0)
         steps += phase_steps
         if not success:
             print(f"  ✗ Place failed at approach phase")
             return False, steps, obs
         
-        # Phase 2: Lower to placement height (precise stacking calculation)
-        print(f"  Phase 2: Lower to {target_name}")
-        source_h = self.CUBE_HEIGHTS.get(object_name, 0.02)
-        target_h = self.CUBE_HEIGHTS.get(target_name, 0.02)
-        desired_z = target_pos[2] + target_h / 2 + source_h / 2 + self.STACK_OFFSET
-        desired = np.array([target_pos[0], target_pos[1], desired_z])
+        # Phase 2: Descend (move down to placement height)
+        print(f"  Phase 2: Descend to placement height")
+        # place_pos = target_pos.copy()
+        # place_pos[2] += self.place_height
+
+
+        CUBE_HEIGHTS = {
+            "cubeA": 0.02,   # Red cube
+            "cubeB": 0.025,  # Green cube (slightly larger)
+            "cubeC": 0.018,  # Blue cube (smaller)
+            "cubeD": 0.02,   # Dark cube
+        }
+
+        source_h = CUBE_HEIGHTS[object_name]
+        target_h = CUBE_HEIGHTS[target_name]
+        STACK_OFFSET = 0.01  # Small additional height for safety during stacking
         
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=1, position_threshold=0.015)
+        # Calculate precise stacking height
+        desired_z = target_pos[2] + target_h / 2 + source_h / 2 + STACK_OFFSET
+        place_pos = np.array([target_pos[0], target_pos[1], desired_z])
+        
+        success, phase_steps, obs = self._move_to_position(place_pos, obs, gripper_value=1.0, position_threshold=0.015)
         steps += phase_steps
         if not success:
             print(f"  ✗ Place failed at descend phase")
             return False, steps, obs
         
-        # Phase 3: Open gripper
-        print(f"  Phase 3: Release {object_name}")
-        phase_steps, obs = self._actuate_gripper(obs, gripper_value=-1)
-        steps += phase_steps
+        # Phase 3: Release (open gripper)
+        print(f"  Phase 3: Open gripper")
+        for _ in range(self.gripper_close_steps):
+            action = np.zeros(self.env.action_dim)
+            action[:3] = 0
+            action[6] = -1  # Open gripper
+            obs, _, _, _ = self.env.step(action)
+            steps += 1
+            self.total_steps += 1
         
-        # Update target position after releasing
+        # Phase 4: Retreat (lift back up)
+        print(f"  Phase 4: Retreat")
+        # retreat_pos = target_pos.copy()
+        # retreat_pos[2] += self.approach_height
+
         target_pos = self._get_object_position(obs, target_name)
+        retreat_pos = target_pos + np.array([0, 0, 0.15])
         
-        # Phase 4: Retract
-        print(f"  Phase 4: Retract from {target_name}")
-        desired = target_pos + np.array([0, 0, self.SAFE_Z_OFFSET + 0.05])
-        success, phase_steps, obs = self._move_to_position(desired, obs, gripper_value=-1)
+        success, phase_steps, obs = self._move_to_position(retreat_pos, obs, gripper_value=-1.0)
         steps += phase_steps
         
         print(f"  ✓ Place completed in {steps} steps")
@@ -253,73 +276,46 @@ class PrimitiveExecutor:
                          target_pos: np.ndarray,
                          obs: Dict,
                          gripper_value: int,
-                         max_steps: Optional[int] = None,
-                         position_threshold: float = 0.01) -> Tuple[bool, int, Dict]:
+                         max_steps: Optional[int] = None, position_threshold: float = 0.01) -> Tuple[bool, int, Dict]:
         """
-        Move end-effector to target position using proportional control.
+        Move end-effector to target position using OSC.
         
-        Args:
-            target_pos: Target position for end-effector
-            obs: Current observation dict
-            gripper_value: Gripper command (1 = close, -1 = open)
-            max_steps: Maximum steps for this movement
-            position_threshold: Distance threshold for reaching target
-            
-        Returns:
-            Tuple of (success, steps_taken, final_obs)
+        Returns when position reached or max steps exceeded.
         """
         if max_steps is None:
-            max_steps = self.max_steps_per_primitive // 4
+            max_steps = self.max_steps_per_primitive // 4  # Allocate 1/4 of primitive budget per phase
         
         steps = 0
         
         for _ in range(max_steps):
+            # Get current end-effector position
+            action = np.zeros(self.env.action_dim)
             ee_pos = self._get_ee_position(obs)
-            error = np.linalg.norm(ee_pos - target_pos)
             
-            if error < position_threshold:
+            # Check if reached target
+            distance = np.linalg.norm(ee_pos - target_pos)
+            if distance < position_threshold:
                 return True, steps, obs
             
-            action = np.zeros(self.env.action_dim)
+            # Create OSC action towards target
+            # action = self._create_osc_action(target_pos, gripper_open)
+
             action[:3] = self._compute_position_action(target_pos, ee_pos)
             action[6] = gripper_value
+
+            # print(f"    Step {steps}: EE pos {ee_pos}, target {target_pos}, distance {distance:.3f}")
+            # print(f"    Step {steps}: action: {action}")
             
+            # Step environment
             obs, _, _, _ = self.env.step(action)
             steps += 1
             self.total_steps += 1
         
+        # Failed to reach target in time
         return False, steps, obs
     
-    def _actuate_gripper(self,
-                        obs: Dict,
-                        gripper_value: int) -> Tuple[int, Dict]:
-        """
-        Actuate gripper for specified duration.
-        
-        Args:
-            obs: Current observation dict
-            gripper_value: Gripper command (1 = close, -1 = open)
-            
-        Returns:
-            Tuple of (steps_taken, final_obs)
-        """
-        duration = self.GRASP_DURATION if gripper_value == 1 else self.RELEASE_DURATION
-        steps = 0
-        
-        for _ in range(duration):
-            action = np.zeros(self.env.action_dim)
-            action[:3] = 0
-            action[6] = gripper_value
-            
-            obs, _, _, _ = self.env.step(action)
-            steps += 1
-            self.total_steps += 1
-        
-        return steps, obs
-    
-    def _compute_position_action(self,
-                                target_pos: np.ndarray,
-                                current_pos: np.ndarray) -> np.ndarray:
+    def _compute_position_action(self, target_pos: np.ndarray, 
+                               current_pos: np.ndarray) -> np.ndarray:
         """
         Compute proportional control action for position.
         
@@ -331,7 +327,30 @@ class PrimitiveExecutor:
             Position control action
         """
         error = target_pos - current_pos
+        self.P_GAIN = 5.0  # Proportional gain for position control
         return error * self.P_GAIN
+    
+    def _create_osc_action(self,
+                          target_pos: np.ndarray,
+                          gripper_open: bool) -> np.ndarray:
+        """
+        Create OSC action for robosuite.
+        
+        OSC action format: [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        - Position: delta from current to target (or absolute, depending on controller)
+        - Orientation: keep constant (0, 0, 0)
+        - Gripper: 1 = open, -1 = close
+        """
+        # For OSC controller, action is typically position delta or absolute position
+        # Depending on your controller config, you may need to adjust this
+        
+        # Absolute position mode (common in robosuite OSC)
+        action = np.zeros(7)
+        action[:3] = target_pos  # Target position (x, y, z)
+        action[3:6] = [0, 0, 0]  # Keep orientation constant
+        action[6] = 1.0 if gripper_open else -1.0  # Gripper command
+        
+        return action
     
     def _get_ee_position(self, obs: Dict) -> np.ndarray:
         """Get end-effector position from observation."""

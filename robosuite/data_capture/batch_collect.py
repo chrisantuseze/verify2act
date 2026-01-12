@@ -158,8 +158,8 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        # env = create_environment(self.env_name) # For macOS/mujoco rendering
-        env = self._create_env() # For linux/osmesa rendering
+        env = create_environment(self.env_name) # For macOS/mujoco rendering
+        # env = self._create_env() # For linux/osmesa rendering
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,

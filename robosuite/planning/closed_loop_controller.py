@@ -195,6 +195,7 @@ class ClosedLoopController:
         )
         
         primitive_plan = plans  # Full plan from LLM
+        max_primitives = len(primitive_plan)  # Limit to length of LLM plan for testing
         
         # Step 3: Closed-loop planning and execution
         if self.verbose:
@@ -211,7 +212,13 @@ class ClosedLoopController:
             state_dict = self.state_converter.convert()
             state_dict['object_names'] = objects
             
-            # Check if goal already achieved
+            # Check if plan is exhausted
+            if not primitive_plan:
+                if self.verbose:
+                    print("✓ All primitives in plan executed")
+                break
+            
+            # Check if goal already achieved #@Chris: Uncomment
             if self._check_goal_achieved(state_dict, goal_predicates):
                 if self.verbose:
                     print("✓ Goal achieved!")
@@ -226,17 +233,17 @@ class ClosedLoopController:
                         print(f"  Replanning (attempt {replan_attempt + 1}/{self.max_replans_per_primitive})...")
                     self.stats['num_replans'] += 1
                 
-                # Plan
-                # primitive, action_params, feasibility = self.dynamics_planner.plan_next_primitive(
-                #     state_dict=state_dict,
-                #     goal_predicates=goal_predicates,
-                #     primitive_plan=primitive_plan
-                # )
+                # Plan #@Chris: Uncomment
+                primitive, action_params, feasibility = self.dynamics_planner.plan_next_primitive(
+                    state_dict=state_dict,
+                    goal_predicates=goal_predicates,
+                    primitive_plan=primitive_plan
+                )
                 
-                # print(f"  Primitive: {primitive}")
-                # print(f"  Action params: {action_params}")
-                # print(f"  Feasibility: {feasibility:.3f}")
-                primitive, action_params, feasibility = "Pick(cubeA, table)", np.array([[0.00758689, 0.01866092, 0.77499998]]), 1.00
+                print(f"  Primitive: {primitive}")
+                print(f"  Action params: {action_params}")
+                print(f"  Feasibility: {feasibility:.3f}")
+                # primitive, action_params, feasibility = primitive_plan[0], np.array([[0.00758689, 0.01866092, 0.77499998]]), 1.00
                 
                 if primitive is None:
                     if self.verbose:
@@ -263,6 +270,10 @@ class ClosedLoopController:
                     if self.verbose:
                         print(f"  ✓ Execution succeeded ({num_steps} steps)")
                     success = True
+                    # Advance to next primitive in plan
+                    primitive_plan = primitive_plan[1:]
+                    if self.verbose and primitive_plan:
+                        print(f"  Remaining plan: {primitive_plan}")
                     break
                 else:
                     if self.verbose:
@@ -272,7 +283,8 @@ class ClosedLoopController:
             if not success:
                 if self.verbose:
                     print(f"  ✗ Failed after {self.max_replans_per_primitive} replan attempts")
-                # Continue to next primitive (failure recovery)
+                    print(f"  → Aborting episode (sequential dependency broken)")
+                break  # Abort episode - subsequent primitives depend on this one
         
         # Step 4: Final goal check
         if self.verbose:
@@ -301,9 +313,10 @@ class ClosedLoopController:
         Uses the trained decoder to predict current predicates from observations.
         This is more accurate than manual heuristics and consistent with goal checking.
         """
-        # Use decoder to predict current predicates from state
-        # current_predicates = self.dynamics_planner.predict_predicates(state_dict)
-        current_predicates = np.random.rand(3, 3, 9)  # Placeholder random predicates for testing
+        # Use decoder to predict current predicates from state #@Chris: Uncomment
+        current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+
+        # current_predicates = np.random.rand(len(objects), len(objects), 9)  # Placeholder random predicates for testing
         print(f"Decoded predicates shape: {current_predicates.shape if current_predicates is not None else 'None'}")
         
         if current_predicates is None:
@@ -411,8 +424,8 @@ class ClosedLoopController:
             threshold = self.goal_threshold
         
         # Get current predicates from dynamics model
-        # current_predicates = self.dynamics_planner.predict_predicates(state_dict)
-        current_predicates = np.random.rand(3, 3, 9)  # Placeholder random predicates for testing
+        current_predicates = self.dynamics_planner.predict_predicates(state_dict) #@Chris: Uncomment
+        # current_predicates = np.random.rand(4, 4, 9)  # Placeholder random predicates for testing - This is the cause of the occassional goal reached even when no manipulation has happened
         
         if current_predicates is None:
             return False

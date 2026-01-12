@@ -47,7 +47,7 @@ from robosuite.controllers import load_composite_controller_config
 from closed_loop_controller import ClosedLoopController, BatchController
 
 
-def create_environment(task: str = "stack3", render: bool = False):
+def create_environment_linux(task: str = "stack3", render: bool = False):
     """
     Create robosuite environment.
     
@@ -91,6 +91,33 @@ def create_environment(task: str = "stack3", render: bool = False):
         horizon=horizon,
         ignore_done=True,
         reward_shaping=True,
+    )
+    
+    return env
+
+def create_environment(env_name: str = "Stack4", render: bool = False):
+    """
+    Create and configure the robosuite stacking environment.
+    
+    Args:
+        env_name: Name of the environment ("Stack", "Stack3", or "Stack4")
+        
+    Returns:
+        Configured environment instance
+    """
+    controller_config = load_composite_controller_config(controller="BASIC")
+    
+    env = suite.make(
+        env_name=env_name,
+        robots="Panda",
+        controller_configs=controller_config,
+        has_renderer=True,
+        has_offscreen_renderer=False,
+        use_camera_obs=False,
+        use_object_obs=True,
+        control_freq=20,
+        horizon=1000,
+        ignore_done=True,
     )
     
     return env
@@ -301,8 +328,8 @@ def main():
     parser.add_argument(
         "--task",
         type=str,
-        default="stack3",
-        choices=["stack3", "pickplace"],
+        default="Stack3",
+        choices=["Stack3", "PickPlace"],
         help="Task to run"
     )
     parser.add_argument(
@@ -342,7 +369,7 @@ def main():
     parser.add_argument(
         "--max-primitives",
         type=int,
-        default=1,#20,
+        default=5,#20,
         help="Maximum primitives per episode"
     )
     parser.add_argument(
@@ -365,6 +392,9 @@ def main():
     )
     
     args = parser.parse_args()
+
+
+    # ''' @Chris: Uncomment
     
     # Check checkpoint exists
     checkpoint_path = Path(args.checkpoint)
@@ -406,6 +436,20 @@ def main():
         print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
+
+    # '''
+
+    '''
+    print("\n" + "=" * 80)
+    success, stats = demo_single_episode(
+        args,
+        task=args.task,
+        checkpoint_path=None,
+        render=args.render,
+        max_primitives=args.max_primitives
+    )
+    print(f"\nEpisode complete: {'SUCCESS' if success else 'FAILED'}")
+    '''
 
 
 if __name__ == "__main__":

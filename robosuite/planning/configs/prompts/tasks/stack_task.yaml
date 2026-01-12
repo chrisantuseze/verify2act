@@ -29,14 +29,14 @@ prompt_kwargs:
       
    # System prompts (relative to robosuite/planning directory)
    system_prompts:
-      - /home/scratch1/cheze/verify2act/robosuite/planning/configs/prompts/system/goal_prediction_v1.yaml
-      - /home/scratch1/cheze/verify2act/robosuite/planning/configs/prompts/system/task_planning_goal_condition_v1.yaml
+      - configs/prompts/system/goal_prediction_v1.yaml
+      - configs/prompts/system/task_planning_goal_condition_v1.yaml
 
    # Example prompts (relative to robosuite/planning directory)
    example_prompts:
-      - /home/scratch1/cheze/verify2act/robosuite/planning/configs/prompts/examples/example_1.yaml
-      - /home/scratch1/cheze/verify2act/robosuite/planning/configs/prompts/examples/example_2.yaml
-      - /home/scratch1/cheze/verify2act/robosuite/planning/configs/prompts/examples/example_3.yaml
+      - configs/prompts/examples/example_1.yaml
+      - configs/prompts/examples/example_2.yaml
+      - configs/prompts/examples/example_3.yaml
 
    # Event prompts
    event_prompts: Null
