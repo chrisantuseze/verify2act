@@ -90,7 +90,6 @@ class LLMTaskPlanner:
         task_description: str,
         objects: List[str],
         initial_predicates: List[str],
-        additional_context: Optional[str] = None
     ) -> Tuple[List[str], List[str]]:
         """
         Generate goals and plans for a task using the LLM.
@@ -99,7 +98,6 @@ class LLMTaskPlanner:
             task_description: Natural language task description (e.g., "Stack all cubes")
             objects: List of object names in the scene
             initial_predicates: List of initial state predicates
-            additional_context: Optional additional context for the LLM
         
         Returns:
             goals: List of goal predicates (e.g., ["On(cubeA, cubeB)", "On(cubeB, cubeC)"])

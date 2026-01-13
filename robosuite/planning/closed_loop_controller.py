@@ -37,7 +37,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
 
 from llm_task_planner import LLMTaskPlanner
-# from dynamics_model_planner import DynamicsModelPlanner
+from dynamics_model_planner import DynamicsModelPlanner
 from state_converter import StateConverter
 from primitive_executor import PrimitiveExecutor
 
@@ -91,14 +91,14 @@ class ClosedLoopController:
         
         self.llm_planner = LLMTaskPlanner(args.model_config_path, args.prompt_config_path)
         self.state_converter = StateConverter(env)
-        # self.dynamics_planner = DynamicsModelPlanner(
-        #     checkpoint_path=checkpoint_path,
-        #     num_samples=num_planning_samples,
-        #     state_converter=self.state_converter,
-        #     lookahead_depth=lookahead_depth,
-        #     enable_collision_checking=enable_collision_checking,
-        #     predicate_threshold=predicate_threshold
-        # )
+        self.dynamics_planner = DynamicsModelPlanner(
+            checkpoint_path=checkpoint_path,
+            num_samples=num_planning_samples,
+            state_converter=self.state_converter,
+            lookahead_depth=lookahead_depth,
+            enable_collision_checking=enable_collision_checking,
+            predicate_threshold=predicate_threshold
+        )
         self.executor = PrimitiveExecutor(env)
         
         if self.verbose:
