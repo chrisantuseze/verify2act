@@ -290,26 +290,27 @@ class LLMTaskPlanner:
         """Map predicate type string to index."""
         pred_type_lower = pred_type.lower()
         
-        # Map to 9-predicate system used by decoder
-        # Order: On, Inside, Left, Right, Front, Behind, Near, Touching, Grasped
+        # Map to 9-predicate system used by decoder (matching training data format)
+        # Training order: Left(0), Right(1), Below(2), Above(3), Front(4), Behind(5), On/Contact(6), Boundary(7), Inside(8)
         predicate_map = {
-            'on': 0,
-            'stacked': 0,  # Stacked is equivalent to On for our purposes
-            'inside': 1,
-            'in': 1,  # Alias for Inside
-            'left': 2,
-            'leftof': 2,
-            'right': 3,
-            'rightof': 3,
+            'left': 0,
+            'leftof': 0,
+            'right': 1,
+            'rightof': 1,
+            'below': 2,
+            'under': 2,
+            'above': 3,
+            'over': 3,
             'front': 4,
             'infront': 4,
             'behind': 5,
-            'near': 6,
-            'close': 6,  # Alias for Near
-            'touching': 7,
-            'touch': 7,
-            'grasped': 8,
-            'holding': 8  # Alias for Grasped
+            'on': 6,          # On/Contact is at index 6
+            'stacked': 6,     # Stacked is equivalent to On for our purposes
+            'contact': 6,
+            'touching': 6,
+            'boundary': 7,
+            'inside': 8,      # Inside is at index 8
+            'in': 8,          # Alias for Inside
         }
         
         if pred_type_lower in predicate_map:

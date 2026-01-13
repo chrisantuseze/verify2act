@@ -6,3 +6,7 @@ matplotlib>=3.5.0
 mujoco>=2.3.0
 openai==1.36.1
 pyyaml
+torch
+httpx
+h5py
+tensorboard

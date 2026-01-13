@@ -171,18 +171,17 @@ class StateConverter:
         point_clouds = []
         
         # Generate segmented point clouds for all objects
-        # Pass MuJoCo names to generator since it works with sim directly
-        mujoco_names = [self.mujoco_name_map[name] for name in self.object_names]
+        # Pass clean names since pointcloud_generator returns clean names (e.g., "cubeA" not "cubeA_main")
         object_pcds = self.pcd_generator.generate_segmented(
             self.env,
             self.camera_names,
-            object_names=mujoco_names
+            object_names=self.object_names  # Use clean names
         )
         
         # Convert to numpy arrays and resample to fixed size
         for clean_name in self.object_names:
-            full_name = self.mujoco_name_map[clean_name]
-            pcd = object_pcds.get(full_name, None)
+            # Look up by clean name (what pointcloud_generator returns)
+            pcd = object_pcds.get(clean_name, None)
             
             if pcd is None or len(pcd.points) == 0:
                 # No points for this object, use zeros

@@ -349,7 +349,7 @@ class RelationalDynamics(object):
         print(bcolors.c_red("Save checkpoint: {}".format(cp_filepath)))
 
     def load_checkpoint(self, checkpoint_path):
-        checkpoint_path = "/home/scratch1/cheze/verify2act/Points2Plans/ckpt/checkpoint/cp_1.pth"
+        # Use the provided checkpoint path (do not override)
         print(bcolors.c_yellow("Load checkpoint: {}".format(checkpoint_path)))
         cp_models = torch.load(checkpoint_path, map_location=torch.device('cpu'))
         

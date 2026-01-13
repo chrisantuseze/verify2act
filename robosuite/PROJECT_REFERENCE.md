@@ -1,7 +1,7 @@
 # Points2Plans Robosuite Integration - Complete Project Reference
 
 **Status**: ✅ Production Ready  
-**Last Updated**: January 9, 2026  
+**Last Updated**: January 13, 2026  
 **Format Compliance**: 100% Points2Plans Compatible
 
 ---
@@ -799,11 +799,99 @@ python planning/test_lookahead.py
 
 ## 10. Troubleshooting Guide
 
+### Critical Implementation Details
+
+> ⚠️ **IMPORTANT**: These are critical implementation details discovered during integration. Getting these wrong will cause the model to fail silently.
+
+#### Predicate Index Mapping (Points2Plans Training Format)
+
+The predicate indices in the training data follow this **specific order** (defined in `Points2Plans/relational_dynamics/dataloader/dataloader.py`):
+
+| Index | Predicate | Description |
+|-------|-----------|-------------|
+| 0 | Left | A is to the left of B |
+| 1 | Right | A is to the right of B |
+| 2 | Below | A is below B |
+| 3 | Above | A is above B |
+| 4 | Front | A is in front of B |
+| 5 | Behind | A is behind B |
+| **6** | **On/Contact** | **A is on/touching B (most common for stacking)** |
+| 7 | Boundary | A is near boundary of B |
+| **8** | **Inside** | **A is inside B (for container tasks)** |
+
+**Common Mistake**: Assuming `On` is at index 0 and `Inside` is at index 1. This causes the model to output near-zero confidences for predicates like `On(cubeA, table)`.
+
+**Affected Files**:
+- `planning/closed_loop_controller.py` - `_predicates_to_strings()` function
+- `planning/llm_task_planner.py` - `_predicate_type_to_idx()` function
+
+```python
+# CORRECT mapping in llm_task_planner.py
+predicate_map = {
+    'left': 0, 'right': 1, 'below': 2, 'above': 3,
+    'front': 4, 'behind': 5,
+    'on': 6,      # ← NOT 0!
+    'stacked': 6, # ← Same as 'on'
+    'boundary': 7,
+    'inside': 8,  # ← NOT 1!
+}
+```
+
+#### MuJoCo Segmentation Channel Order
+
+MuJoCo's segmentation rendering returns a 2-channel image `[H, W, 2]`:
+
+| Channel | Contents | Values |
+|---------|----------|--------|
+| **Channel 0** | **Geom ID** | Unique ID per geometry (0, 1, 2, ..., 91, etc.) |
+| Channel 1 | Geom Type | Type category (usually 5 for visual geoms) |
+
+**Common Mistake**: Assuming channel 0 is "geom type" and channel 1 is "geom ID". This causes all objects except the table to have zero point clouds.
+
+**Affected File**: `robosuite/utils/camera_utils.py` - `render_camera()` function
+
+```python
+# CORRECT channel selection
+seg = seg[..., 0]  # ← Channel 0 contains geom IDs
+```
+
+#### Object Name Formats
+
+The system uses **two different naming conventions** that must be matched correctly:
+
+| Component | Name Format | Example |
+|-----------|-------------|---------|
+| MuJoCo bodies | `{name}_main` | `cubeA_main`, `cubeB_main` |
+| StateConverter (clean) | `{name}` | `cubeA`, `cubeB` |
+| PointCloudGenerator output | `{name}` | `cubeA`, `cubeB` |
+| Training data objects | `block_N` | `block_1`, `block_2` |
+
+**Common Mistake**: Passing MuJoCo names (`cubeA_main`) to PointCloudGenerator which returns clean names (`cubeA`), causing name lookup failures.
+
+**Affected File**: `planning/state_converter.py` - `_generate_point_clouds()` function
+
+```python
+# CORRECT: Use clean names for lookup
+object_pcds = self.pcd_generator.generate_segmented(
+    self.env,
+    self.camera_names,
+    object_names=self.object_names  # ← Clean names, not mujoco_names!
+)
+pcd = object_pcds.get(clean_name, None)  # ← Look up by clean name
+```
+
+---
+
 ### Data Collection Issues
 
 **Point clouds all zeros**:
-- Cause: `open3d` not installed
-- Solution: `pip install open3d` or use placeholders
+- Cause 1: `open3d` not installed → Solution: `pip install open3d`
+- Cause 2: Wrong segmentation channel in `camera_utils.py` → Solution: Use `seg[..., 0]` (channel 0 = geom ID)
+- Cause 3: Object name mismatch between StateConverter and PointCloudGenerator → Solution: Use clean names (e.g., `cubeA` not `cubeA_main`)
+
+**Only table has point clouds, cubes are zeros**:
+- Cause: Segmentation mask returns background ID for all pixels
+- Solution: Ensure `camera_utils.py` uses `seg = seg[..., 0]` (geom ID channel, not geom type)
 
 **Episode too large**:
 - Cause: Long episodes or high-res camera data
@@ -818,6 +906,11 @@ python planning/test_lookahead.py
 - Solution: Use `--num-points 64` for smaller files
 
 ### Planning Issues
+
+**Predicate predictions all zeros or near-zero**:
+- Cause 1: Model trained on data with empty point clouds → Solution: Re-collect training data with fixed segmentation channel
+- Cause 2: Wrong predicate index mapping → Solution: Use index 6 for "On", index 8 for "Inside" (see Critical Implementation Details above)
+- Cause 3: Hardcoded checkpoint path in `base_RD.py` → Solution: Remove hardcoded path in `load_checkpoint()` function
 
 **LLM returns malformed response**:
 - Cause: Missing few-shot examples
@@ -924,6 +1017,7 @@ python data_capture/verify_saved_format.py episode.pkl
 | Dec 22, 2025 | 2.0 | Planning alignment (lookahead + collision) |
 | Dec 27, 2025 | 2.1 | Key timestep recording mode |
 | Jan 9, 2026 | 3.0 | Consolidated reference document |
+| Jan 13, 2026 | 3.1 | Added critical implementation details: predicate index mapping, segmentation channel order, object name formats |
 
 ---
 

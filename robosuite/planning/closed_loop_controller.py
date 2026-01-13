@@ -364,19 +364,20 @@ class ClosedLoopController:
         Returns:
             List of predicate strings like ["On(cubeA, table)", "Stacked(cubeA, cubeB)"]
         """
-        # Define predicate names matching the system prompts
-        # Order matches the 9-predicate system: On, Inside, Left, Right, Front, Behind, Near, Touching, Grasped
-        # But we only use predicates that the LLM prompt says the robot can detect
+        # Define predicate names matching the training data format from Points2Plans
+        # Order matches the 9-predicate system as defined in dataloader.py:
+        # Index 0: Left, 1: Right, 2: Below, 3: Above, 4: Front, 5: Behind, 6: On/Contact, 7: Boundary, 8: Inside
+        # We only use predicates that the LLM prompt can interpret
         predicate_names = [
-            'On',        # 0: Object on another (table, bin, etc)
-            'Inside',    # 1: Object inside container
-            None,        # 2: Left (spatial - not used for LLM)
-            None,        # 3: Right (spatial - not used for LLM) 
+            None,        # 0: Left (spatial - not used for LLM)
+            None,        # 1: Right (spatial - not used for LLM)
+            None,        # 2: Below (spatial - not used for LLM)
+            None,        # 3: Above (spatial - not used for LLM)
             None,        # 4: Front (spatial - not used for LLM)
             None,        # 5: Behind (spatial - not used for LLM)
-            None,        # 6: Near (not in our prompt)
-            None,        # 7: Touching (not in our prompt)
-            'Grasped'    # 8: Currently held by robot
+            'On',        # 6: On/Contact - object is on/touching another
+            None,        # 7: Boundary (not used for LLM)
+            'Inside',    # 8: Inside - object is inside container
         ]
         
         predicate_strings = []
@@ -385,17 +386,16 @@ class ClosedLoopController:
         for i in range(num_objects):
             for j in range(num_objects):
                 if i == j:
-                    print("Skipping self-predicate")
                     continue
                 
                 # Check each predicate type
                 for pred_idx in range(min(len(predicate_names), predicate_matrix.shape[2])):
                     pred_name = predicate_names[pred_idx]
                     if pred_name is None:
-                        print("Skipping unused predicate index:", pred_idx)
                         continue
                     
                     confidence = predicate_matrix[i, j, pred_idx]
+                    # Only print predicates we care about (On at index 6, Inside at index 8)
                     print(f"Predicate {pred_name}({objects[i]}, {objects[j]}) confidence: {confidence:.3f}")
                     
                     if confidence > threshold:

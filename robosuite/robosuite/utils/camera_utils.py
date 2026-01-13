@@ -758,6 +758,8 @@ def render_camera(sim, camera_renderers, camera_name: str, width: int, height: i
         depth = np.asarray(depth, dtype=np.float32)
         depth = np.where(np.isfinite(depth), depth, 0.0).copy()
         seg = np.asarray(seg, dtype=np.int32).copy()
+        # MuJoCo segmentation has 2 channels: [geom_id, geom_type]
+        # We want geom_id (channel 0), not geom_type (channel 1)
         seg = seg[..., 0]
 
         # View matrix (extrinsics) from sim
