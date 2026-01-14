@@ -11,10 +11,10 @@ xvfb-run -a python data_capture/batch_collect.py \
 Phase 4: Batch Collection ✓
 """
 
-import os
-# Set rendering backend before robosuite imports
-if 'MUJOCO_GL' not in os.environ:
-    os.environ['MUJOCO_GL'] = 'glx'
+# import os
+# # Set rendering backend before robosuite imports
+# if 'MUJOCO_GL' not in os.environ:
+#     os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time
@@ -68,7 +68,7 @@ class BatchCollector:
         self.args = args
         self.env_name = env_name
         self.output_dir = Path(output_dir)
-        self.camera_names = camera_names or ["frontview", "agentview"]
+        self.camera_names = camera_names or ["sideview", "frontview", "agentview", "robot0_eye_in_hand"]
         self.num_points = num_points
         self.voxel_size = voxel_size
         
@@ -123,7 +123,7 @@ class BatchCollector:
             has_offscreen_renderer=True,  # Enable offscreen for point cloud generation
             use_camera_obs=True,  # Enable camera observations
             use_object_obs=True,
-            camera_names=["frontview", "agentview"],
+            camera_names=self.camera_names,
             camera_heights=256,
             camera_widths=256,
             camera_depths=True,               # Enable depth
@@ -158,8 +158,8 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        # env = create_environment(self.env_name) # For macOS/mujoco rendering
-        env = self._create_env() # For linux/osmesa rendering
+        env = create_environment(self.env_name) # For macOS/mujoco rendering
+        # env = self._create_env() # For linux/osmesa rendering
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,
@@ -420,7 +420,7 @@ def main():
         '--cameras',
         type=str,
         nargs='+',
-        default=['frontview', 'agentview'],
+        default=['sideview', 'frontview', 'agentview', 'robot0_eye_in_hand'],
         help='Camera names for point cloud capture'
     )
     
