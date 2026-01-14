@@ -11,10 +11,10 @@ xvfb-run -a python data_capture/batch_collect.py \
 Phase 4: Batch Collection ✓
 """
 
-# import os
-# # Set rendering backend before robosuite imports
-# if 'MUJOCO_GL' not in os.environ:
-#     os.environ['MUJOCO_GL'] = 'glx'
+import os
+# Set rendering backend before robosuite imports
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time
@@ -158,8 +158,8 @@ class BatchCollector:
         print(f"{'='*60}\n")
         
         # Create environment and recorder
-        env = create_environment(self.env_name) # For macOS/mujoco rendering
-        # env = self._create_env() # For linux/osmesa rendering
+        # env = create_environment(self.env_name) # For macOS/mujoco rendering
+        env = self._create_env() # For linux/osmesa rendering
         recorder = EpisodeRecorder(
             env, 
             camera_names=self.camera_names,

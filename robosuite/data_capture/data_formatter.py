@@ -237,9 +237,12 @@ class DataFormatter:
             if obj_meta.get('asset_filename'):
                 attrs['objects'][block_name]['asset_filename'] = obj_meta['asset_filename']
             
-            # Segmentation info
+            # Segmentation info - use actual MuJoCo geom ID from segmentation mask
+            # The segmentation mask contains geom_ids, not sequential indices
             attrs['segmentation_labels'][block_name] = obj_name
-            attrs['segmentation_ids'][block_name] = obj_idx + 1
+            geom_ids = obj_meta.get('geom_ids', [])
+            # Use the first geom_id if available, otherwise fall back to index
+            attrs['segmentation_ids'][block_name] = geom_ids[0] if geom_ids else (obj_idx + 1)
         
         # Action list
         attrs['sudo_action_list'] = self._build_action_list(action_history)

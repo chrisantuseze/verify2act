@@ -515,46 +515,36 @@ class EpisodeRecorder:
     
     def _capture_point_clouds(self) -> Dict[str, np.ndarray]:
         """Capture and segment point clouds for all objects."""
-        # For now, return random point clouds for each object
-        # object_point_clouds = {}
-        # for obj_name, obj_meta in self.object_metadata.items():
-        #     # Generate random points around object position
-        #     body_id = obj_meta['body_id']
-        #     obj_pos = self.sim.data.body_xpos[body_id].copy()
-        #     extents = obj_meta['extents']
-            
-        #     if extents is None:
-        #         continue
-            
-        #     # Generate random points within object bounding box
-        #     num_random_points = np.random.randint(50, 200)
-        #     random_points = []
-            
-        #     for _ in range(num_random_points):
-        #         # Random offset within bounding box
-        #         offset = np.array([
-        #             np.random.uniform(-extents[0]/2, extents[0]/2),
-        #             np.random.uniform(-extents[1]/2, extents[1]/2),
-        #             np.random.uniform(-extents[2]/2, extents[2]/2)
-        #         ])
-        #         point = obj_pos + offset
-        #         random_points.append(point)
-            
-        #     object_point_clouds[obj_name] = np.array(random_points)
-        
-        # return object_point_clouds
-        
-        # TODO: Original point cloud capture (commented out for now)
+        # Prefer segmentation-based capture; fall back to proximity-based splitting if needed
         try:
-            # Generate full scene point cloud
-            full_pcd = self.pcd_generator.generate(self.env, self._camera_renderers, self.camera_names)
+            segmented_pcds = self.pcd_generator.generate_segmented(
+                self.env, self.camera_names, object_names=None
+            )
+            mapped = self._map_segmented_point_clouds(segmented_pcds)
+            if mapped:
+                print(
+                    "  Captured segmented point clouds:",
+                    {k: len(v) for k, v in mapped.items()},
+                )
+                return mapped
+            else:
+                print("  Segmentation returned no points; falling back to proximity-based split.")
+        except Exception as e:
+            if self.current_timestep < 2:
+                print(f"Warning: Segmented point cloud capture failed at t={self.current_timestep}: {e}")
+        
+        try:
+            full_pcd = self.pcd_generator.generate(
+                self.env, self._camera_renderers, self.camera_names
+            )
             full_points = np.asarray(full_pcd.points)
-            print(f"  Captured full point cloud with {len(full_points)} points at T{self.current_timestep}")
+            print(
+                f"  Captured full point cloud with {len(full_points)} points at T{self.current_timestep}"
+            )
             
             if len(full_points) == 0:
                 return {}
             
-            # Segment by proximity to objects
             return self._segment_points_by_proximity(full_points)
             
         except Exception as e:
@@ -605,6 +595,36 @@ class EpisodeRecorder:
             object_point_clouds[obj_name] = np.array(object_point_clouds[obj_name])
         
         return object_point_clouds
+
+    def _map_segmented_point_clouds(self, segmented_pcds: Dict[str, Any]) -> Dict[str, np.ndarray]:
+        """Map segmented Open3D point clouds to metadata object keys with simple name matching."""
+        mapped: Dict[str, np.ndarray] = {}
+        lower_to_meta = {name.lower(): name for name in self.object_metadata}
+
+        for seg_name, pcd in segmented_pcds.items():
+            pts = np.asarray(pcd.points)
+            if pts.size == 0:
+                continue
+
+            seg_lower = seg_name.lower()
+            target = None
+
+            if seg_name in self.object_metadata:
+                target = seg_name
+            elif seg_lower in lower_to_meta:
+                target = lower_to_meta[seg_lower]
+            else:
+                # Heuristic: substring match either direction (e.g., cubeA vs cubeA_main)
+                for meta_name in self.object_metadata:
+                    meta_lower = meta_name.lower()
+                    if meta_lower in seg_lower or seg_lower in meta_lower:
+                        target = meta_name
+                        break
+
+            if target is not None and target not in mapped:
+                mapped[target] = pts
+        
+        return mapped
     
     def _parse_action(self, action: np.ndarray, obs: Dict[str, Any]) -> Dict[str, Any]:
         """
