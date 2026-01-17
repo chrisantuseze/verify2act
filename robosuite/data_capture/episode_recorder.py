@@ -560,7 +560,7 @@ class EpisodeRecorder:
         object_positions = {}
         for obj_name, obj_meta in self.object_metadata.items():
             body_id = obj_meta['body_id']
-            object_positions[obj_name] = self.sim.data.body_xpos[body_id].copy()
+            object_positions[obj_name] = self.env.sim.data.body_xpos[body_id].copy()
         
         # Assign each point to nearest object within its bounding box
         for point in points:

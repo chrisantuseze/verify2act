@@ -50,8 +50,8 @@ class StateCapture:
         """Get list of robot link names."""
         try:
             link_names = []
-            for i in range(self.sim.model.nbody):
-                body_name = self.sim.model.body_id2name(i)
+            for i in range(self.env.sim.model.nbody):
+                body_name = self.env.sim.model.body_id2name(i)
                 if body_name and self.robot.robot_model.naming_prefix in body_name:
                     link_names.append(body_name)
             return link_names
@@ -75,9 +75,9 @@ class StateCapture:
         
         # Get end-effector pose
         try:
-            grip_site_id = self.sim.model.site_name2id(grip_site_name)
-            eef_pos = self.sim.data.site_xpos[grip_site_id].copy()
-            eef_mat = self.sim.data.site_xmat[grip_site_id].reshape(3, 3)
+            grip_site_id = self.env.sim.model.site_name2id(grip_site_name)
+            eef_pos = self.env.sim.data.site_xpos[grip_site_id].copy()
+            eef_mat = self.env.sim.data.site_xmat[grip_site_id].reshape(3, 3)
         except Exception:
             eef_pos = np.zeros(3)
             eef_mat = np.eye(3)
@@ -86,23 +86,23 @@ class StateCapture:
         
         # Get end-effector velocity (linear)
         try:
-            eef_vel = self.sim.data.get_site_xvelp(grip_site_name).copy()
+            eef_vel = self.env.sim.data.get_site_xvelp(grip_site_name).copy()
         except Exception:
             eef_vel = np.zeros(3)
         
         # Get joint positions, velocities, and torques
         try:
             # Arm joints
-            arm_joint_ids = [self.sim.model.joint_name2id(joint) for joint in robot.robot_joints]
-            joint_pos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[jid]] for jid in arm_joint_ids])
-            joint_vel = np.array([self.sim.data.qvel[self.sim.model.jnt_dofadr[jid]] for jid in arm_joint_ids])
+            arm_joint_ids = [self.env.sim.model.joint_name2id(joint) for joint in robot.robot_joints]
+            joint_pos = np.array([self.env.sim.data.qpos[self.env.sim.model.jnt_qposadr[jid]] for jid in arm_joint_ids])
+            joint_vel = np.array([self.env.sim.data.qvel[self.env.sim.model.jnt_dofadr[jid]] for jid in arm_joint_ids])
             
             # Torques (control)
-            joint_torque = self.sim.data.ctrl[:len(arm_joint_ids)].copy()
+            joint_torque = self.env.sim.data.ctrl[:len(arm_joint_ids)].copy()
             
             # Gripper joints
-            gripper_joint_ids = [self.sim.model.joint_name2id(joint) for joint in robot.gripper.joints]
-            gripper_qpos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[jid]] for jid in gripper_joint_ids])
+            gripper_joint_ids = [self.env.sim.model.joint_name2id(joint) for joint in robot.gripper.joints]
+            gripper_qpos = np.array([self.env.sim.data.qpos[self.env.sim.model.jnt_qposadr[jid]] for jid in gripper_joint_ids])
         except Exception as e:
             # Fallback to simple observation-based approach
             joint_pos = self.env._joint_positions if hasattr(self.env, '_joint_positions') else np.zeros(7)
@@ -132,10 +132,10 @@ class StateCapture:
         for obj_name, obj_meta in self.object_metadata.items():
             body_id = obj_meta['body_id']
             
-            position = self.sim.data.body_xpos[body_id].copy()
-            quat = self.sim.data.body_xquat[body_id].copy()
-            velocity = self.sim.data.body_xvelp[body_id].copy() if hasattr(self.sim.data, 'body_xvelp') else np.zeros(3)
-            angular_vel = self.sim.data.body_xvelr[body_id].copy() if hasattr(self.sim.data, 'body_xvelr') else np.zeros(3)
+            position = self.env.sim.data.body_xpos[body_id].copy()
+            quat = self.env.sim.data.body_xquat[body_id].copy()
+            velocity = self.env.sim.data.body_xvelp[body_id].copy() if hasattr(self.env.sim.data, 'body_xvelp') else np.zeros(3)
+            angular_vel = self.env.sim.data.body_xvelr[body_id].copy() if hasattr(self.env.sim.data, 'body_xvelr') else np.zeros(3)
             
             object_states[obj_name] = {
                 'position': position,
@@ -155,17 +155,23 @@ class StateCapture:
         """
         contacts = []
         
-        for contact_id in range(self.sim.data.ncon):
-            contact = self.sim.data.contact[contact_id]
+        # Use env.sim directly to ensure we have the current simulation state
+        sim = self.env.sim
+        
+        # Ensure physics is computed (contact detection requires forward pass)
+        sim.forward()
+        
+        for contact_id in range(sim.data.ncon):
+            contact = sim.data.contact[contact_id]
             
             geom1_id = contact.geom1
             geom2_id = contact.geom2
             
-            body1_id = self.sim.model.geom_bodyid[geom1_id]
-            body2_id = self.sim.model.geom_bodyid[geom2_id]
+            body1_id = sim.model.geom_bodyid[geom1_id]
+            body2_id = sim.model.geom_bodyid[geom2_id]
             
-            body1_name = self.sim.model.body(body1_id).name
-            body2_name = self.sim.model.body(body2_id).name
+            body1_name = sim.model.body(body1_id).name
+            body2_name = sim.model.body(body2_id).name
             
             # Only record contacts between tracked objects
             if body1_name not in self.object_metadata or body2_name not in self.object_metadata:
@@ -260,8 +266,8 @@ class StateCapture:
                 grip_site_name = f"{robot_prefix}gripper0_grip_site"
             
             try:
-                grip_site_id = self.sim.model.site_name2id(grip_site_name)
-                eef_pos = self.sim.data.site_xpos[grip_site_id]
+                grip_site_id = self.env.sim.model.site_name2id(grip_site_name)
+                eef_pos = self.env.sim.data.site_xpos[grip_site_id]
             except Exception:
                 if 'robot0_eef_pos' in obs:
                     eef_pos = obs['robot0_eef_pos']
@@ -277,7 +283,7 @@ class StateCapture:
                     continue
                 
                 body_id = obj_meta['body_id']
-                obj_pos = self.sim.data.body_xpos[body_id]
+                obj_pos = self.env.sim.data.body_xpos[body_id]
                 
                 dist = np.linalg.norm(eef_pos - obj_pos)
                 if dist < min_dist:
@@ -302,17 +308,17 @@ class StateCapture:
         robot_prefix = robot.robot_model.naming_prefix
         contacted_objects = []
         
-        for contact_id in range(self.sim.data.ncon):
-            contact = self.sim.data.contact[contact_id]
+        for contact_id in range(self.env.sim.data.ncon):
+            contact = self.env.sim.data.contact[contact_id]
             
             geom1_id = contact.geom1
             geom2_id = contact.geom2
             
-            body1_id = self.sim.model.geom_bodyid[geom1_id]
-            body2_id = self.sim.model.geom_bodyid[geom2_id]
+            body1_id = self.env.sim.model.geom_bodyid[geom1_id]
+            body2_id = self.env.sim.model.geom_bodyid[geom2_id]
             
-            body1_name = self.sim.model.body(body1_id).name
-            body2_name = self.sim.model.body(body2_id).name
+            body1_name = self.env.sim.model.body(body1_id).name
+            body2_name = self.env.sim.model.body(body2_id).name
             
             # Check if one body is gripper and other is tracked object
             is_gripper_contact = False
@@ -345,8 +351,8 @@ class StateCapture:
             
             # Try to get gripper joint positions
             if hasattr(gripper, 'joints'):
-                gripper_joint_ids = [self.sim.model.joint_name2id(joint) for joint in gripper.joints]
-                gripper_qpos = np.array([self.sim.data.qpos[self.sim.model.jnt_qposadr[jid]] for jid in gripper_joint_ids])
+                gripper_joint_ids = [self.env.sim.model.joint_name2id(joint) for joint in gripper.joints]
+                gripper_qpos = np.array([self.env.sim.data.qpos[self.env.sim.model.jnt_qposadr[jid]] for jid in gripper_joint_ids])
                 # Return sum as approximate width (works for most parallel grippers)
                 return np.sum(np.abs(gripper_qpos))
             

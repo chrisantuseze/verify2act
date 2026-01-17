@@ -470,7 +470,8 @@ class RelationalDynamics(object):
             self.opt_emb.step()
             self.opt_classif.step()
             self.opt_classif_decoder.step()
-    
+
+        batch_result_dict['loss'] = float(total_loss.detach().cpu().item())
         return batch_result_dict
     
     def planner(self):
@@ -875,7 +876,7 @@ class RelationalDynamics(object):
                 if train_data_size % batch_size != 0:
                     num_batches += 1
 
-                
+                epoch_loss = 0.0
                 data_idx = 0
 
 
@@ -904,21 +905,27 @@ class RelationalDynamics(object):
 
                     if train:
                         batch_result_dict = self.training(
-                                x_tensor_dict,
-                                x_tensor_dict_next,
-                                batch_size,
-                                train=train,
-                                threshold = threshold)
+                            x_tensor_dict,
+                            x_tensor_dict_next,
+                            batch_size,
+                            train=train,
+                            threshold = threshold)
+
+                        # Emit running loss to the terminal for quick visibility
+                        if 'loss' in batch_result_dict:
+                            # print(f"[Epoch {e+1}/{num_epochs}] Batch {batch_idx+1}/{num_batches} Loss: {batch_result_dict['loss']:.4f}")
+                            epoch_loss += batch_result_dict['loss']
                     else:
                         batch_result_dict = self.planning(
-                                x_tensor_dict,
-                                x_tensor_dict_next,
-                                batch_size,
-                                train=train,
-                                threshold = threshold)
+                            x_tensor_dict,
+                            x_tensor_dict_next,
+                            batch_size,
+                            train=train,
+                            threshold = threshold)
                     
 
                 if train:
+                    print(f"[Epoch {e+1}/{num_epochs}] Total Loss: {epoch_loss:.4f}")
                     self.save_checkpoint(e) 
         
             

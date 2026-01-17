@@ -180,7 +180,7 @@ The data collection pipeline captures robot manipulation episodes in Points2Plan
 - `point_cloud_Nsampling_noise`: (T, 128, 3) - Noisy variant
 
 **Features**:
-- Multi-camera fusion (frontview, agentview, birdview)
+- Multi-camera fusion (frontview, agentview, eye-in-hand `robot0_eye_in_hand`)
 - Geometry-based object segmentation
 - Configurable point count (default: 128)
 - Optional noise injection
@@ -550,7 +550,7 @@ mjpython batch_collect.py \
     --max-timesteps 1000 \      # Max steps per episode
     --max-retries 3 \           # Retry attempts on failure
     --num-points 128 \          # Points per object cloud
-    --cameras frontview agentview  # Camera names
+    --cameras frontview agentview robot0_eye_in_hand  # Camera names
 ```
 
 ### Point Cloud Settings
@@ -855,30 +855,44 @@ MuJoCo's segmentation rendering returns a 2-channel image `[H, W, 2]`:
 seg = seg[..., 0]  # ← Channel 0 contains geom IDs
 ```
 
-#### Object Name Formats
+#### Object Name Formats (and matching)
 
-The system uses **two different naming conventions** that must be matched correctly:
+Two naming schemes appear together, so name matching must be permissive:
 
 | Component | Name Format | Example |
 |-----------|-------------|---------|
-| MuJoCo bodies | `{name}_main` | `cubeA_main`, `cubeB_main` |
-| StateConverter (clean) | `{name}` | `cubeA`, `cubeB` |
-| PointCloudGenerator output | `{name}` | `cubeA`, `cubeB` |
+| MuJoCo bodies / metadata | `{name}_main` | `cubeA_main`, `cubeB_main` |
+| PointCloudGenerator output (segmentation) | `{name}` | `cubeA`, `cubeB` |
 | Training data objects | `block_N` | `block_1`, `block_2` |
 
-**Common Mistake**: Passing MuJoCo names (`cubeA_main`) to PointCloudGenerator which returns clean names (`cubeA`), causing name lookup failures.
+**Current approach (works):** do *not* filter the segmented clouds by object_names, then map segmented names to metadata keys with lowercase + substring matching (e.g., `cubeA` ↔ `cubeA_main`). This prevents valid cube clouds from being dropped.
 
-**Affected File**: `planning/state_converter.py` - `_generate_point_clouds()` function
+**Common Mistake**: Filtering `generate_segmented(..., object_names=[metadata keys])` when metadata uses `_main` while segmentation uses clean names → cubes get discarded and only the table remains.
+
+**Affected File**: `data_capture/episode_recorder.py` - `_capture_point_clouds()` and `_map_segmented_point_clouds()`
+
+#### Contact Capture (MuJoCo Simulation Reference)
+
+When capturing contacts from MuJoCo, two critical steps are required:
+
+1. **Use fresh `env.sim` reference**: After `env.reset()`, any cached `sim` reference becomes stale. Always access `self.env.sim` directly in `capture_contacts()`.
+
+2. **Call `sim.forward()` before reading contacts**: The contact buffer (`sim.data.ncon`) is only populated after a physics forward pass. Without this, `ncon=0` even when objects are in contact.
 
 ```python
-# CORRECT: Use clean names for lookup
-object_pcds = self.pcd_generator.generate_segmented(
-    self.env,
-    self.camera_names,
-    object_names=self.object_names  # ← Clean names, not mujoco_names!
-)
-pcd = object_pcds.get(clean_name, None)  # ← Look up by clean name
+# CORRECT contact capture pattern
+def capture_contacts(self):
+    sim = self.env.sim          # ← Fresh reference, not cached self.sim
+    sim.forward()               # ← Required to populate contact buffer
+    
+    for contact_id in range(sim.data.ncon):
+        contact = sim.data.contact[contact_id]
+        # ... process contact
 ```
+
+**Common Mistake**: Caching `self.sim = env.sim` during `__init__` and reusing it after `env.reset()`. This causes `ncon=0` because the cached reference points to stale simulation data.
+
+**Affected File**: `data_capture/state_capture.py` - `capture_contacts()` function
 
 ---
 
@@ -890,8 +904,8 @@ pcd = object_pcds.get(clean_name, None)  # ← Look up by clean name
 - Cause 3: Object name mismatch between StateConverter and PointCloudGenerator → Solution: Use clean names (e.g., `cubeA` not `cubeA_main`)
 
 **Only table has point clouds, cubes are zeros**:
-- Cause: Segmentation mask returns background ID for all pixels
-- Solution: Ensure `camera_utils.py` uses `seg = seg[..., 0]` (geom ID channel, not geom type)
+- Cause 1: Segmentation mask channel misuse → Fix: `seg = seg[..., 0]` (geom ID channel)
+- Cause 2: Object name filter too strict (metadata uses `_main`, segmentation returns clean names) → Fix: do not filter `generate_segmented` by `object_names`; rely on substring/lowercase mapping (`cubeA` ↔ `cubeA_main`).
 
 **Episode too large**:
 - Cause: Long episodes or high-res camera data

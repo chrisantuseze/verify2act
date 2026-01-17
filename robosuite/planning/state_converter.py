@@ -42,7 +42,8 @@ class StateConverter:
                  camera_names: Optional[List[str]] = None,
                  num_points: int = 128,
                  voxel_size: float = 0.005,
-                 workspace_bounds: Optional[np.ndarray] = None):
+                 workspace_bounds: Optional[np.ndarray] = None,
+                 max_objects: int = 8):
         """
         Initialize state converter.
         
@@ -52,11 +53,13 @@ class StateConverter:
             num_points: Target number of points per object point cloud
             voxel_size: Voxel size for point cloud downsampling (meters)
             workspace_bounds: Workspace bounds for filtering [[x_min, x_max], [y_min, y_max], [z_min, z_max]]
+            max_objects: Maximum number of objects for one-hot encoding (must match training config)
         """
         self.env = env
         self.sim = env.sim
         self.camera_names = camera_names or ["frontview", "agentview"]
         self.num_points = num_points
+        self.max_objects = max_objects  # Must match training config for embedding layer
         
         # Default workspace bounds
         if workspace_bounds is None:
@@ -105,6 +108,7 @@ class StateConverter:
         
         print(f"StateConverter initialized:")
         print(f"  Objects: {self.num_objects}")
+        print(f"  Max objects (for embedding): {self.max_objects}")
         print(f"  Object types: {self.object_types}")
         print(f"  Points per object: {num_points}")
         print(f"  Cameras: {self.camera_names}")
@@ -242,16 +246,16 @@ class StateConverter:
                 pos = obs[pos_key]
             else:
                 # Try to get from sim directly using MuJoCo name
-                obj_id = self.sim.model.body_name2id(full_name)
-                pos = self.sim.data.body_xpos[obj_id]
+                obj_id = self.env.sim.model.body_name2id(full_name)
+                pos = self.env.sim.data.body_xpos[obj_id]
             
             # Get orientation (as quaternion, convert to euler)
             quat_key = f"{full_name}_quat"
             if quat_key in obs:
                 quat = obs[quat_key]
             else:
-                obj_id = self.sim.model.body_name2id(full_name)
-                quat = self.sim.data.body_xquat[obj_id]
+                obj_id = self.env.sim.model.body_name2id(full_name)
+                quat = self.env.sim.data.body_xquat[obj_id]
             
             # Convert quaternion to euler angles (roll, pitch, yaw)
             euler = self._quat_to_euler(quat)
@@ -297,18 +301,27 @@ class StateConverter:
     
     def _build_one_hot_encodings(self) -> np.ndarray:
         """
-        Build one-hot encodings for object types.
+        Build one-hot encodings for objects.
+        
+        Each object gets a unique index in [0, max_objects-1].
+        The argmax of each row gives the object's index for the embedding lookup.
+        
+        This matches training format where:
+        - one_hot_encoding shape is [num_objects, max_objects]
+        - Each object has exactly one 1 in its row
+        - argmax(dim=-1) gives object indices for nn.Embedding lookup
         
         Returns:
-            Array of shape [num_objects, num_types]
+            Array of shape [num_objects, max_objects]
         """
-        num_types = len(self.object_types)
-        encodings = np.zeros((self.num_objects, num_types))
+        # Create one-hot encoding with max_objects columns
+        # Object i gets index i in the one-hot encoding
+        encodings = np.zeros((self.num_objects, self.max_objects))
         
-        for obj_idx, obj_name in enumerate(self.object_names):
-            obj_type = self.object_metadata[obj_name].get('object_type', 'unknown')
-            type_idx = self.type_to_idx[obj_type]
-            encodings[obj_idx, type_idx] = 1.0
+        for obj_idx in range(self.num_objects):
+            # Assign object its own index (0, 1, 2, ..., num_objects-1)
+            # This is simpler than random assignment but consistent
+            encodings[obj_idx, obj_idx] = 1.0
         
         return encodings
     

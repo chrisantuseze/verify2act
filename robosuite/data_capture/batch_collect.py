@@ -5,7 +5,7 @@ Integrates with HeuristicStackPolicy from run_stack.py to automatically
 collect multiple episodes with progress tracking and error recovery.
 
 xvfb-run -a python data_capture/batch_collect.py \
-    --num-episodes 2 \
+    --num-episodes 1 \
     --output-dir data_capture/dataset/stack_v1
 
 Phase 4: Batch Collection ✓

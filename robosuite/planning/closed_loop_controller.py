@@ -314,7 +314,7 @@ class ClosedLoopController:
         This is more accurate than manual heuristics and consistent with goal checking.
         """
         # Use decoder to predict current predicates from state #@Chris: Uncomment
-        current_predicates = self.dynamics_planner.predict_predicates(state_dict)
+        current_predicates = self.dynamics_planner.predict_predicates(state_dict, debug=True)
 
         # current_predicates = np.random.rand(len(objects), len(objects), 9)  # Placeholder random predicates for testing
         print(f"Decoded predicates shape: {current_predicates.shape if current_predicates is not None else 'None'}")
@@ -365,23 +365,36 @@ class ClosedLoopController:
             List of predicate strings like ["On(cubeA, table)", "Stacked(cubeA, cubeB)"]
         """
         # Define predicate names matching the training data format from Points2Plans
-        # Order matches the 9-predicate system as defined in dataloader.py:
-        # Index 0: Left, 1: Right, 2: Below, 3: Above, 4: Front, 5: Behind, 6: On/Contact, 7: Boundary, 8: Inside
-        # We only use predicates that the LLM prompt can interpret
+        # Order from get_predicates() in dataloader.py:
+        # Index 0: Left, 1: Right, 2: Below, 3: Above, 4: Front, 5: Behind, 6: Contact, 7: Boundary, 8: Inside
         predicate_names = [
-            None,        # 0: Left (spatial - not used for LLM)
-            None,        # 1: Right (spatial - not used for LLM)
-            None,        # 2: Below (spatial - not used for LLM)
-            None,        # 3: Above (spatial - not used for LLM)
-            None,        # 4: Front (spatial - not used for LLM)
-            None,        # 5: Behind (spatial - not used for LLM)
-            'On',        # 6: On/Contact - object is on/touching another
-            None,        # 7: Boundary (not used for LLM)
-            'Inside',    # 8: Inside - object is inside container
+            'Left',      # 0: Left (spatial)
+            'Right',     # 1: Right (spatial)
+            'Below',     # 2: Below (spatial)
+            'Above',     # 3: Above (spatial)
+            'Front',     # 4: Front (spatial)
+            'Behind',    # 5: Behind (spatial)
+            'On',        # 6: Contact - object is on/touching another
+            'Boundary',  # 7: Boundary
+            'Inside',    # 8: Inside
         ]
         
         predicate_strings = []
         num_objects = len(objects)
+        
+        # Debug: print all predicate values for first few object pairs
+        print(f"\n[DEBUG] Full predicate matrix (first 3 pairs):")
+        print(f"[DEBUG] Predicate indices: 0=Left, 1=Right, 2=Below, 3=Above, 4=Front, 5=Behind, 6=Contact, 7=Boundary(?), 8=Inside(?)")
+        pair_count = 0
+        for i in range(num_objects):
+            for j in range(num_objects):
+                if i == j:
+                    continue
+                if pair_count < 6:  # Show first 6 pairs
+                    all_preds = [f"{predicate_matrix[i, j, k]:.3f}" for k in range(predicate_matrix.shape[2])]
+                    print(f"[DEBUG] {objects[i]} -> {objects[j]}: {all_preds}")
+                pair_count += 1
+        print()
         
         for i in range(num_objects):
             for j in range(num_objects):
@@ -395,13 +408,16 @@ class ClosedLoopController:
                         continue
                     
                     confidence = predicate_matrix[i, j, pred_idx]
-                    # Only print predicates we care about (On at index 6, Inside at index 8)
+                    # Print predicates we care about (Above at index 3, On at index 5)
                     print(f"Predicate {pred_name}({objects[i]}, {objects[j]}) confidence: {confidence:.3f}")
                     
                     if confidence > threshold:
-                        # Special case: On(cube, cube) should be Stacked for clarity
-                        if pred_name == 'On' and objects[j] != 'table' and 'bin' not in objects[j].lower():
+                        # Above predicate indicates stacking (object i is above object j)
+                        if pred_name == 'Above' and objects[j] != 'table':
                             pred_str = f"Stacked({objects[i]}, {objects[j]})"
+                        elif pred_name == 'On':
+                            # On (Behind) for object-table relationships
+                            pred_str = f"On({objects[i]}, {objects[j]})"
                         else:
                             pred_str = f"{pred_name}({objects[i]}, {objects[j]})"
                         predicate_strings.append(pred_str)

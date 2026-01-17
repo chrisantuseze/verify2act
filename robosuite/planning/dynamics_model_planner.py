@@ -300,38 +300,100 @@ class DynamicsModelPlanner:
         
         return best_action, best_params, best_feasibility
     
-    def _encode_state(self, state_dict: Dict) -> torch.Tensor:
-        """Encode current state observation through PointConv."""
-        voxel_data = state_dict['batch_voxel_list_single'][0]
+    def _encode_state(self, state_dict: Dict, debug: bool = False) -> torch.Tensor:
+        """
+        Encode current state observation through PointConv.
+        
+        Matches training code in base_RD.py:
+        - voxel_data: [batch, num_objects, N_points, 3] -> reshape to [batch*num_objects, N_points, 3]
+        - PointConv expects [B, C, N] format: [batch*num_objects, 3, N_points]
+        - img_emb: reshape back to [batch, num_objects, emb_dim]
+        - one_hot: argmax on dim=2 (the max_objects dimension)
+        - concat on dim=-1 (the embedding dimension)
+        """
+        voxel_data = state_dict['batch_voxel_list_single']
         
         if not isinstance(voxel_data, torch.Tensor):
             voxel_data = torch.FloatTensor(voxel_data)
         
-        # Move to device and transpose to PointConv format: [N_objects, N_points, 3] -> [N_objects, 3, N_points]
-        voxel_data = voxel_data.to(self.device).permute(0, 2, 1)
+        # Handle different input shapes
+        # Expected: [batch, num_objects, N_points, 3] or [num_objects, N_points, 3]
+        if voxel_data.dim() == 3:
+            # [num_objects, N_points, 3] -> add batch dimension
+            voxel_data = voxel_data.unsqueeze(0)  # [1, num_objects, N_points, 3]
+        elif voxel_data.dim() == 4:
+            # Already [batch, num_objects, N_points, 3]
+            pass
+        elif voxel_data.dim() == 5:
+            # [batch, timestep, num_objects, N_points, 3] -> take first timestep
+            voxel_data = voxel_data[:, 0, :, :, :]
+        
+        voxel_data = voxel_data.to(self.device)
+        
+        batch_size = voxel_data.shape[0]
+        num_objects = voxel_data.shape[1]
+        
+        if debug:
+            print(f"[DEBUG _encode_state] voxel_data shape: {voxel_data.shape}")
+        
+        # Reshape for PointConv: [batch, num_objects, N_points, 3] -> [batch*num_objects, N_points, 3]
+        reshaped_voxel_data = voxel_data.reshape(
+            batch_size * num_objects, 
+            voxel_data.shape[2], 
+            voxel_data.shape[3]
+        )
+        
+        # PointConv expects [B, C, N] format, so transpose: [batch*num_objects, N_points, 3] -> [batch*num_objects, 3, N_points]
+        reshaped_voxel_data = reshaped_voxel_data.permute(0, 2, 1)
+        
+        if debug:
+            print(f"[DEBUG _encode_state] reshaped_voxel_data shape (after permute): {reshaped_voxel_data.shape}")
         
         # Per-object point cloud encoding
-        img_emb = self.model.emb_model(voxel_data)
+        img_emb = self.model.emb_model(reshaped_voxel_data)  # [batch*num_objects, emb_dim]
+        
+        if debug:
+            print(f"[DEBUG _encode_state] img_emb shape after PointConv: {img_emb.shape}")
+            print(f"[DEBUG _encode_state] img_emb stats: min={img_emb.min():.4f}, max={img_emb.max():.4f}, mean={img_emb.mean():.4f}")
+        
+        # Reshape back to [batch, num_objects, emb_dim]
+        img_emb = img_emb.reshape(batch_size, num_objects, img_emb.shape[-1])
         
         # One-hot object encoding
         one_hot_encoding = state_dict['batch_one_hot_encoding']
         if not isinstance(one_hot_encoding, torch.Tensor):
             one_hot_encoding = torch.FloatTensor(one_hot_encoding)
-        else:
-            # Remove batch dimension if present
-            if one_hot_encoding.dim() == 3:
-                one_hot_encoding = one_hot_encoding[0]
+        
+        # Handle different input shapes for one-hot
+        # Expected: [batch, num_objects, max_objects] or [num_objects, max_objects]
+        if one_hot_encoding.dim() == 2:
+            # [num_objects, max_objects] -> add batch dimension
+            one_hot_encoding = one_hot_encoding.unsqueeze(0)  # [1, num_objects, max_objects]
+        
         one_hot_encoding = one_hot_encoding.to(self.device)
         
+        if debug:
+            print(f"[DEBUG _encode_state] one_hot_encoding shape: {one_hot_encoding.shape}")
+            object_indices = torch.argmax(one_hot_encoding, dim=2)
+            print(f"[DEBUG _encode_state] object_indices from argmax: {object_indices}")
+        
+        # argmax on dim=2 (the max_objects dimension) to get object class indices
+        # This matches training: torch.argmax(one_hot_encoding_tensor, dim=2)
         latent_one_hot = self.model.classif_model.one_hot_encoding_embed(
-            torch.argmax(one_hot_encoding, dim=1)
-        )
+            torch.argmax(one_hot_encoding, dim=2)
+        )  # [batch, num_objects, emb_dim]
         
-        # Concatenate embeddings
-        node_embedding = torch.cat([img_emb, latent_one_hot], dim=1)
+        if debug:
+            print(f"[DEBUG _encode_state] latent_one_hot shape: {latent_one_hot.shape}")
+            print(f"[DEBUG _encode_state] latent_one_hot stats: min={latent_one_hot.min():.4f}, max={latent_one_hot.max():.4f}")
         
-        if node_embedding.shape[0] != 1:
-            node_embedding = node_embedding.view(1, node_embedding.shape[0], node_embedding.shape[1])
+        # Concatenate embeddings on last dimension (dim=-1)
+        # This matches training: torch.cat([img_emb_single, latent_one_hot_encoding], dim=-1)
+        node_embedding = torch.cat([img_emb, latent_one_hot], dim=-1)  # [batch, num_objects, 256]
+        
+        if debug:
+            print(f"[DEBUG _encode_state] node_embedding shape: {node_embedding.shape}")
+            print(f"[DEBUG _encode_state] node_embedding stats: min={node_embedding.min():.4f}, max={node_embedding.max():.4f}")
         
         return node_embedding
     
@@ -666,7 +728,7 @@ class DynamicsModelPlanner:
         
         return None
     
-    def predict_predicates(self, state_dict: Dict) -> Optional[np.ndarray]:
+    def predict_predicates(self, state_dict: Dict, debug: bool = False) -> Optional[np.ndarray]:
         """
         Predict current predicates from state using decoder.
         
@@ -674,6 +736,7 @@ class DynamicsModelPlanner:
         
         Args:
             state_dict: Current state from StateConverter
+            debug: If True, print debug information about shapes and values
         
         Returns:
             Predicted predicates array [num_objects, num_objects, num_predicates]
@@ -682,7 +745,7 @@ class DynamicsModelPlanner:
         try:
             # Encode current state
             with torch.no_grad():
-                node_embedding = self._encode_state(state_dict)
+                node_embedding = self._encode_state(state_dict, debug=debug)
                 
                 # Build edge indices for decoder
                 num_objects = state_dict['batch_num_objects']
@@ -690,9 +753,17 @@ class DynamicsModelPlanner:
                 edge_list = list(permutations(edge_nodes, 2))
                 edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
                 
+                if debug:
+                    print(f"[DEBUG predict_predicates] edge_index shape: {edge_index.shape}")
+                    print(f"[DEBUG predict_predicates] edge_index max: {edge_index.max()}, min: {edge_index.min()}")
+                
                 # Decode predicates
                 decoder_output = self.model.classif_model_decoder(node_embedding, edge_index)
                 pred_sigmoid = decoder_output['pred_sigmoid']  # [batch, num_edges, num_predicates]
+                
+                if debug:
+                    print(f"[DEBUG predict_predicates] pred_sigmoid shape: {pred_sigmoid.shape}")
+                    print(f"[DEBUG predict_predicates] pred_sigmoid stats: min={pred_sigmoid.min():.4f}, max={pred_sigmoid.max():.4f}, mean={pred_sigmoid.mean():.4f}")
             
             # Convert to numpy
             pred_relations = pred_sigmoid.detach().cpu().numpy()

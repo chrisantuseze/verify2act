@@ -18,5 +18,5 @@ python relational_dynamics/main.py \
     --result_dir ckpt  \
     --train_dir ../robosuite/data_capture/dataset/stack_v1/episodes \
     --batch_size 4 \
-    --num_epochs 50 \
+    --num_epochs 100 \
     --max_size 100
