@@ -241,7 +241,7 @@ print("="*60)
 camera_renderers = {}  # Store renderers for reuse
 
 # Try rendering from different cameras
-cameras_to_test = ["frontview", "agentview", "birdview", "sideview"]
+cameras_to_test = ["frontview", "agentview", "birdview", "sideview"] # agentview is similar to robot0_robotview
 print("\nAvailable cameras in model:")
 for i in range(env.sim.model.ncam):
     # Access the underlying MuJoCo model (robosuite wraps it)
@@ -249,7 +249,7 @@ for i in range(env.sim.model.ncam):
     print(f"  - {cam_name}")
 
 print("\nRendering from primary camera...")
-primary_camera = "frontview" #-------------------------------------------
+primary_camera = "sideview" #-------------------------------------------
 img = get_camera_image(env.sim, primary_camera, width=640, height=480, 
                        camera_renderers=camera_renderers)
 
