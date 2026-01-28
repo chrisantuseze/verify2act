@@ -99,3 +99,4 @@ robosuite/data_capture/test_episodes/
 
 *.pickle
 *.png
+*.pth

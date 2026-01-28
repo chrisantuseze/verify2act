@@ -14,23 +14,37 @@ content:
   - Symbolic states and symbolic goals are defined as a set of predicates expressed over specific objects.\n
   - The term 'predicate' refers to an object state (e.g., Grasped(object)) or a relationship among objects (e.g., On(object, table), Stacked(objectA, objectB)).\n
   - A task plan is a sequence of actions that the robot can execute (e.g., Pick(objectA, table), Place(objectA, objectB))\n
+  - Stacked(a, b) means object a is ON TOP of object b (a is above, b is below)\n
 
   The robot can perceive the following information about the environment:\n
   - The objects in the environment\n
+  - The states of individual objects\n
   - The relationships among objects\n
+
+  The robot can detect the following states of individual objects:\n
+  - Opened(a): Object a is opened\n
+  - Closed(a): Object a is closed\n
 
   The robot can detect the following relationships among objects:\n
   - On(a, b): Object a is on object b\n
-  - Stacked(a, b): Object a is stacked on top of object b\n
+  - Inside(a, b): Object a is in object b\n
+  - Stacked(a, b): Object a is stacked on top of object b (a is on top, b is on bottom)\n
   - Grasped(a): Object a is currently held by the robot\n
 
   The robot can execute the following actions:\n
   - Pick(a, b): The robot picks object a from location b\n
   - Place(a, b): The robot places object a on object b\n
+  - Open(a): The robot opens object a\n
+  - Close(a): The robot closes object a\n
 
   Action preconditions:\n
   - If the robot is already holding an object, it CANNOT Pick another object\n
   - The robot CAN ONLY Place an object that it is already holding\n
+  - The robot CANNOT pick an object that has another object on top of it\n
+  - When building a stack, objects must be placed from bottom to top\n
+  
+  IMPORTANT: For Stacked(a, b) goals, the plan must Place a ON b.\n
+  Example: To achieve Stacked(cubeB, cubeA), execute Pick(cubeB, table), Place(cubeB, cubeA)\n
   
   There may be multiple symbolic goals that fulfill the user's instruction. 
   Therefore, I will format my output in the following form:\n

@@ -20,6 +20,7 @@ prompt_kwargs:
       plans: Null
       hypotheses: Null
       geometric: Null
+      failure_info: Null
 
       # OpenAI
       role: user
@@ -31,6 +32,7 @@ prompt_kwargs:
    system_prompts:
       - configs/prompts/system/goal_prediction_v1.yaml
       - configs/prompts/system/task_planning_goal_condition_v1.yaml
+      - configs/prompts/system/replanning_reflection_v1.yaml
 
    # Example prompts (relative to robosuite/planning directory)
    example_prompts:

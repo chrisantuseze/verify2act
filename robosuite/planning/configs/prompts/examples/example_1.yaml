@@ -13,6 +13,7 @@ goals: [["On(milk, table)"]]
 plans: [["Pick(milk, counter)", "Place(milk, table)"]]
 hypotheses: Null
 geometric: Null
+failure_info: Null
 
 # OpenAI
 role: system

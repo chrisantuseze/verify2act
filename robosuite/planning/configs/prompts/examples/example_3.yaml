@@ -16,6 +16,7 @@ goals: [["Stacked(cubeB, cubeA)", "Stacked(cubeC, cubeB)"]]
 plans: [["Pick(cubeB, table)", "Place(cubeB, cubeA)", "Pick(cubeC, table)", "Place(cubeC, cubeB)"]]
 hypotheses: Null
 geometric: Null
+failure_info: Null
 
 # OpenAI
 role: system

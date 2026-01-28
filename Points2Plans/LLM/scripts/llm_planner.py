@@ -20,6 +20,12 @@ def demo(
     # Set seed.
     utils.random.seed(seed)
 
+    # Get API key from environment if not provided
+    if api_key is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("Warning: OPENAI_API_KEY not set. LLM calls will fail.")
+
     # Load model.
     model_factory = models.PretrainedModelFactory(
         model_config, api_key=api_key, device=device

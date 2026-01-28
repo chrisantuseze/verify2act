@@ -462,9 +462,44 @@ For each object N:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `contact` | list | Contact events per timestep |
+| `contact` | list[list[dict]] | Contact events per timestep (see format below) |
 | `behavior` | list | Behavior labels (grasp/release/none) |
 | `hidden_label` | `(T, N)` int64 | Occlusion flags |
+
+#### Contact Data Format (Verified)
+
+Each timestep contains a list of contact dictionaries. Typical episodes have **8-13 contacts per timestep**.
+
+**Contact Dictionary Fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `body0` | int | First body ID in contact (0 = table) |
+| `body1` | int | Second body ID in contact (1, 2, 3 = cubes) |
+| `geom0` | int | First geometry ID (e.g., 7 = table surface) |
+| `geom1` | int | Second geometry ID (e.g., 88, 90, 92 = cube geoms) |
+| `pos` | ndarray(3,) | 3D contact position in world coordinates |
+| `frame` | ndarray(9,) | Contact frame orientation (3x3 rotation as flat array) |
+| `dist` | float | Penetration distance (negative = overlapping, ~-0.0001 to -0.001) |
+
+**Example Contact**:
+```python
+{
+    'body0': 0,        # Table
+    'body1': 1,        # cubeA
+    'geom0': 7,        # Table geometry
+    'geom1': 88,       # cubeA geometry
+    'pos': array([0.068, -0.064, 0.799]),  # Contact point
+    'frame': array([0., 0., 1., 0., 1., 0., -1., 0., 0.]),
+    'dist': -0.00105   # Penetration depth
+}
+```
+
+**Contact Relationships Captured**:
+- Table ↔ Cubes: `body0=0` ↔ `body1∈{1,2,3}` (cubes resting on table)
+- Cube ↔ Cube: `body1` ↔ `body2`, `body1` ↔ `body3` (stacked cubes)
+
+**Importance for Training**: The Contact predicate (index 6) is trained using this data. If contacts are not captured correctly (e.g., stale sim reference), the model will output near-zero confidence for `On(cubeA, table)` predicates.
 
 ### attrs_dict (9 keys)
 
@@ -571,9 +606,71 @@ DynamicsModelPlanner(
     num_samples=50,                       # Rejection sampling count
     x_collision=0.05,                     # Collision box X (meters)
     y_collision=0.05,                     # Collision box Y (meters)
-    movement_idx=None,                    # Movement type index
-    num_objects=3                         # Number of manipulable objects
+    delta_forward=True,                   # See delta_forward/latent_forward section
+    predicate_threshold=0.3               # Threshold for predicate matching
 )
+```
+
+### delta_forward and latent_forward Configuration
+
+These two flags control how the dynamics model performs forward prediction. **They must match between training and inference**.
+
+#### delta_forward
+
+Controls whether the dynamics model predicts absolute states or residuals:
+
+| Value | Behavior | Description |
+|-------|----------|-------------|
+| `True` | **Residual prediction** | Model outputs a delta/residual that gets added to the **initial** encoded state. `next_latent = delta + initial_latent` |
+| `False` | **Absolute prediction** | Model outputs the absolute next latent state directly. `next_latent = model_output` |
+
+**Location in training code** ([base_RD.py](../Points2Plans/relational_dynamics/base_RD.py) lines 438-443):
+```python
+if self.config.args.delta_forward:
+    delta_latent = current_latent[:, :-2, :]
+    pred_latent = delta_latent + current_latent_list[0][0]  # Add to INITIAL state
+else:
+    pred_latent = current_latent[:, :-2, :]
+```
+
+#### latent_forward
+
+Controls what to use as input for the next step during multi-step rollouts:
+
+| Value | Behavior | Description |
+|-------|----------|-------------|
+| `True` | **Predicted latent** | Use the predicted latent state directly as input to the next dynamics step. Faster, may accumulate drift. |
+| `False` | **Re-encode** | Re-encode the predicted point clouds through PointConv for each step. More accurate but requires point cloud simulation. |
+
+**Location in training code** ([base_RD.py](../Points2Plans/relational_dynamics/base_RD.py) lines 652-670):
+```python
+if self.config.args.latent_forward:
+    self.this_time_step_embed = current_latent  # Use predicted latent
+else:
+    # Re-encode point clouds through PointConv
+    img_emb_single = self.emb_model(self.previous_pc[:, each_pc_id, :, :])
+    ...
+```
+
+#### Configuration Summary
+
+| Config | Paper's Config | Parser Default | Current Inference |
+|--------|---------------|----------------|-------------------|
+| `delta_forward` | `False` | `True` | `True` |
+| `latent_forward` | `True` | `False` | `True` (implicit) |
+
+**Important Notes**:
+1. **Parser defaults** are in [parse_util.py](../Points2Plans/relational_dynamics/utils/parse_util.py) lines 64-67
+2. **Paper's example command** in [Points2Plans/README.md](../Points2Plans/README.md) shows `--delta_forward False`
+3. **Inference code** always uses `latent_forward=True` behavior (uses predicted latent for multi-step lookahead) since we don't have simulated point clouds
+4. **Training must match inference**: If you trained with defaults (`delta_forward=True`), use `delta_forward=True` in inference
+
+**To match paper's configuration**, retrain with:
+```bash
+python relational_dynamics/main.py \
+    --delta_forward False \
+    --latent_forward True \
+    ...
 ```
 
 ### LLM Planner Parameters
@@ -894,6 +991,10 @@ def capture_contacts(self):
 
 **Affected File**: `data_capture/state_capture.py` - `capture_contacts()` function
 
+**Verification**: After fixing, typical episodes show **8-13 contacts per timestep** including:
+- Table-cube contacts (cubes resting on table)
+- Cube-cube contacts (during stacking operations)
+
 ---
 
 ### Data Collection Issues
@@ -1032,6 +1133,7 @@ python data_capture/verify_saved_format.py episode.pkl
 | Dec 27, 2025 | 2.1 | Key timestep recording mode |
 | Jan 9, 2026 | 3.0 | Consolidated reference document |
 | Jan 13, 2026 | 3.1 | Added critical implementation details: predicate index mapping, segmentation channel order, object name formats |
+| Jan 21, 2026 | 3.2 | Added verified contact data format documentation; fixed contact capture (stale sim reference + sim.forward() required) |
 
 ---
 

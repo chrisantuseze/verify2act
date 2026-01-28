@@ -14,6 +14,7 @@ goals: [["Stacked(cereal, bread)"]]
 plans: [["Pick(cereal, table)", "Place(cereal, bread)"]]
 hypotheses: Null
 geometric: Null
+failure_info: Null
 
 # OpenAI
 role: system

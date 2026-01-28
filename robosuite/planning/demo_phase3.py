@@ -43,57 +43,8 @@ sys.path.insert(0, str(current_dir.parent))
 
 import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
-
+from utils import str2bool
 from closed_loop_controller import ClosedLoopController, BatchController
-
-
-def create_environment_linux(task: str = "stack3", render: bool = False):
-    """
-    Create robosuite environment.
-    
-    Args:
-        task: Task name ("stack3" or "pickplace")
-        render: Whether to enable on-screen rendering
-    
-    Returns:
-        Robosuite environment
-    """
-    # Task-specific parameters
-    if task.lower() == "stack3":
-        env_name = "Stack"
-        horizon = 1000
-        env_kwargs = {}
-    elif task.lower() == "pickplace":
-        env_name = "PickPlace"
-        horizon = 1000
-        env_kwargs = {
-            'single_object_mode': 0,  # Multiple objects
-            'object_type': "milk",     # Start with milk
-        }
-    else:
-        raise ValueError(f"Unknown task: {task}")
-    
-    # Create environment
-    controller_config = load_composite_controller_config(controller="BASIC")
-    env = suite.make(
-        env_name=env_name,
-        robots="Panda",
-        controller_configs=controller_config,
-        has_renderer=render,  # Disable on-screen rendering
-        has_offscreen_renderer=True,  # Enable offscreen for point cloud generation
-        use_camera_obs=True,  # Enable camera observations
-        use_object_obs=True,
-        camera_names=["frontview", "agentview"],
-        camera_heights=256,
-        camera_widths=256,
-        camera_depths=True,               # Enable depth
-        control_freq=20,
-        horizon=horizon,
-        ignore_done=True,
-        reward_shaping=True,
-    )
-    
-    return env
 
 def create_environment(env_name: str = "Stack4", render: bool = False):
     """
@@ -163,9 +114,6 @@ def demo_single_episode(
         args,
         env=env,
         checkpoint_path=checkpoint_path,
-        num_planning_samples=50,
-        goal_threshold=0.2,
-        max_replans_per_primitive=3,
         lookahead_depth=lookahead_depth,
         enable_collision_checking=True,
         predicate_threshold=predicate_threshold,
@@ -290,9 +238,6 @@ def demo_failure_recovery(
         })(),
         env=env,
         checkpoint_path=checkpoint_path,
-        num_planning_samples=20,  # Fewer samples = higher failure rate
-        goal_threshold=0.2,
-        max_replans_per_primitive=5,  # More replans
         predicate_threshold=predicate_threshold,
         verbose=True
     )
@@ -329,7 +274,7 @@ def main():
         "--task",
         type=str,
         default="Stack3",
-        choices=["Stack3", "PickPlace"],
+        choices=["Stack", "Stack3", "Stack4", "PickPlace"],
         help="Task to run"
     )
     parser.add_argument(
@@ -369,12 +314,43 @@ def main():
     parser.add_argument(
         "--max-primitives",
         type=int,
-        default=5,#20,
+        default=5,
         help="Maximum primitives per episode"
     )
     parser.add_argument(
+        "--max-replans-per-primitive",
+        type=int,
+        default=3,
+        help="Maximum replans per primitive execution"
+    )
+    parser.add_argument(
+        "--goal-threshold",
+        type=float,
+        default=0.8,
+        help="Threshold for goal achievement (predicate difference)"
+    )
+    parser.add_argument(
+        "--num-planning-samples",
+        type=int,
+        default=50,
+        help="Number of action samples for rejection sampling"
+    )
+    parser.add_argument(
+        "--delta-forward",
+        type=str2bool, 
+        default=True, #Trained with True
+        help="Use delta forward prediction in dynamics model"
+    )
+    parser.add_argument(
+        "--latent-forward",
+        type=str2bool, 
+        default=False, # Trained with False
+        help="Use latent space forward prediction in dynamics model"
+    )
+    parser.add_argument(
         "--demo-recovery",
-        action="store_true",
+        type=str2bool, 
+        default=False,
         help="Run failure recovery demo"
     )
     parser.add_argument(

@@ -17,7 +17,7 @@ Usage:
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 import ast
 
@@ -156,6 +156,61 @@ class LLMTaskPlanner:
         print(f"Selected plan: {plans}")
         
         return goals, plans
+
+    def reflect_on_failure(
+        self,
+        primitive_plan: List[List[str]],
+        task_goal: List[str],
+        failure_info: Dict[str, Any],
+        task_description: Optional[str] = None,
+        objects: Optional[List[str]] = None,
+        initial_predicates: Optional[List[str]] = None,
+    ) -> Tuple[List[List[str]], List[str]]:
+        """
+        Ask the LLM to reflect on a failed plan and propose revised plan(s) and suggestions.
+
+        Returns:
+            revised_plans: List of plan candidates (List[List[str]])
+            suggestions: List of short suggestion strings
+        """
+        # Load prompt manager from YAML config
+        prompt_manager = models.BehaviorPromptManager.from_yaml(self.prompt_config_path)
+
+        prompt_manager.task_prompt.instruction = task_description
+        prompt_manager.task_prompt.objects = objects
+        prompt_manager.task_prompt.predicates = initial_predicates
+        prompt_manager.task_prompt.goals = [task_goal]
+
+        # Put previous plans and replanning/failure info into the task prompt
+        prompt_manager.task_prompt.plans = primitive_plan
+        prompt_manager.task_prompt.failure_info = failure_info
+
+        print("Failure info for reflection:", failure_info)
+
+        # Generate replanning/reflection prompt
+        replanning_prompt = prompt_manager.generate_prompt(
+            behavior="replanning",
+            use_examples=self.use_examples,
+        )
+
+        print("replanning_prompt:", replanning_prompt)
+
+        print(f"\n[Replanning/Reflection] Sending prompt to LLM...")
+        response = self.model.forward(replanning_prompt)
+        response_text = response["choices"][0]["message"]["content"]
+        print(f"Replanning response: {response_text[:300]}...")
+
+        # Parse revised plans and suggestions
+        revised_plans = self._parse_llm_list_response(response_text, "RevisedPlans:")
+        suggestions = self._parse_llm_list_response(response_text, "Suggestions:")
+
+        # Normalize outputs
+        if revised_plans is None:
+            revised_plans = []
+        if suggestions is None:
+            suggestions = []
+
+        return revised_plans, suggestions
     
     def _parse_llm_list_response(self, response_text: str, prefix: str) -> list:
         """

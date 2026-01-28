@@ -260,6 +260,176 @@ def should_reflect(critic_output, uncertainty, thresholds):
 
 ---
 
+## Lookahead with Trajectory Tracking
+
+### The Problem: Terminal-Only Evaluation Loses Diagnostics
+
+When using multi-step lookahead for action selection, evaluating only the terminal state creates a critical gap:
+
+- **Selection works:** We can rank actions by terminal state quality
+- **Diagnostics lost:** When ALL samples fail, we don't know:
+  - Which step in the sequence caused failure?
+  - What type of failure (collision? predicate mismatch? unreachable?)
+  - What should we tell the LLM to fix?
+
+### Solution: Track Trajectory + Evaluate Terminal
+
+Track intermediate states during lookahead, but still **select based on terminal feasibility**:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              LOOKAHEAD WITH TRAJECTORY TRACKING                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  For each sampled action:                                           │
+│                                                                     │
+│    trajectory = []                                                  │
+│    z = z₀                                                           │
+│                                                                     │
+│    for step_idx, primitive in enumerate(lookahead_sequence):        │
+│      z_next = dynamics(z, action)                                   │
+│      pred = decoder(z_next)                                         │
+│                                                                     │
+│      step_info = {                                                  │
+│        'step': step_idx,                                            │
+│        'primitive': primitive,                                      │
+│        'latent_state': z_next,                                      │
+│        'predicted_predicates': pred,                                │
+│        'target_predicate': target[step_idx],                        │
+│        'step_score': critic(z_next, target[step_idx]),  ← Per-step  │
+│        'failure_reasons': detect_failures(...)                      │
+│      }                                                              │
+│      trajectory.append(step_info)                                   │
+│      z = z_next                                                     │
+│                                                                     │
+│    terminal_score = critic(z, goal_predicates)  ← For selection     │
+│                                                                     │
+│    return action, terminal_score, trajectory  ← Keep diagnostics    │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Analyzing Failures Across Trajectories
+
+When all samples fail, aggregate trajectory data to identify systematic issues:
+
+```python
+def _analyze_failures(self, all_trajectories: List[Dict]) -> Dict:
+    """Analyze failure patterns across all sampled trajectories."""
+    
+    failure_analysis = {
+        'most_common_failure_step': None,
+        'failure_step_counts': defaultdict(int),
+        'failure_reasons': defaultdict(int),
+        'problematic_predicates': [],
+        'best_partial_trajectory': None,
+        'best_partial_score': -1.0,
+    }
+    
+    for traj in all_trajectories:
+        # Find first failing step in this trajectory
+        for step_info in traj['steps']:
+            if step_info['step_score'] < threshold:
+                failure_analysis['failure_step_counts'][step_info['step']] += 1
+                for reason in step_info['failure_reasons']:
+                    failure_analysis['failure_reasons'][reason] += 1
+                
+                # Track which predicates are problematic
+                failed_preds = compare_predicates(
+                    step_info['predicted_predicates'],
+                    step_info['target_predicate']
+                )
+                failure_analysis['problematic_predicates'].extend(failed_preds)
+                break
+        
+        # Track best partial progress
+        partial_score = sum(s['step_score'] for s in traj['steps']) / len(traj['steps'])
+        if partial_score > failure_analysis['best_partial_score']:
+            failure_analysis['best_partial_score'] = partial_score
+            failure_analysis['best_partial_trajectory'] = traj
+    
+    # Identify most problematic step
+    if failure_analysis['failure_step_counts']:
+        failure_analysis['most_common_failure_step'] = max(
+            failure_analysis['failure_step_counts'], 
+            key=failure_analysis['failure_step_counts'].get
+        )
+    
+    return failure_analysis
+```
+
+### Generating Targeted Reflection Prompts
+
+Use trajectory analysis to give LLM specific, actionable feedback:
+
+```python
+def _generate_reflection_prompt(self, primitive_plan, failure_analysis) -> str:
+    """Generate targeted reflection prompt based on trajectory analysis."""
+    
+    failed_step = failure_analysis['most_common_failure_step']
+    failed_primitive = primitive_plan[failed_step] if failed_step is not None else "unknown"
+    
+    # Get most common failure reasons
+    top_reasons = sorted(
+        failure_analysis['failure_reasons'].items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:3]
+    
+    prompt = f"""
+The plan failed during dynamics model verification.
+
+Original Plan: {primitive_plan}
+
+Failure Analysis:
+- Most failures occurred at step {failed_step + 1 if failed_step else '?'}: "{failed_primitive}"
+- {failure_analysis['failure_step_counts'][failed_step]} out of {self.num_samples} samples failed at this step
+- Common failure reasons: {dict(top_reasons)}
+- Problematic predicates: {set(failure_analysis['problematic_predicates'][:5])}
+
+Best Partial Progress:
+- Best trajectory achieved {failure_analysis['best_partial_score']:.2f} average step score
+- Successfully completed steps: {failed_step if failed_step else 0}
+
+Please suggest an alternative approach. Consider:
+1. Is there a prerequisite step missing before step {failed_step + 1 if failed_step else '?'}?
+2. Should objects be manipulated in a different order?
+3. Is the target location for "{failed_primitive}" appropriate?
+4. Are there collision or reachability issues to address?
+"""
+    
+    return prompt
+```
+
+### Key Design Decisions
+
+| Aspect | Choice | Rationale |
+|--------|--------|-----------|
+| **Action Selection** | Terminal state score | Lookahead should evaluate long-term outcomes |
+| **When to Track** | Every step during lookahead | Need diagnostics for all intermediate states |
+| **When to Analyze** | Only when ALL samples fail | Avoid overhead when feasible action found |
+| **What to Store** | Per-step scores + predicates + failure reasons | Rich info for targeted reflection |
+| **Reflection Trigger** | All samples below threshold | Exhaustive search before fallback |
+
+### Overhead Considerations
+
+```python
+# Lightweight trajectory storage (per sample)
+trajectory_entry = {
+    'step': int,                    # 4 bytes
+    'primitive': str,               # ~50 bytes
+    'step_score': float,            # 8 bytes  
+    'failure_reasons': List[str],   # ~100 bytes
+    # Skip storing full latent states unless debugging
+    # 'latent_state': tensor,       # ~4KB per object (SKIP in production)
+}
+
+# For K=50 samples, L=3 lookahead: ~50 * 3 * 200 bytes = 30KB total
+# Negligible compared to model forward passes
+```
+
+---
+
 ## Reflection Mechanism
 
 ### Structured Feedback to LLM

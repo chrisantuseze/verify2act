@@ -66,6 +66,7 @@ class BehaviorPrompt:
     plans: Optional[List[List[str]]] = None
     hypotheses: Optional[List[List[str]]] = None
     geometric: Optional[bool] = None
+    failure_info: Optional[Dict[str, Any]] = None
     # OpenAI
     role: Optional[str] = None
     name: Optional[str] = None
@@ -119,6 +120,26 @@ class BehaviorPrompt:
         response = str(self.plans) if self.plans else None
         return query, response
 
+    def _replanning(self, goal_condition: bool = False) -> Tuple[str, Optional[str]]:
+        """Return the replanning/reflection prompt."""
+        if goal_condition:
+            query, goals = self._goal_prediction()
+            assert goals is not None
+            query += goals + "\n\n" + "Plans: "
+        else:
+            query = self._prefix() + "\n\n" + "Plans: "
+
+        # Include prior plans in the prompt if available
+        if self.plans:
+            query += f"{self.plans}\n\n"
+
+        # Include replanning/failure analysis if provided
+        if self.failure_info is not None:
+            query += f"Failure Info: {self.failure_info}\n\n"
+
+        response = str(self.plans) if self.plans else None
+        return query, response
+
     def _hypothesis_generation(self) -> str:
         """Return the hypothesis generation prompt."""
         assert self.hypotheses is not None
@@ -140,6 +161,7 @@ class BehaviorPrompt:
         behaviors = {
             "goal_prediction": self._goal_prediction,
             "task_planning": self._task_planning,
+            "replanning": self._replanning,
             "hypothesis_generation": self._hypothesis_generation,
             "geometric_reasoning": self._geometric_reasoning,
         }

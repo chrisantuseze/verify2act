@@ -55,9 +55,6 @@ class ClosedLoopController:
         args,
         env,
         checkpoint_path: str = "../../Points2Plans/ckpt/checkpoint/cp_1.pth",
-        num_planning_samples: int = 50,
-        goal_threshold: float = 0.1,
-        max_replans_per_primitive: int = 3,
         lookahead_depth: int = 1,
         enable_collision_checking: bool = True,
         predicate_threshold: float = 0.3,
@@ -70,9 +67,6 @@ class ClosedLoopController:
             args: Command-line arguments or configuration
             env: Robosuite environment instance
             checkpoint_path: Path to trained dynamics model checkpoint
-            num_planning_samples: Number of action samples for rejection sampling
-            goal_threshold: Threshold for goal achievement (predicate difference)
-            max_replans_per_primitive: Max replanning attempts if execution fails
             lookahead_depth: Number of primitives to simulate ahead (1-3)
             enable_collision_checking: Whether to enable collision detection
             predicate_threshold: Threshold for predicate matching (default 0.3, use lower for undertrained models)
@@ -80,8 +74,6 @@ class ClosedLoopController:
         """
         self.args = args
         self.env = env
-        self.goal_threshold = goal_threshold
-        self.max_replans_per_primitive = max_replans_per_primitive
         self.verbose = verbose
         self.predicate_threshold = predicate_threshold
         
@@ -93,11 +85,13 @@ class ClosedLoopController:
         self.state_converter = StateConverter(env)
         self.dynamics_planner = DynamicsModelPlanner(
             checkpoint_path=checkpoint_path,
-            num_samples=num_planning_samples,
+            num_samples=self.args.num_planning_samples,
             state_converter=self.state_converter,
             lookahead_depth=lookahead_depth,
             enable_collision_checking=enable_collision_checking,
-            predicate_threshold=predicate_threshold
+            predicate_threshold=predicate_threshold,
+            delta_forward=self.args.delta_forward,
+            latent_forward=self.args.latent_forward,
         )
         self.executor = PrimitiveExecutor(env)
         
@@ -171,6 +165,9 @@ class ClosedLoopController:
         if self.verbose:
             print("\n[2/4] Generating goals from LLM...")
         
+        # Convert goals to predicate tensor (will be set after getting goals)
+        object_name_to_id = {name: i for i, name in enumerate(objects)}
+        
         goals, plans = self.llm_planner.generate_goals_and_plans(
             task_description=task_description,
             objects=objects,
@@ -186,10 +183,8 @@ class ClosedLoopController:
             print(f"  ✓ Goals: {goals}")
             print(f"  ✓ Plan: {plans[0] if plans else 'No plan'}")
         
-        # Convert goals to predicate tensor
-        object_name_to_id = {name: i for i, name in enumerate(objects)}
         goal_predicates = self.llm_planner.goals_to_predicates(
-            goals=goals,  # Already extracted first goal set in llm_task_planner
+            goals=goals,
             object_name_to_id=object_name_to_id,
             num_objects=len(objects)
         )
@@ -227,27 +222,64 @@ class ClosedLoopController:
             
             # Plan next primitive with replanning on failure
             success = False
-            for replan_attempt in range(self.max_replans_per_primitive):
+            for replan_attempt in range(self.args.max_replans_per_primitive):
                 if replan_attempt > 0:
                     if self.verbose:
-                        print(f"  Replanning (attempt {replan_attempt + 1}/{self.max_replans_per_primitive})...")
+                        print(f"  Replanning (attempt {replan_attempt + 1}/{self.args.max_replans_per_primitive})...")
                     self.stats['num_replans'] += 1
                 
-                # Plan #@Chris: Uncomment
-                primitive, action_params, feasibility = self.dynamics_planner.plan_next_primitive(
+                # Plan with trajectory tracking for failure analysis
+                primitive, action_params, feasibility, failure_analysis = self.dynamics_planner.plan_next_primitive(
                     state_dict=state_dict,
                     goal_predicates=goal_predicates,
-                    primitive_plan=primitive_plan
+                    primitive_plan=primitive_plan,
+                    enable_trajectory_tracking=True
                 )
                 
                 print(f"  Primitive: {primitive}")
                 print(f"  Action params: {action_params}")
                 print(f"  Feasibility: {feasibility:.3f}")
-                # primitive, action_params, feasibility = primitive_plan[0], np.array([[0.00758689, 0.01866092, 0.77499998]]), 1.00
                 
-                if primitive is None:
+                # Check both: primitive must exist AND feasibility must meet threshold
+                if primitive is None or feasibility < self.dynamics_planner.feasibility_threshold:
                     if self.verbose:
-                        print("  ✗ Planning failed (no feasible action found)")
+                        if primitive is None:
+                            print("  ✗ Planning failed (no action found)")
+                        else:
+                            print(f"  ✗ Planning failed (feasibility {feasibility:.3f} < threshold {self.dynamics_planner.feasibility_threshold})")
+                    
+                    # Log failure analysis if available
+                    if failure_analysis is not None:
+                        self._log_failure_analysis(failure_analysis)
+
+                        # Trigger LLM reflection to suggest revised plans
+                        try:
+                            revised_plans, suggestions = self.llm_planner.reflect_on_failure(
+                                primitive_plan=primitive_plan,
+                                task_goal=goals,
+                                failure_info=failure_analysis['reflection_info'],
+                                task_description=task_description,
+                                objects=objects,
+                                initial_predicates=initial_predicates,
+                            )
+
+                            if suggestions and self.verbose:
+                                print("  LLM Suggestions:")
+                                for s in suggestions[:3]:
+                                    print(f"    - {s}")
+
+                            if revised_plans:
+                                # Use first revised plan candidate
+                                new_plan = revised_plans[0]
+                                primitive_plan = new_plan
+                                if self.verbose:
+                                    print(f"  → Updated plan from LLM reflection: {primitive_plan}")
+                                # Count this as a replan attempt
+                                self.stats['num_replans'] += 1
+
+                        except Exception as e:
+                            if self.verbose:
+                                print(f"  Exception during LLM reflection: {e}")
                     continue
                 
                 if self.verbose:
@@ -282,7 +314,7 @@ class ClosedLoopController:
             
             if not success:
                 if self.verbose:
-                    print(f"  ✗ Failed after {self.max_replans_per_primitive} replan attempts")
+                    print(f"  ✗ Failed after {self.args.max_replans_per_primitive} replan attempts")
                     print(f"  → Aborting episode (sequential dependency broken)")
                 break  # Abort episode - subsequent primitives depend on this one
         
@@ -412,12 +444,19 @@ class ClosedLoopController:
                     print(f"Predicate {pred_name}({objects[i]}, {objects[j]}) confidence: {confidence:.3f}")
                     
                     if confidence > threshold:
-                        # Above predicate indicates stacking (object i is above object j)
-                        if pred_name == 'Above' and objects[j] != 'table':
-                            pred_str = f"Stacked({objects[i]}, {objects[j]})"
-                        elif pred_name == 'On':
-                            # On (Behind) for object-table relationships
+                        # Special handling for On predicate:
+                        # On(A, B) should only be true when A is above B AND in contact
+                        # This prevents symmetric "On(table, cube)" which doesn't make sense
+                        if pred_name == 'On':
+                            # Check if Above(i, j) is also true (index 3)
+                            above_confidence = predicate_matrix[i, j, 3]  # Above is at index 3
+                            if above_confidence <= threshold:
+                                # Skip On if not Above - prevents On(table, cube)
+                                continue
                             pred_str = f"On({objects[i]}, {objects[j]})"
+                        elif pred_name == 'Above' and objects[j] != 'table':
+                            # Above predicate indicates stacking (object i is above object j)
+                            pred_str = f"Stacked({objects[i]}, {objects[j]})"
                         else:
                             pred_str = f"{pred_name}({objects[i]}, {objects[j]})"
                         predicate_strings.append(pred_str)
@@ -427,8 +466,7 @@ class ClosedLoopController:
     def _check_goal_achieved(
         self,
         state_dict: Dict[str, Any],
-        goal_predicates: np.ndarray,
-        threshold: Optional[float] = None
+        goal_predicates: np.ndarray
     ) -> bool:
         """
         Check if current state satisfies goal predicates.
@@ -436,8 +474,6 @@ class ClosedLoopController:
         Uses dynamics model's decoder to predict current predicates,
         then compares with goal predicates.
         """
-        if threshold is None:
-            threshold = self.goal_threshold
         
         # Get current predicates from dynamics model
         current_predicates = self.dynamics_planner.predict_predicates(state_dict) #@Chris: Uncomment
@@ -448,7 +484,7 @@ class ClosedLoopController:
         
         # Only compare predicates that are set in goals (where goal_predicates > 0)
         # This handles dimension mismatch and focuses on relevant predicates
-        goal_mask = goal_predicates > 0.5
+        goal_mask = goal_predicates > self.args.goal_threshold
         
         if goal_mask.sum() == 0:
             # No goals set, consider achieved
@@ -461,19 +497,61 @@ class ClosedLoopController:
         goal_subset = goal_predicates[:, :, :min_pred_dim]
         
         # Compare only where goals are set
-        goal_mask_subset = goal_subset > 0.5
+        goal_mask_subset = goal_subset > self.args.goal_threshold
         matches = np.logical_and(
             goal_mask_subset,
-            current_subset > 0.5
+            current_subset > self.args.goal_threshold
         )
         
         # Success if most goals are satisfied
         satisfaction_rate = matches.sum() / goal_mask_subset.sum()
         
         if self.verbose:
-            print(f"  Goal satisfaction: {satisfaction_rate:.2%} (threshold={1-threshold:.2%})")
+            print(f"  Goal satisfaction: {satisfaction_rate:.2%} (threshold={self.args.goal_threshold:.2%})")
         
-        return satisfaction_rate >= (1 - threshold)
+        return satisfaction_rate >= self.args.goal_threshold
+    
+    def _log_failure_analysis(self, failure_analysis: Dict[str, Any]):
+        """
+        Log failure analysis for debugging and future LLM reflection.
+        
+        Args:
+            failure_analysis: Failure analysis dict from dynamics planner
+        """
+        if 'reflection_info' not in failure_analysis:
+            return
+        
+        reflection_info = failure_analysis['reflection_info']
+        
+        if self.verbose:
+            print("\n  ┌─────────────────────────────────────────────────────")
+            print("  │ FAILURE ANALYSIS (for future LLM reflection)")
+            print("  ├─────────────────────────────────────────────────────")
+            
+            if reflection_info['failed_step_number'] is not None:
+                print(f"  │ Failed Step: {reflection_info['failed_step_number']} - {reflection_info['failed_primitive']}")
+            else:
+                print(f"  │ Failed Step: Unknown")
+            
+            print(f"  │ Failure Rate: {reflection_info['failure_rate']:.1%} ({reflection_info['failure_count_at_step']}/{reflection_info['total_samples']} samples)")
+            print(f"  │ Best Score: {reflection_info['best_score_achieved']:.3f}")
+            
+            if reflection_info['top_failure_reasons']:
+                print(f"  │ Top Reasons:")
+                for reason, count in reflection_info['top_failure_reasons'][:3]:
+                    print(f"  │   - {reason}: {count} occurrences")
+            
+            if reflection_info['suggestions']:
+                print(f"  │ Suggestions:")
+                for suggestion in reflection_info['suggestions'][:2]:
+                    print(f"  │   → {suggestion}")
+            
+            print("  └─────────────────────────────────────────────────────\n")
+        
+        # Store in stats for later analysis
+        if 'failure_analyses' not in self.stats:
+            self.stats['failure_analyses'] = []
+        self.stats['failure_analyses'].append(reflection_info)
     
     def _execute_primitive_with_monitoring(
         self,

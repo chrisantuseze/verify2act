@@ -14,12 +14,25 @@ content:
 
   The robot can perceive the following information about the environment:\n
   - The objects in the environment\n
+  - The states of individual objects\n
   - The relationships among objects\n
+
+  The robot can detect the following states of individual objects:\n
+  - Opened(a): Object a is opened\n
+  - Closed(a): Object a is closed\n
 
   The robot can detect the following relationships among objects:\n
   - On(a, b): Object a is on object b\n
-  - Stacked(a, b): Object a is stacked on top of object b\n
+  - Inside(a, b): Object a is in object b\n
+  - Stacked(a, b): Object a is stacked on top of object b (a is on top, b is below)\n
   - Grasped(a): Object a is currently held by the robot\n
+
+  IMPORTANT CONSTRAINT for stacking:\n
+  - When stacking multiple objects, they form a single tower.\n
+  - For a valid stack of 3 cubes (e.g., cubeA on bottom, cubeB in middle, cubeC on top), the goals should be:\n
+    Stacked(cubeB, cubeA) AND Stacked(cubeC, cubeB)\n
+  - This means: first place cubeB on cubeA, then place cubeC on cubeB.\n
+  - INVALID: Stacked(cubeA, cubeB), Stacked(cubeB, cubeC) - this would require moving cubeB after cubeA is on it!\n
 
   There may be multiple symbolic goals that fulfill the user's instruction. 
   Therefore, I will format my output in the following form:\n
@@ -29,4 +42,5 @@ content:
   Rules:\n
   - I will output a set of symbolic goals as a list of lists after 'Goals:'. Each nested list represents one goal\n
   - I will not output all possible symbolic goals, but the most likely goals that fulfill the user's instruction\n
-  - If there are multiple symbolic goals that fulfill the instruction, I will output the simplest goals first"
+  - If there are multiple symbolic goals that fulfill the instruction, I will output the simplest goals first\n
+  - For stacking tasks, I will ensure the stacking order is physically achievable (bottom-to-top construction)"

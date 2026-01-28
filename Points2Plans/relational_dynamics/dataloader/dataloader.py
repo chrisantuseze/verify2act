@@ -87,10 +87,12 @@ class PerSceneLoader(object):
                  train_inside_feasibility = False, 
                  evaluate_pickplace = False,
                  this_one_hot_encoding = None,
+                 use_world_frame = True,  # If True, use Z for height (robosuite). If False, use Y (camera frame).
                  ): 
         self.rcpe = rcpe
         self.pe = pe
         self.lfd_search = lfd_search
+        self.use_world_frame = use_world_frame  # Critical: controls axis for Above/Below predicates
 
         
         self.single_step_training = single_step_training
@@ -985,57 +987,68 @@ class PerSceneLoader(object):
         """Compute left/right binary relation between two objects.
 
         Appends two binary entries to `predicates`: [o1_left_of_o2, o2_left_of_o1]
-        using camera-frame bounding box corners. The internal rules use a set
+        using bounding box corners. The internal rules use a set
         of half-space tests and corner comparisons to robustly decide left/right.
+        
+        For camera frame (Y-up): checks XZ and XY planes
+        For world frame (Z-up, robosuite): checks XY and XZ planes (swapped semantics)
         """
 
         def left_of(cf_o1_bbox_corners, cf_o2_bbox_corners):
 
-            # Check xz
-            o1_xz_center = cf_o1_bbox_corners[[0,2], 8] # [x,z]
-
-            # Get camera-frame axis-aligned bbox corners for o2. Only for x-z plane, and two left-most corners. 
-            o2_upper_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[2,:8].max()]) # [x,z]
-            o2_lower_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[2,:8].min()]) # [x,z]
-
-            # Upper half-space defined by p'n + d = 0
-            upper_normal = rotate_2d(np.array([-1,0]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
-            upper_d = -1 * o2_upper_corner.dot(upper_normal)
-            first_rule = o1_xz_center.dot(upper_normal) + upper_d >= 0
-
-            # Lower half-space defined by p'n + d = 0
-            lower_normal = rotate_2d(np.array([0,1]), self.params['theta_predicte_lr_fb_ab'])
-            lower_d = -1 * o2_lower_corner.dot(lower_normal)
-            second_rule = o1_xz_center.dot(lower_normal) + lower_d >= 0
-
-            xz_works = first_rule and second_rule
-
-            # Check xy
-            o1_xy_center = cf_o1_bbox_corners[[0,1], 8] # [x,y]
-
-            # Get camera-frame axis-aligned bbox corners for o2. Only for x-y plane, and two left-most corners. 
-            o2_upper_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[1,:8].max()]) # [x,y]
-            o2_lower_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[1,:8].min()]) # [x,y]
+            if self.use_world_frame:
+                # World frame: check xy plane (horizontal, Z is height)
+                o1_center = cf_o1_bbox_corners[[0, 1], 8]  # [x, y]
+                o2_upper_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_lower_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].min()])
+            else:
+                # Camera frame: check xz plane (horizontal, Y is height)
+                o1_center = cf_o1_bbox_corners[[0, 2], 8]  # [x, z]
+                o2_upper_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_lower_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].min()])
 
             # Upper half-space defined by p'n + d = 0
-            upper_normal = rotate_2d(np.array([-1,0]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
+            upper_normal = rotate_2d(np.array([-1, 0]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
             upper_d = -1 * o2_upper_corner.dot(upper_normal)
-            third_rule = o1_xy_center.dot(upper_normal) + upper_d >= 0
+            first_rule = o1_center.dot(upper_normal) + upper_d >= 0
 
             # Lower half-space defined by p'n + d = 0
-            lower_normal = rotate_2d(np.array([0,1]), self.params['theta_predicte_lr_fb_ab'])
+            lower_normal = rotate_2d(np.array([0, 1]), self.params['theta_predicte_lr_fb_ab'])
             lower_d = -1 * o2_lower_corner.dot(lower_normal)
-            fourth_rule = o1_xy_center.dot(lower_normal) + lower_d >= 0
+            second_rule = o1_center.dot(lower_normal) + lower_d >= 0
 
-            xy_works = third_rule and fourth_rule
+            first_plane_works = first_rule and second_rule
 
-            # All corners check
-            fifth_rule = np.all(o1_xz_center[0] <= cf_o2_bbox_corners[0,:8].min())
+            if self.use_world_frame:
+                # World frame: check xz plane (vertical, Z is height)
+                o1_center_2 = cf_o1_bbox_corners[[0, 2], 8]  # [x, z]
+                o2_upper_corner_2 = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_lower_corner_2 = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].min()])
+            else:
+                # Camera frame: check xy plane (vertical, Y is height)
+                o1_center_2 = cf_o1_bbox_corners[[0, 1], 8]  # [x, y]
+                o2_upper_corner_2 = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_lower_corner_2 = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].min()])
+
+            # Upper half-space defined by p'n + d = 0
+            upper_normal = rotate_2d(np.array([-1, 0]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
+            upper_d = -1 * o2_upper_corner_2.dot(upper_normal)
+            third_rule = o1_center_2.dot(upper_normal) + upper_d >= 0
+
+            # Lower half-space defined by p'n + d = 0
+            lower_normal = rotate_2d(np.array([0, 1]), self.params['theta_predicte_lr_fb_ab'])
+            lower_d = -1 * o2_lower_corner_2.dot(lower_normal)
+            fourth_rule = o1_center_2.dot(lower_normal) + lower_d >= 0
+
+            second_plane_works = third_rule and fourth_rule
+
+            # All corners check - X axis is always left/right
+            fifth_rule = np.all(cf_o1_bbox_corners[0, 8] <= cf_o2_bbox_corners[0, :8].min())
 
             # o1 right corners check
-            sixth_rule = np.all(cf_o1_bbox_corners[0, :8].max() <= cf_o2_bbox_corners[0,8])
+            sixth_rule = np.all(cf_o1_bbox_corners[0, :8].max() <= cf_o2_bbox_corners[0, 8])
 
-            return xz_works and xy_works and fifth_rule and sixth_rule
+            return first_plane_works and second_plane_works and fifth_rule and sixth_rule
 
         obj1_id = o1_predicate_args['obj_id']
         obj2_id = o2_predicate_args['obj_id']
@@ -1047,8 +1060,8 @@ class PerSceneLoader(object):
 
         o2_left_of_o1 = left_of(cf_o2_bbox_corners, cf_o1_bbox_corners)
 
-        cf_o1_bbox_corners[0,:] = cf_o1_bbox_corners[0,:] * -1
-        cf_o2_bbox_corners[0,:] = cf_o2_bbox_corners[0,:] * -1
+        cf_o1_bbox_corners[0, :] = cf_o1_bbox_corners[0, :] * -1
+        cf_o2_bbox_corners[0, :] = cf_o2_bbox_corners[0, :] * -1
         o2_right_of_o1 = left_of(cf_o2_bbox_corners, cf_o1_bbox_corners)
 
         o1_right_of_o2 = left_of(cf_o1_bbox_corners, cf_o2_bbox_corners)
@@ -1231,63 +1244,79 @@ class PerSceneLoader(object):
     
     def compute_front_behind_predicates(self, o1_predicate_args, o2_predicate_args, predicates):
         """ Compute front-behind predicates.
-            Use camera frame coordinates.
+            
+            For camera frame (Y-up): Z is depth axis (index 2)
+            For world frame (Z-up, robosuite): Y is depth axis (index 1)
+            
             Relation rules:
-                1) o1 center MUST be in half-space defined by o2 LEFT corner and theta (xz plane)
-                2) o1 center MUST be in half-space defined by o2 RIGHT corner and theta (xz plane)
-                3) do same as 1) for yz
-                4) do same as 2) for yz
+                1) o1 center MUST be in half-space defined by o2 LEFT corner and theta (first plane)
+                2) o1 center MUST be in half-space defined by o2 RIGHT corner and theta (first plane)
+                3) do same as 1) for second plane
+                4) do same as 2) for second plane
                 5) o1 center MUST be behind all o2 corners
                 6) All o1 corners MUST be behind o2 center
         """
+        # Select depth axis based on coordinate frame
+        # Camera frame: Z is depth (index 2)
+        # World frame (robosuite): Y is depth (index 1)
+        d_idx = 1 if self.use_world_frame else 2  # Depth axis index
 
         def behind(cf_o1_bbox_corners, cf_o2_bbox_corners):
 
-            # Check xz
-            o1_xz_center = cf_o1_bbox_corners[[0,2], 8] # [x,z]
-
-            # Get camera-frame axis-aligned bbox corners for o2. Only for x-z plane, and two left-most corners. 
-            o2_left_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[2,:8].max()]) # [x,z]
-            o2_right_corner = np.array([cf_o2_bbox_corners[0,:8].max(), cf_o2_bbox_corners[2,:8].max()]) # [x,z]
-
-            # Left half-space defined by p'n + d = 0
-            left_normal = rotate_2d(np.array([1,0]), self.params['theta_predicte_lr_fb_ab'])
-            left_d = -1 * o2_left_corner.dot(left_normal)
-            first_rule = o1_xz_center.dot(left_normal) + left_d >= 0
-
-            # Right half-space defined by p'n + d = 0
-            right_normal = rotate_2d(np.array([0,1]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
-            right_d = -1 * o2_right_corner.dot(right_normal)
-            second_rule = o1_xz_center.dot(right_normal) + right_d >= 0
-
-            xz_works = first_rule and second_rule
-
-            # Check yz
-            o1_yz_center = cf_o1_bbox_corners[[1,2], 8] # [y,z]
-
-            # Get camera-frame axis-aligned bbox corners for o2. Only for x-z plane, and two left-most corners. 
-            o2_left_corner = np.array([cf_o2_bbox_corners[1,:8].min(), cf_o2_bbox_corners[2,:8].max()]) # [y,z]
-            o2_right_corner = np.array([cf_o2_bbox_corners[1,:8].max(), cf_o2_bbox_corners[2,:8].max()]) # [y,z]
+            if self.use_world_frame:
+                # World frame: check xy plane (Y is depth)
+                o1_center = cf_o1_bbox_corners[[0, 1], 8]  # [x, y]
+                o2_left_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_right_corner = np.array([cf_o2_bbox_corners[0, :8].max(), cf_o2_bbox_corners[1, :8].max()])
+            else:
+                # Camera frame: check xz plane (Z is depth)
+                o1_center = cf_o1_bbox_corners[[0, 2], 8]  # [x, z]
+                o2_left_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_right_corner = np.array([cf_o2_bbox_corners[0, :8].max(), cf_o2_bbox_corners[2, :8].max()])
 
             # Left half-space defined by p'n + d = 0
-            left_normal = rotate_2d(np.array([1,0]), self.params['theta_predicte_lr_fb_ab'])
+            left_normal = rotate_2d(np.array([1, 0]), self.params['theta_predicte_lr_fb_ab'])
             left_d = -1 * o2_left_corner.dot(left_normal)
-            third_rule = o1_yz_center.dot(left_normal) + left_d >= 0
+            first_rule = o1_center.dot(left_normal) + left_d >= 0
 
             # Right half-space defined by p'n + d = 0
-            right_normal = rotate_2d(np.array([0,1]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
+            right_normal = rotate_2d(np.array([0, 1]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
             right_d = -1 * o2_right_corner.dot(right_normal)
-            fourth_rule = o1_yz_center.dot(right_normal) + right_d >= 0
+            second_rule = o1_center.dot(right_normal) + right_d >= 0
 
-            yz_works = third_rule and fourth_rule
+            first_plane_works = first_rule and second_rule
 
-            # All corners check
-            fifth_rule = np.all(o1_xz_center[1] >= cf_o2_bbox_corners[2,:8].max())
+            # Check second vertical plane
+            if self.use_world_frame:
+                # World frame: check zy plane (Y is depth)
+                o1_center_2 = cf_o1_bbox_corners[[2, 1], 8]  # [z, y]
+                o2_left_corner_2 = np.array([cf_o2_bbox_corners[2, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_right_corner_2 = np.array([cf_o2_bbox_corners[2, :8].max(), cf_o2_bbox_corners[1, :8].max()])
+            else:
+                # Camera frame: check yz plane (Z is depth)
+                o1_center_2 = cf_o1_bbox_corners[[1, 2], 8]  # [y, z]
+                o2_left_corner_2 = np.array([cf_o2_bbox_corners[1, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_right_corner_2 = np.array([cf_o2_bbox_corners[1, :8].max(), cf_o2_bbox_corners[2, :8].max()])
 
-            # o1 near corners check
-            sixth_rule = np.all(cf_o1_bbox_corners[2, :8].min() >= cf_o2_bbox_corners[2,8])
+            # Left half-space defined by p'n + d = 0
+            left_normal = rotate_2d(np.array([1, 0]), self.params['theta_predicte_lr_fb_ab'])
+            left_d = -1 * o2_left_corner_2.dot(left_normal)
+            third_rule = o1_center_2.dot(left_normal) + left_d >= 0
 
-            return xz_works and yz_works and fifth_rule and sixth_rule
+            # Right half-space defined by p'n + d = 0
+            right_normal = rotate_2d(np.array([0, 1]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
+            right_d = -1 * o2_right_corner_2.dot(right_normal)
+            fourth_rule = o1_center_2.dot(right_normal) + right_d >= 0
+
+            second_plane_works = third_rule and fourth_rule
+
+            # All corners check - o1 center depth >= max depth of o2 corners
+            fifth_rule = np.all(cf_o1_bbox_corners[d_idx, 8] >= cf_o2_bbox_corners[d_idx, :8].max())
+
+            # o1 near corners check - min depth of o1 corners >= o2 center depth
+            sixth_rule = np.all(cf_o1_bbox_corners[d_idx, :8].min() >= cf_o2_bbox_corners[d_idx, 8])
+
+            return first_plane_works and second_plane_works and fifth_rule and sixth_rule
 
         obj1_id = o1_predicate_args['obj_id']
         obj2_id = o2_predicate_args['obj_id']
@@ -1299,8 +1328,9 @@ class PerSceneLoader(object):
 
         o2_behind_o1 = behind(cf_o2_bbox_corners, cf_o1_bbox_corners)
 
-        cf_o1_bbox_corners[2,:] = cf_o1_bbox_corners[2,:] * -1
-        cf_o2_bbox_corners[2,:] = cf_o2_bbox_corners[2,:] * -1
+        # Negate depth axis for in-front check
+        cf_o1_bbox_corners[d_idx, :] = cf_o1_bbox_corners[d_idx, :] * -1
+        cf_o2_bbox_corners[d_idx, :] = cf_o2_bbox_corners[d_idx, :] * -1
         o2_in_front_of_o1 = behind(cf_o2_bbox_corners, cf_o1_bbox_corners) 
 
         o1_in_front_of_o2 = behind(cf_o1_bbox_corners, cf_o2_bbox_corners)               
@@ -1317,64 +1347,80 @@ class PerSceneLoader(object):
 
     def compute_above_below_predicates(self, o1_predicate_args, o2_predicate_args, predicates):
         """ Compute above-below predicates.
-            Use camera frame coordinates.
+            
+            For camera frame (Y-up): use Y axis (index 1) for height
+            For world frame (Z-up, robosuite): use Z axis (index 2) for height
+            
             Relation rules:
-                1) o1 center MUST be in half-space defined by o2 LEFT corner and theta (xy plane)
-                2) o1 center MUST be in half-space defined by o2 RIGHT corner and theta (xy plane)
-                3) do same as 1) for zy
-                4) do same as 2) for zy
+                1) o1 center MUST be in half-space defined by o2 LEFT corner and theta (horizontal plane)
+                2) o1 center MUST be in half-space defined by o2 RIGHT corner and theta (horizontal plane)
+                3) do same as 1) for second vertical plane
+                4) do same as 2) for second vertical plane
                 6) o1 center MUST be above all o2 corners
                 7) All o1 corners MUST be above o2 center
                 rule = ((1 & 2 & 3 & 4)) & 6 & 7
         """
+        # Select height axis based on coordinate frame
+        # Camera frame: Y is vertical (index 1)
+        # World frame (robosuite): Z is vertical (index 2)
+        h_idx = 2 if self.use_world_frame else 1  # Height axis index
 
         def above(cf_o1_bbox_corners, cf_o2_bbox_corners):
 
-            # Check xy
-            o1_xy_center = cf_o1_bbox_corners[[0,1], 8] # [x,y]
-
-            # Get camera-frame axis-aligned bbox corners for o2
-            o2_left_corner = np.array([cf_o2_bbox_corners[0,:8].min(), cf_o2_bbox_corners[1,:8].max()]) # [x,y]
-            o2_right_corner = np.array([cf_o2_bbox_corners[0,:8].max(), cf_o2_bbox_corners[1,:8].max()]) # [x,y]
-
-            # Left half-space defined by p'n + d = 0
-            left_normal = rotate_2d(np.array([1,0]), self.params['theta_predicte_lr_fb_ab'])
-            left_d = -1 * o2_left_corner.dot(left_normal)
-            first_rule = o1_xy_center.dot(left_normal) + left_d >= 0
-
-            # Right half-space defined by p'n + d = 0
-            right_normal = rotate_2d(np.array([0,1]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
-            right_d = -1 * o2_right_corner.dot(right_normal)
-            second_rule = o1_xy_center.dot(right_normal) + right_d >= 0
-
-            xy_works = first_rule and second_rule
-
-            # Check zy
-            o1_zy_center = cf_o1_bbox_corners[[2,1], 8] # [z,y]
-
-            # Get camera-frame axis-aligned bbox corners for o2 
-            o2_left_corner = np.array([cf_o2_bbox_corners[2,:8].min(), cf_o2_bbox_corners[1,:8].max()]) # [z,y]
-            o2_right_corner = np.array([cf_o2_bbox_corners[2,:8].max(), cf_o2_bbox_corners[1,:8].max()]) # [z,y]
+            if self.use_world_frame:
+                # World frame: check xz plane (Z is height)
+                o1_center = cf_o1_bbox_corners[[0, 2], 8]  # [x, z]
+                o2_left_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_right_corner = np.array([cf_o2_bbox_corners[0, :8].max(), cf_o2_bbox_corners[2, :8].max()])
+            else:
+                # Camera frame: check xy plane (Y is height)
+                o1_center = cf_o1_bbox_corners[[0, 1], 8]  # [x, y]
+                o2_left_corner = np.array([cf_o2_bbox_corners[0, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_right_corner = np.array([cf_o2_bbox_corners[0, :8].max(), cf_o2_bbox_corners[1, :8].max()])
 
             # Left half-space defined by p'n + d = 0
-            left_normal = rotate_2d(np.array([1,0]), self.params['theta_predicte_lr_fb_ab'])
+            left_normal = rotate_2d(np.array([1, 0]), self.params['theta_predicte_lr_fb_ab'])
             left_d = -1 * o2_left_corner.dot(left_normal)
-            third_rule = o1_zy_center.dot(left_normal) + left_d >= 0
+            first_rule = o1_center.dot(left_normal) + left_d >= 0
 
             # Right half-space defined by p'n + d = 0
-            right_normal = rotate_2d(np.array([0,1]), np.pi/2. - self.params['theta_predicte_lr_fb_ab'])
+            right_normal = rotate_2d(np.array([0, 1]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
             right_d = -1 * o2_right_corner.dot(right_normal)
-            fourth_rule = o1_zy_center.dot(right_normal) + right_d >= 0
+            second_rule = o1_center.dot(right_normal) + right_d >= 0
 
-            zy_works = third_rule and fourth_rule
+            first_plane_works = first_rule and second_rule
 
-            # All corners check
-            fifth_rule = np.all(o1_xy_center[1] >= cf_o2_bbox_corners[1,:8].max())
+            # Check the other vertical plane
+            if self.use_world_frame:
+                # World frame: check yz plane (Z is height)
+                o1_center_2 = cf_o1_bbox_corners[[1, 2], 8]  # [y, z]
+                o2_left_corner_2 = np.array([cf_o2_bbox_corners[1, :8].min(), cf_o2_bbox_corners[2, :8].max()])
+                o2_right_corner_2 = np.array([cf_o2_bbox_corners[1, :8].max(), cf_o2_bbox_corners[2, :8].max()])
+            else:
+                # Camera frame: check zy plane (Y is height)
+                o1_center_2 = cf_o1_bbox_corners[[2, 1], 8]  # [z, y]
+                o2_left_corner_2 = np.array([cf_o2_bbox_corners[2, :8].min(), cf_o2_bbox_corners[1, :8].max()])
+                o2_right_corner_2 = np.array([cf_o2_bbox_corners[2, :8].max(), cf_o2_bbox_corners[1, :8].max()])
 
-            # o1 bottom corners check
-            sixth_rule = np.all(cf_o1_bbox_corners[1, :8].min() >= cf_o2_bbox_corners[1,8])
+            # Left half-space defined by p'n + d = 0
+            left_normal = rotate_2d(np.array([1, 0]), self.params['theta_predicte_lr_fb_ab'])
+            left_d = -1 * o2_left_corner_2.dot(left_normal)
+            third_rule = o1_center_2.dot(left_normal) + left_d >= 0
 
-            return xy_works and zy_works and fifth_rule and sixth_rule
+            # Right half-space defined by p'n + d = 0
+            right_normal = rotate_2d(np.array([0, 1]), np.pi / 2. - self.params['theta_predicte_lr_fb_ab'])
+            right_d = -1 * o2_right_corner_2.dot(right_normal)
+            fourth_rule = o1_center_2.dot(right_normal) + right_d >= 0
+
+            second_plane_works = third_rule and fourth_rule
+
+            # All corners check - o1 center height >= max height of o2 corners
+            fifth_rule = np.all(cf_o1_bbox_corners[h_idx, 8] >= cf_o2_bbox_corners[h_idx, :8].max())
+
+            # o1 bottom corners check - min height of o1 corners >= o2 center height
+            sixth_rule = np.all(cf_o1_bbox_corners[h_idx, :8].min() >= cf_o2_bbox_corners[h_idx, 8])
+
+            return first_plane_works and second_plane_works and fifth_rule and sixth_rule
 
         obj1_id = o1_predicate_args['obj_id']
         obj2_id = o2_predicate_args['obj_id']
@@ -1385,8 +1431,9 @@ class PerSceneLoader(object):
         o1_above_o2 = above(cf_o1_bbox_corners, cf_o2_bbox_corners)
         o2_above_o1 = above(cf_o2_bbox_corners, cf_o1_bbox_corners)
 
-        cf_o1_bbox_corners[1,:] = cf_o1_bbox_corners[1,:] * -1
-        cf_o2_bbox_corners[1,:] = cf_o2_bbox_corners[1,:] * -1
+        # Negate height axis for below check
+        cf_o1_bbox_corners[h_idx, :] = cf_o1_bbox_corners[h_idx, :] * -1
+        cf_o2_bbox_corners[h_idx, :] = cf_o2_bbox_corners[h_idx, :] * -1
         o2_below_o1 = above(cf_o2_bbox_corners, cf_o1_bbox_corners)    
         o1_below_o2 = above(cf_o1_bbox_corners, cf_o2_bbox_corners)        
 
@@ -1619,8 +1666,13 @@ class DataLoader(object):
                 # os.path.join(self.train_dir_list[0], p) for p in files if 'demo' in p]
                 os.path.join(self.train_dir_list[0], p) for p in files if 'episode' in p or 'demo' in p]
 
-            print('total train pcd path:', len(self.train_pcd_path))
-            for train_dir in self.train_pcd_path[start_id:start_id+max_size]:
+            # If max_size is 0 or None, load all available episodes
+            if max_size is None or max_size <= 0:
+                train_episodes = self.train_pcd_path[start_id:]
+            else:
+                train_episodes = self.train_pcd_path[start_id:start_id+max_size]
+            print('total train pcd path:', len(self.train_pcd_path), len(train_episodes), 'start_id:', start_id, 'max_size:', max_size)
+            for train_dir in train_episodes:
                 self.current_goal_relations = self.all_goal_relations[self.train_id] # simplify for without test end_relations
                 self.current_predicted_relations = self.all_predicted_relations[self.train_id]
                 self.current_index_i = self.all_index_i_list[self.train_id]  ## test_id?  I change it to train_id
@@ -1662,6 +1714,7 @@ class DataLoader(object):
                         
 
                 if leap == 0:
+                    print('Leap num issue, demo skipped:', train_dir)
                     continue
                 
                 if self.single_step_training:
@@ -1720,7 +1773,12 @@ class DataLoader(object):
             if self.enable_leap_num:
                 test_max_size = 1000
                 self.success_load = 0
-            for test_dir in self.test_pcd_path[start_test_id: start_test_id + test_max_size]:
+            # If test_max_size is 0 or None, load all available test episodes
+            if test_max_size is None or test_max_size <= 0:
+                test_episodes = self.test_pcd_path[start_test_id:]
+            else:
+                test_episodes = self.test_pcd_path[start_test_id: start_test_id + test_max_size]
+            for test_dir in test_episodes:
                 if self.enable_leap_num:
                     if self.success_load == self.test_max_size:
                         break
