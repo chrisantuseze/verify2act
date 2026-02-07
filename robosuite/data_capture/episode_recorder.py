@@ -93,6 +93,7 @@ class EpisodeRecorder:
         self._camera_renderers: Dict[str, Any] = {}
 
         self.done = False
+        self.episode_counter = 0
         
         print(f"EpisodeRecorder initialized for: {env.__class__.__name__}")
         print(f"  Cameras: {len(self.camera_names)}, Points/object: {num_points}")
@@ -125,7 +126,7 @@ class EpisodeRecorder:
         
         print(f"Recording started. Objects: {len(self.object_metadata)}")
         for name, meta in self.object_metadata.items():
-            print(f"  - {name}: extents={meta['extents']}, static={meta['fix_base_link']}")
+            print(f"  - {name}: extents={meta['extents']}, static={meta['fix_base_link']}, body_id={meta['body_id']}")
     
     def record_step(self, action: np.ndarray, obs: Dict[str, Any], done: bool = False):
         """
@@ -185,15 +186,12 @@ class EpisodeRecorder:
         
         return data_dict, attrs_dict
     
-    def save_episode(self, output_dir: str, episode_name: Optional[str] = None) -> str:
+    def save_episode(self, output_dir: str) -> str:
         """
         Save recorded episode to pickle file.
         
         Args:
             output_dir: Directory to save episode
-            episode_name: Custom name (uses timestamp if None)
-            save_subsampled: If True, also save a subsampled version with only key states
-                            (ignored if key_timesteps_only=True, as data is already subsampled)
             
         Returns:
             Path to saved file
@@ -207,19 +205,14 @@ class EpisodeRecorder:
         # Create output directory
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        
-        # Generate filename
-        if episode_name is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            episode_name = f"episode_{timestamp}"
-        
-        base_name = episode_name.replace('.pkl', '')
+
+        episode_name = f"episode_{self.episode_counter:05d}"
         
         # If key_timesteps_only mode, data is already in key format
         if self.key_timesteps_only:
-            file = output_path / f"{base_name}_subsampled.pkl"
+            file = output_path / f"{episode_name}_subsampled.pkl"
         else:
-            file = output_path / f"{base_name}_full.pkl"
+            file = output_path / f"{episode_name}_full.pkl"
 
         data_dict = self.data_formatter.build_data_dict(self.timestep_data)
         attrs_dict = self.data_formatter.build_attrs_dict(self.action_history)
@@ -232,6 +225,8 @@ class EpisodeRecorder:
         print(f"\n✓ Saved: {file}")
         print(f"  Size: {file_size_mb:.2f} MB | Timesteps: {len(self.timestep_data)} | Actions: {len(self.action_history)}")
         
+        self.episode_counter += 1
+
         return str(file)
     
     def subsample_to_key_states(self) -> Tuple[List[Dict], List[Dict]]:
@@ -353,6 +348,7 @@ class EpisodeRecorder:
     def get_statistics(self) -> Dict[str, Any]:
         """Get episode statistics."""
         return {
+            'skills': list(ts.get('skill_type') for ts in self.timestep_data if ts.get('skill_type') is not None),
             'num_timesteps': len(self.timestep_data),
             'num_objects': len(self.object_metadata),
             'num_contacts': sum(len(ts['contacts']) for ts in self.timestep_data),
@@ -469,6 +465,7 @@ class EpisodeRecorder:
             'point_clouds': self._capture_point_clouds(),
             'action': parsed_action if parsed_action is not None else (self._parse_action(action, obs) if action is not None else None),
             'camera_obs': self._capture_camera_observations(obs) if obs is not None else None,
+            'skill_type': parsed_action['skill_type'] if parsed_action is not None else None,
         }
         
         self.timestep_data.append(timestep_state)
@@ -522,10 +519,6 @@ class EpisodeRecorder:
             )
             mapped = self._map_segmented_point_clouds(segmented_pcds)
             if mapped:
-                print(
-                    "  Captured segmented point clouds:",
-                    {k: len(v) for k, v in mapped.items()},
-                )
                 return mapped
             else:
                 print("  Segmentation returned no points; falling back to proximity-based split.")
@@ -595,10 +588,44 @@ class EpisodeRecorder:
             object_point_clouds[obj_name] = np.array(object_point_clouds[obj_name])
         
         return object_point_clouds
+    
+    def _fallback_proximity_matching(self, unmapped_segments: Dict[str, np.ndarray], 
+                                      unmapped_metadata: set, mapped: Dict[str, np.ndarray]):
+        """Match remaining unmapped segments to metadata objects by spatial proximity."""
+        # Get object positions for unmapped metadata
+        obj_positions = {}
+        for obj_name in unmapped_metadata:
+            body_id = self.object_metadata[obj_name]['body_id']
+            pos = self.env.sim.data.body_xpos[body_id].copy()
+            obj_positions[obj_name] = pos
+        
+        # For each unmapped segment, find nearest metadata object
+        for seg_name, pts in unmapped_segments.items():
+            if len(pts) == 0:
+                continue
+            
+            # Compute centroid of point cloud
+            centroid = np.mean(pts, axis=0)
+            
+            # Find closest metadata object
+            min_dist = float('inf')
+            closest_meta = None
+            for meta_name, meta_pos in obj_positions.items():
+                if meta_name in mapped:  # Skip already matched
+                    continue
+                dist = np.linalg.norm(centroid - meta_pos)
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_meta = meta_name
+            
+            # Match if distance is reasonable (within 0.2m)
+            if closest_meta and min_dist < 0.2:
+                mapped[closest_meta] = pts
 
     def _map_segmented_point_clouds(self, segmented_pcds: Dict[str, Any]) -> Dict[str, np.ndarray]:
         """Map segmented Open3D point clouds to metadata object keys with simple name matching."""
         mapped: Dict[str, np.ndarray] = {}
+        unmapped_segments: Dict[str, np.ndarray] = {}
         lower_to_meta = {name.lower(): name for name in self.object_metadata}
 
         for seg_name, pcd in segmented_pcds.items():
@@ -609,20 +636,51 @@ class EpisodeRecorder:
             seg_lower = seg_name.lower()
             target = None
 
+            # Exact match (case sensitive)
             if seg_name in self.object_metadata:
                 target = seg_name
+            # Exact match (case insensitive)
             elif seg_lower in lower_to_meta:
                 target = lower_to_meta[seg_lower]
             else:
-                # Heuristic: substring match either direction (e.g., cubeA vs cubeA_main)
+                # Heuristic matching strategies
+                # 1. Substring match either direction (e.g., cubeA vs cubeA_main)
                 for meta_name in self.object_metadata:
                     meta_lower = meta_name.lower()
                     if meta_lower in seg_lower or seg_lower in meta_lower:
                         target = meta_name
                         break
+                
+                # 2. If no match yet, try removing common suffixes/prefixes
+                if target is None:
+                    # Remove common prefixes/suffixes like _main, _body, _base
+                    seg_stripped = seg_name
+                    for suffix in ['_main', '_body', '_base', '_link']:
+                        if seg_name.endswith(suffix):
+                            seg_stripped = seg_name[:-len(suffix)]
+                            break
+                    
+                    if seg_stripped != seg_name:
+                        seg_stripped_lower = seg_stripped.lower()
+                        for meta_name in self.object_metadata:
+                            meta_lower = meta_name.lower()
+                            if meta_lower == seg_stripped_lower or meta_lower in seg_stripped_lower or seg_stripped_lower in meta_lower:
+                                target = meta_name
+                                break
 
             if target is not None and target not in mapped:
                 mapped[target] = pts
+            else:
+                # Store unmapped for fallback matching
+                if target is None:
+                    if seg_name not in unmapped_segments:
+                        unmapped_segments[seg_name] = pts
+        
+        # Fallback: match unmapped segments to unmapped metadata by proximity
+        unmapped_metadata = set(self.object_metadata.keys()) - set(mapped.keys())
+        if unmapped_segments and unmapped_metadata:
+            print("  Fallback: Proximity matching for unmapped segments...")
+            self._fallback_proximity_matching(unmapped_segments, unmapped_metadata, mapped)
         
         return mapped
     
@@ -752,7 +810,7 @@ if __name__ == "__main__":
         print(f"{key}: {value}")
     
     # Save both full and subsampled versions
-    saved_path = recorder.save_episode("./test_episodes", "test_episode", save_subsampled=True)
+    saved_path = recorder.save_episode("./test_episodes")
     
     print("\\n=== Verification ===")
     loaded_data, loaded_attrs = EpisodeRecorder.load_episode(saved_path)

@@ -10,3 +10,4 @@ torch
 httpx
 h5py
 tensorboard
+termcolor

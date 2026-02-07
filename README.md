@@ -11,3 +11,5 @@ conda env create -f conda_env.yml
 
 cd /robosuite
 pip install -e .
+
+Note: Activate env before running mjpython ...

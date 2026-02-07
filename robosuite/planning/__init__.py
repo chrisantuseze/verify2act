@@ -16,10 +16,15 @@ from .state_converter import StateConverter
 from .llm_task_planner import LLMTaskPlanner
 from .dynamics_model_planner import DynamicsModelPlanner
 from .primitive_executor import PrimitiveExecutor
+from .closed_loop_controller import ClosedLoopController
+from .collision_checker import CollisionChecker
 
 __all__ = [
     'StateConverter',
     'LLMTaskPlanner',
     'DynamicsModelPlanner',
     'PrimitiveExecutor',
+    'ClosedLoopController',
+    'CollisionChecker',
 ]
+__version__ = "0.1.0"

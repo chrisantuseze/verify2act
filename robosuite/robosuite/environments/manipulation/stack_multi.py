@@ -174,6 +174,30 @@ class StackMulti(ManipulationEnv):
             r_stack = 2.0
 
         return r_reach, r_lift, r_stack
+    
+    def _post_action(self, action):
+        """
+        Do any housekeeping after taking an action, including checking for success.
+        
+        Args:
+            action (np.array): Action to execute within the environment
+            
+        Returns:
+            3-tuple:
+                - (float) reward from the environment
+                - (bool) whether the current episode is completed or not
+                - (dict) info dict with success status
+        """
+        reward = self.reward(action)
+
+        # Check if task is complete (all target nuts placed)
+        success = self._check_success()
+
+        self.done = success
+        
+        info = {"success": success}
+        
+        return reward, self.done, info
 
     def _load_model(self):
         """

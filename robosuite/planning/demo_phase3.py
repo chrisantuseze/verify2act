@@ -43,7 +43,7 @@ sys.path.insert(0, str(current_dir.parent))
 
 import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
-from utils import str2bool
+from verify2act.utils.utils import str2bool
 from closed_loop_controller import ClosedLoopController, BatchController
 
 def create_environment(env_name: str = "Stack4", render: bool = False):

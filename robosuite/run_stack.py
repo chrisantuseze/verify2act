@@ -326,13 +326,10 @@ class HeuristicStackPolicy:
         """Reset environment and start new episode."""
         action = np.zeros(self.env.action_dim)
         
-        self.obs = self.env.reset()
         self._setup_stacking_sequence()
         self.pair_idx = 0
-        next_stage = "move_to_cube"
-        
-        print("\nReset complete. Starting new stacking sequence.")
-        
+        next_stage = "done"
+                
         return action, next_stage
     
     def step(self) -> Tuple[np.ndarray, bool]:
@@ -355,7 +352,6 @@ class HeuristicStackPolicy:
             "release": self.stage_release,
             "retract": self.stage_retract,
             "move_horizontal_to_next": self.stage_move_horizontal_to_next,
-            "done": self.stage_done,
         }
         
         handler = stage_handlers.get(self.stage)
@@ -366,6 +362,10 @@ class HeuristicStackPolicy:
         
         if next_stage is not None:
             self.stage = next_stage
+
+        if next_stage == "done":
+            print("\n✅ Policy reported done, ending episode.")
+            return action, True
         
         return action, False
 
@@ -423,6 +423,7 @@ def run_heuristic_policy(env_name: str = "Stack4"):
             
             if env_done:
                 print("--- STACKING TASK SUCCESSFUL! ---")
+                break
     
     except KeyboardInterrupt:
         print("\nExiting...")

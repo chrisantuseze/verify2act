@@ -69,7 +69,7 @@ class MetadataExtractor:
         
         # Keywords to identify relevant objects
         object_keywords = ['cube', 'table', 'block', 'object', 'can', 'milk', 'peg', 'box', 
-                          'bin', 'cereal', 'bread']
+                          'bin', 'cereal', 'bread', 'nut', 'square', 'round']
         
         # Keywords to exclude (robot parts and non-objects)
         exclude_keywords = ['robot', 'gripper', 'link', 'joint', 'world', 'floor',

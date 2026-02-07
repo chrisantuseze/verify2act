@@ -331,7 +331,7 @@ class PointCloudGenerator:
         """
         # Common Robosuite object prefixes
         object_keywords = ['cube', 'can', 'milk', 'bread', 'cereal', 'object', 
-                          'peg', 'box', 'target', 'obstacle', 'gripper', 'robot']
+                          'peg', 'box', 'target', 'obstacle', 'gripper', 'robot', 'nut']
         
         geom_lower = geom_name.lower()
         
@@ -346,8 +346,30 @@ class PointCloudGenerator:
         # Try to identify the object
         for keyword in object_keywords:
             if keyword in geom_lower:
-                # Remove suffixes like _g0, _visual, etc.
-                clean_name = geom_name.split('_')[0]
+                # For nut assembly objects, preserve more of the name structure
+                # e.g., "RoundNut0_g0" -> "RoundNut0_main" (look for body name)
+                # e.g., "peg1_g0" -> "peg1"
+                parts = geom_name.split('_')
+                
+                # Check if this follows the pattern: ObjectName_gX or ObjectName_visual
+                # If so, try to find the corresponding body name
+                if len(parts) >= 2 and (parts[-1].startswith('g') or parts[-1] in ['visual', 'collision', 'geom']):
+                    # Check what body this geom belongs to
+                    model = env.sim.model
+                    for geom_id in range(model.ngeom):
+                        if model.geom_id2name(geom_id) == geom_name:
+                            body_id = model.geom_bodyid[geom_id]
+                            body_name = model.body(body_id).name
+                            if body_name:
+                                return body_name
+                            break
+                
+                # Fallback: remove geom suffixes like _g0, _g1, _visual
+                clean_name = geom_name
+                for suffix in ['_g0', '_g1', '_g2', '_g3', '_g4', '_visual', '_collision', '_geom']:
+                    if geom_name.endswith(suffix):
+                        clean_name = geom_name[:-len(suffix)]
+                        break
                 return clean_name
         
         # Default: use the full geom name
@@ -577,19 +599,6 @@ class PointCloudGenerator:
         o3d.io.write_point_cloud(filename, pcd)
         print(f"Saved point cloud to {filename}")
         print(f"To visualize: python -c \"import open3d as o3d; o3d.visualization.draw_geometries([o3d.io.read_point_cloud('{filename}')])\"")
-
-
-def create_env():
-    """Create environment with visible renderer for macOS compatibility."""
-    return make(
-        "Stack",
-        robots="Panda",
-        has_renderer=True,  # Use visible renderer (works on macOS)
-        has_offscreen_renderer=False,  # Don't need offscreen
-        use_camera_obs=False,  # We'll capture manually
-        use_object_obs=True,  # Get object states
-        control_freq=20,
-    )
 
 def example_usage():
     """Example of how to use the PointCloudGenerator with Robosuite."""

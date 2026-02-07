@@ -198,6 +198,7 @@ class PickPlaceMulti(ManipulationEnv):
         single_object_mode=0,
         object_type=None,
         object_types=None,
+        object_rgba=None,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -237,7 +238,21 @@ class PickPlaceMulti(ManipulationEnv):
         self.object_to_id = {name: i for i, name in enumerate(self.available_objects)}
         self.object_id_to_sensors = {}  # Maps object id to sensor names for that object
         # Human-readable object names used to instantiate classes (Title case)
-        self.obj_names = [o.capitalize() for o in self.available_objects]
+        # Ensure instance names are unique when multiple objects of same type are requested
+        counts = {}
+        obj_names = []
+        for o in self.available_objects:
+            counts[o] = counts.get(o, 0) + 1
+            if counts[o] == 1:
+                obj_names.append(o.capitalize())
+            else:
+                obj_names.append(f"{o.capitalize()}_{counts[o]-1}")
+        self.obj_names = obj_names
+
+        # Optional per-instance RGBA overrides (list matching available_objects)
+        if object_rgba is not None:
+            assert len(object_rgba) == len(self.available_objects), "object_rgba must match number of objects"
+        self.object_rgba = object_rgba
 
         # Validate single-object object_type if provided
         if object_type is not None:
@@ -401,7 +416,7 @@ class PickPlaceMulti(ManipulationEnv):
         # hover reward for getting object above bin
         r_hover = 0.0
         if active_objs:
-            target_bin_ids = [self.object_to_id[active_obj.name.lower()] for active_obj in active_objs]
+            target_bin_ids = [self.object_to_id[getattr(active_obj, 'obj_type', active_obj.name.lower())] for active_obj in active_objs]
             # segment objects into left of the bins and above the bins
             object_xy_locs = self.sim.data.body_xpos[[self.obj_body_id[active_obj.name] for active_obj in active_objs]][
                 :, :2
@@ -534,10 +549,16 @@ class PickPlaceMulti(ManipulationEnv):
             "squarenut": BreadVisualObject,
         }
         self.visual_objects = []
-        for obj_type, obj_name in zip(self.available_objects, self.obj_names):
+        for i, (obj_type, obj_name) in enumerate(zip(self.available_objects, self.obj_names)):
             vis_cls = visual_class_map[obj_type]
             vis_name = "Visual" + obj_name
-            vis_obj = vis_cls(name=vis_name)
+            rgba = None
+            if self.object_rgba is not None:
+                rgba = self.object_rgba[i]
+            try:
+                vis_obj = vis_cls(name=vis_name, rgba=rgba)
+            except TypeError:
+                vis_obj = vis_cls(name=vis_name)
             self.visual_objects.append(vis_obj)
 
     def _construct_objects(self):
@@ -555,9 +576,18 @@ class PickPlaceMulti(ManipulationEnv):
             "squarenut": SquareNutObject,
         }
         self.objects = []
-        for obj_type, obj_name in zip(self.available_objects, self.obj_names):
+        for i, (obj_type, obj_name) in enumerate(zip(self.available_objects, self.obj_names)):
             cls = obj_class_map[obj_type]
-            obj = cls(name=obj_name)
+            rgba = None
+            if self.object_rgba is not None:
+                rgba = self.object_rgba[i]
+            # Pass rgba to constructors that support it (bread, can, lemon)
+            try:
+                obj = cls(name=obj_name, rgba=rgba)
+            except TypeError:
+                obj = cls(name=obj_name)
+            # store the semantic object type for later lookups
+            setattr(obj, "obj_type", obj_type)
             self.objects.append(obj)
 
     def _load_model(self):
@@ -850,7 +880,13 @@ class PickPlaceMulti3(PickPlaceMulti):
     def __init__(self, **kwargs):
         # Prevent user from passing object_types directly to avoid ambiguity
         assert "object_types" not in kwargs, "invalid set of arguments"
-        super().__init__(object_types=["lemon", "bread", "can"], **kwargs)
+        obj_types = ["lemon", "bread", "can"]
+        # If user didn't provide per-instance colors, set a sensible default (lemon = yellow)
+        if "object_rgba" not in kwargs:
+            default_rgba = [None] * len(obj_types)
+            default_rgba[0] = [1.0, 1.0, 0.0, 1.0]  # lemon: yellow
+            kwargs["object_rgba"] = default_rgba
+        super().__init__(object_types=obj_types, **kwargs)
 
 
 class PickPlaceMulti4(PickPlaceMulti):
@@ -860,4 +896,13 @@ class PickPlaceMulti4(PickPlaceMulti):
 
     def __init__(self, **kwargs):
         assert "object_types" not in kwargs, "invalid set of arguments"
-        super().__init__(object_types=["milk", "bread", "lemon", "can"], **kwargs)
+        obj_types = ["bread", "bread", "lemon", "lemon", "can"]
+        # Default colors: two breads default, two lemons different colors
+        if "object_rgba" not in kwargs:
+            default_rgba = [None] * len(obj_types)
+            # lemons at indices 2 and 3 -> give them distinct colors
+            default_rgba[0] = [0.0, 1.0, 0.0, 1.0]  # bread: default
+            default_rgba[2] = [1.0, 1.0, 0.0, 1.0]  # lemon: yellow
+            default_rgba[3] = [0.0, 1.0, 0.0, 1.0]  # lemon: green
+            kwargs["object_rgba"] = default_rgba
+        super().__init__(object_types=obj_types, **kwargs)

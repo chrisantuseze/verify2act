@@ -3,7 +3,7 @@ import pickle, numpy as np
 from pathlib import Path
 import open3d as o3d
 
-ep_path = Path("data_capture/dataset/stack_v1/episodes/episode_00000_subsampled.pkl")
+ep_path = Path("data_capture/dataset/nut_assembly/episodes/episode_00002_subsampled.pkl")
 out_dir = Path("debug_pcds")
 out_dir.mkdir(exist_ok=True)
 

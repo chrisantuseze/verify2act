@@ -23,8 +23,12 @@ class CanObject(MujocoXMLObject):
     """
     Coke can object (used in PickPlace)
     """
-
-    def __init__(self, name):
+    def __init__(self, name, rgba=None):
+        """
+        Args:
+            name (str): object name
+            rgba (list/tuple/np.ndarray, optional): RGBA color to apply to visual geoms
+        """
         super().__init__(
             xml_path_completion("objects/can.xml"),
             name=name,
@@ -33,16 +37,47 @@ class CanObject(MujocoXMLObject):
             duplicate_collision_geoms=True,
         )
 
+        if rgba is not None:
+            rgba_arr = np.array(rgba, dtype=float)
+            if rgba_arr.size == 3:
+                rgba_arr = np.concatenate([rgba_arr, np.array([1.0])])
+            if rgba_arr.size != 4:
+                raise ValueError("rgba must be length 3 or 4")
+            geoms = find_elements(root=self.worldbody, tags="geom")
+            for g in geoms:
+                g.set("rgba", array_to_string(rgba_arr))
+
 
 class LemonObject(MujocoXMLObject):
     """
     Lemon object
     """
-
-    def __init__(self, name):
+    def __init__(self, name, rgba=None):
+        """
+        Args:
+            name (str): object name
+            rgba (list or tuple or np.ndarray, optional): RGBA color to apply to visual geoms (4 floats in [0,1]).
+                If None, the color defined in the XML is used.
+        """
         super().__init__(
             xml_path_completion("objects/lemon.xml"), name=name, obj_type="all", duplicate_collision_geoms=True
         )
+
+        # If a color is provided, override the visual geometry rgba attributes
+        if rgba is not None:
+            # Ensure numpy array of length 4
+            rgba_arr = np.array(rgba, dtype=float)
+            if rgba_arr.size == 3:
+                # If RGB provided, assume full opacity
+                rgba_arr = np.concatenate([rgba_arr, np.array([1.0])])
+            if rgba_arr.size != 4:
+                raise ValueError("rgba must be length 3 or 4")
+
+            # Find all geom elements in this object's worldbody and set rgba
+            geoms = find_elements(root=self.worldbody, tags="geom")
+            for g in geoms:
+                # Only set rgba on visual/mesh/geoms — safe to set on all geoms for object
+                g.set("rgba", array_to_string(rgba_arr))
 
 
 class MilkObject(MujocoXMLObject):
@@ -65,7 +100,12 @@ class BreadObject(MujocoXMLObject):
     Bread loaf object (used in PickPlace)
     """
 
-    def __init__(self, name):
+    def __init__(self, name, rgba=None):
+        """
+        Args:
+            name (str): object name
+            rgba (list/tuple/np.ndarray, optional): RGBA color to apply to visual geoms
+        """
         super().__init__(
             xml_path_completion("objects/bread.xml"),
             name=name,
@@ -73,6 +113,16 @@ class BreadObject(MujocoXMLObject):
             obj_type="all",
             duplicate_collision_geoms=True,
         )
+
+        if rgba is not None:
+            rgba_arr = np.array(rgba, dtype=float)
+            if rgba_arr.size == 3:
+                rgba_arr = np.concatenate([rgba_arr, np.array([1.0])])
+            if rgba_arr.size != 4:
+                raise ValueError("rgba must be length 3 or 4")
+            geoms = find_elements(root=self.worldbody, tags="geom")
+            for g in geoms:
+                g.set("rgba", array_to_string(rgba_arr))
 
 
 class CerealObject(MujocoXMLObject):
@@ -172,7 +222,7 @@ class BreadVisualObject(MujocoXMLObject):
     They provide a point of reference to indicate a position.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, rgba=None):
         super().__init__(
             xml_path_completion("objects/bread-visual.xml"),
             name=name,
@@ -180,6 +230,16 @@ class BreadVisualObject(MujocoXMLObject):
             obj_type="visual",
             duplicate_collision_geoms=True,
         )
+
+        if rgba is not None:
+            rgba_arr = np.array(rgba, dtype=float)
+            if rgba_arr.size == 3:
+                rgba_arr = np.concatenate([rgba_arr, np.array([1.0])])
+            if rgba_arr.size != 4:
+                raise ValueError("rgba must be length 3 or 4")
+            geoms = find_elements(root=self.worldbody, tags="geom")
+            for g in geoms:
+                g.set("rgba", array_to_string(rgba_arr))
 
 
 class CerealVisualObject(MujocoXMLObject):
@@ -208,7 +268,7 @@ class CanVisualObject(MujocoXMLObject):
     They provide a point of reference to indicate a position.
     """
 
-    def __init__(self, name):
+    def __init__(self, name, rgba=None):
         super().__init__(
             xml_path_completion("objects/can-visual.xml"),
             name=name,
@@ -216,6 +276,16 @@ class CanVisualObject(MujocoXMLObject):
             obj_type="visual",
             duplicate_collision_geoms=True,
         )
+
+        if rgba is not None:
+            rgba_arr = np.array(rgba, dtype=float)
+            if rgba_arr.size == 3:
+                rgba_arr = np.concatenate([rgba_arr, np.array([1.0])])
+            if rgba_arr.size != 4:
+                raise ValueError("rgba must be length 3 or 4")
+            geoms = find_elements(root=self.worldbody, tags="geom")
+            for g in geoms:
+                g.set("rgba", array_to_string(rgba_arr))
 
 
 class PlateWithHoleObject(MujocoXMLObject):
