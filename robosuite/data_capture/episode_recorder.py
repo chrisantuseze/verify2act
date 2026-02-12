@@ -404,57 +404,6 @@ class EpisodeRecorder:
 
         self.prev_skill_type = skill_type
     
-    def _record_key_timestep_if_needed(self, action: np.ndarray, obs: Dict[str, Any]):
-        """
-        Intelligently record only key timesteps during rollout.
-        Key timesteps are:
-        - First timestep after grasp begins (transition to grasp with valid object)
-        - Last timestep after release completes (transition from release with valid object)
-        """
-        # Parse action to get skill type and object
-        parsed_action = self._parse_action(action, obs)
-        skill_type = parsed_action['skill_type']
-        object_id = parsed_action['object_id']
-        
-        should_save = False
-        
-        # Detect START of grasp sequence (transition TO grasp with valid object)
-        if skill_type == 'grasp' and self.prev_skill_type != 'grasp':
-            if object_id is not None:
-                self.in_grasp_sequence = True
-                self.grasp_start_timestep = self.current_timestep
-                self.current_grasped_object = object_id
-                should_save = True  # Save first grasp timestep
-                print(f"[KEY] T{self.current_timestep}: Grasp START (object {object_id})")
-        
-        # Detect END of release sequence (transition FROM release with valid object)
-        elif self.prev_skill_type == 'release' and skill_type != 'release':
-            # Save the state at the end of release if we had a valid object
-            if self.current_grasped_object is not None:
-                should_save = True
-                print(f"[KEY] T{self.current_timestep}: Release END (object {self.current_grasped_object})")
-                
-                # Create combined pick-place action
-                combined_action = {
-                    'skill_type': 'pickplace',
-                    'object_id': self.current_grasped_object,
-                    'position_delta': parsed_action['position_delta'],
-                    'gripper_action': parsed_action['gripper_action'],
-                    'raw_action': parsed_action['raw_action'],
-                }
-                self.action_history.append(combined_action)
-                
-                # Reset for next pick-place
-                self.in_grasp_sequence = False
-                self.current_grasped_object = None
-        
-        # Update tracking state
-        self.prev_skill_type = skill_type
-        
-        # Save timestep if it's a key state
-        if should_save:
-            self._capture_timestep_state(action=action, obs=obs)
-    
     def _capture_timestep_state(self, action: Optional[np.ndarray], obs: Optional[Dict[str, Any]], parsed_action: Optional[Dict[str, Any]] = None):
         """Capture complete state for current timestep."""
         timestep_state = {

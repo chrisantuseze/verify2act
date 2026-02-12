@@ -5,6 +5,7 @@ Integrates with HeuristicStackPolicy from run_stack.py to automatically
 collect multiple episodes with progress tracking and error recovery.
 
 xvfb-run -a python data_capture/batch_collect.py \
+    --env Stack3 \
     --num-episodes 1 \
     --output-dir data_capture/dataset/stack_v1
 
@@ -13,6 +14,11 @@ xvfb-run -a python data_capture/batch_collect.py \
     --max-timesteps 3000 --output-dir data_capture/dataset/nut_assembly \
     --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
     --nut-type-mode roundnut --num-episodes 100 --seed 42
+
+xvfb-run -a python data_capture/batch_collect.py \
+    --env Stack3 \
+    --max-timesteps 1000 --output-dir data_capture/dataset/stack3 \
+    --num-episodes 100 --seed 42
 
 Phase 4: Batch Collection ✓
 """
@@ -301,7 +307,7 @@ class BatchCollector:
         
 
         # End recording
-        data_dict, attrs_dict = recorder.end_episode()
+        # data_dict, attrs_dict = recorder.end_episode() # we already end the episode in save_episode
         
         # Only save episode if it was successful
         if episode_successful:

@@ -318,7 +318,9 @@ class DataFormatter:
 
         # Pad the action list to match the number of timesteps
         # The dataloader expects sudo_action_list to have one entry per timestep
-        placeholder = ['move', '0', [0.0, 0.0, 0.0]]
+        # Use 'pickplace' instead of 'move' so the dataloader recognizes it
+        # (the dataloader only handles 'pickplace'/'stack' and 'push'/'pull')
+        placeholder = ['pickplace', '1', [0.0, 0.0, 0.0]]
         while len(action_list) < len(action_history):
             action_list.append(placeholder)
         

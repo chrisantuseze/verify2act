@@ -38,6 +38,7 @@ from relational_dynamics.utils import parse_util
 # Import collision checker
 from collision_checker import CollisionChecker
 from predicate_registry import PREDICATE_NAMES
+from state_converter import StateConverter
 
 
 class DynamicsModelPlanner:
@@ -58,7 +59,7 @@ class DynamicsModelPlanner:
                  config_args: Optional[Dict] = None,
                  num_samples: int = 50,
                  device: str = "cuda" if torch.cuda.is_available() else "cpu",
-                 state_converter=None,
+                 state_converter: StateConverter = None,
                  enable_collision_checking: bool = True,
                  x_collision: float = 0.05,
                  y_collision: float = 0.05,

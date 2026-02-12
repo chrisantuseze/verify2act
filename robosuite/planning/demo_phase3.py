@@ -26,6 +26,10 @@ Usage:
     xvfb-run -a python demo_phase3.py --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth
 
     xvfb-run -a python demo_phase3.py \
+    --task Stack3 \
+    --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth
+
+    xvfb-run -a python demo_phase3.py \
     --task ClutteredNutAssembly \
     --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth \
     --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
