@@ -1,0 +1,57 @@
+prompt: BehaviorPromptManager
+prompt_kwargs:
+   # Task prompt
+   task_prompt:
+      # Task
+      task: cluttered_nut_assembly_task
+      instruction: "Assemble all target nuts onto their corresponding pegs"
+      # Note: Object list should be dynamically generated based on environment config
+      # Default shown here is for num_round_nuts=2, num_square_nuts=1
+      objects: 
+         - "RoundNut0"
+         - "RoundNut1"
+         - "SquareNut0"
+         - "peg0"
+         - "peg1"
+         - "peg2"
+         - "table"
+      predicates: 
+         - "On(RoundNut0, table)"
+         - "On(RoundNut1, table)"
+         - "On(SquareNut0, table)"
+
+      # Behaviors
+      goals: Null
+      plans: Null
+      hypotheses: Null
+      geometric: Null
+      failure_info: Null
+
+      # OpenAI
+      role: user
+      name: Null
+      name_query: Null
+      name_response: Null
+      
+   # System prompts (relative to robosuite/planning directory)
+   system_prompts:
+      - configs/prompts/system/goal_prediction_nut_assembly_v1.yaml
+      - configs/prompts/system/task_planning_nut_assembly_v1.yaml
+      - configs/prompts/system/replanning_reflection_v1.yaml
+
+   # Example prompts (relative to robosuite/planning directory)
+   example_prompts:
+      - configs/prompts/examples/example_nut_assembly_1.yaml
+      - configs/prompts/examples/example_nut_assembly_2.yaml
+
+   # Event prompts
+   event_prompts: Null
+
+# Configuration notes:
+# - This task involves variable numbers of round and square nuts
+# - The objects list should be dynamically populated at runtime based on:
+#   * num_round_nuts parameter (creates RoundNut0, RoundNut1, ...)
+#   * num_square_nuts parameter (creates SquareNut0, SquareNut1, ...)
+#   * Number of pegs (typically 3: peg0, peg1, peg2)
+# - Initial predicates should reflect starting configuration (e.g., nuts on table or stacked)
+# - Target nut type (round vs square) is determined by nut_type_mode parameter

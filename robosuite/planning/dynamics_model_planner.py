@@ -37,6 +37,7 @@ from relational_dynamics.utils import parse_util
 
 # Import collision checker
 from collision_checker import CollisionChecker
+from predicate_registry import PREDICATE_NAMES
 
 
 class DynamicsModelPlanner:
@@ -867,17 +868,7 @@ class DynamicsModelPlanner:
         pred_mask = pred_relations_matrix[:, :, :goal_predicates.shape[-1]] > self.predicate_threshold
         
         # Find specific mismatches
-        predicate_names = [
-            'Left',      # 0: Left (spatial)
-            'Right',     # 1: Right (spatial)
-            'Below',     # 2: Below (spatial)
-            'Above',     # 3: Above (spatial)
-            'Front',     # 4: Front (spatial)
-            'Behind',    # 5: Behind (spatial)
-            'On',        # 6: Contact - object is on/touching another
-            'Boundary',  # 7: Boundary
-            'Inside',    # 8: Inside
-        ]
+        predicate_names = PREDICATE_NAMES
         
         for i in range(num_objects):
             for j in range(num_objects):

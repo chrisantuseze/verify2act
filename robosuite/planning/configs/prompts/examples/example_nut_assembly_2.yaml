@@ -1,0 +1,27 @@
+# Task
+task: example_nut_assembly_2
+instruction: "Assemble all round nuts onto the round nut peg."
+objects: 
+  - "RoundNut0"
+  - "RoundNut1"
+  - "SquareNut0"
+  - "peg0"
+  - "peg1"
+  - "table"
+predicates:
+  - "On(RoundNut0, table)"
+  - "On(RoundNut1, table)"
+  - "Stacked(SquareNut0, RoundNut1)"
+
+# Behaviors - SquareNut0 blocks RoundNut1, so must clear it first
+goals: [["OnPeg(RoundNut0, peg0)", "OnPeg(RoundNut1, peg0)"]]
+plans: [["Pick(RoundNut0, table)", "Place(RoundNut0, peg0)", "Pick(SquareNut0, RoundNut1)", "Place(SquareNut0, table)", "Pick(RoundNut1, table)", "Place(RoundNut1, peg0)"]]
+hypotheses: Null
+geometric: Null
+failure_info: Null
+
+# OpenAI
+role: system
+name: Null
+name_query: example_user
+name_response: example_assistant

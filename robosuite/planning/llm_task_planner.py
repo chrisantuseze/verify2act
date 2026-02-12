@@ -19,6 +19,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
+
+# Import centralized predicate registry
+from predicate_registry import get_predicate_index, PREDICATE_NAMES
 import ast
 
 # Add Points2Plans to path (needs to be at Points2Plans root for LLM.fm_planning imports)
@@ -342,40 +345,16 @@ class LLMTaskPlanner:
         return predicates
     
     def _predicate_type_to_idx(self, pred_type: str, num_predicates: int) -> int:
-        """Map predicate type string to index."""
-        pred_type_lower = pred_type.lower()
-        
-        # Map to 9-predicate system used by decoder (matching training data format)
-        # Training order: Left(0), Right(1), Below(2), Above(3), Front(4), Behind(5), On/Contact(6), Boundary(7), Inside(8)
-        predicate_map = {
-            'left': 0,
-            'leftof': 0,
-            'right': 1,
-            'rightof': 1,
-            'below': 2,
-            'under': 2,
-            'above': 3,
-            'over': 3,
-            'front': 4,
-            'infront': 4,
-            'behind': 5,
-            'on': 6,          # On/Contact is at index 6
-            'stacked': 6,     # Stacked is equivalent to On for our purposes
-            'contact': 6,
-            'touching': 6,
-            'boundary': 7,
-            'inside': 8,      # Inside is at index 8
-            'in': 8,          # Alias for Inside
-        }
-        
-        if pred_type_lower in predicate_map:
-            idx = predicate_map[pred_type_lower]
-            # Ensure index is within bounds
+        """Map predicate type string to index using centralized registry."""
+        try:
+            idx = get_predicate_index(pred_type)
             if idx < num_predicates:
                 return idx
-        
-        print(f"Warning: Unknown predicate type '{pred_type}', defaulting to 0")
-        return 0
+            print(f"Warning: Predicate '{pred_type}' index {idx} exceeds num_predicates {num_predicates}")
+            return 0
+        except ValueError as e:
+            print(f"Warning: Unknown predicate type '{pred_type}': {e}, defaulting to 0")
+            return 0
     
     def plans_to_primitives(self, plans: List[str]) -> List[Dict]:
         """

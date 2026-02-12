@@ -23,7 +23,13 @@ Usage:
     python demo_phase3.py --batch --num-trials 5
     
     # Custom checkpoint
-    xvfb-run -a python demo_phase3.py --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_1.pth
+    xvfb-run -a python demo_phase3.py --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth
+
+    xvfb-run -a python demo_phase3.py \
+    --task ClutteredNutAssembly \
+    --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth \
+    --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
+    --nut-type-mode roundnut
 """
 
 import os
@@ -43,35 +49,52 @@ sys.path.insert(0, str(current_dir.parent))
 
 import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
-from verify2act.utils.utils import str2bool
 from closed_loop_controller import ClosedLoopController, BatchController
 
-def create_environment(env_name: str = "Stack4", render: bool = False):
+def create_env_factory(env_name: str, args):
     """
-    Create and configure the robosuite stacking environment.
+    Create environment factory function based on environment name.
     
     Args:
-        env_name: Name of the environment ("Stack", "Stack3", or "Stack4")
+        env_name: Name of the environment
+        args: Command-line arguments
         
     Returns:
-        Configured environment instance
+        Factory function that creates environment instance
     """
-    controller_config = load_composite_controller_config(controller="BASIC")
-    
-    env = suite.make(
-        env_name=env_name,
-        robots="Panda",
-        controller_configs=controller_config,
-        has_renderer=True,
-        has_offscreen_renderer=False,
-        use_camera_obs=False,
-        use_object_obs=True,
-        control_freq=20,
-        horizon=1000,
-        ignore_done=True,
-    )
-    
-    return env
+    if env_name == "ClutteredNutAssembly":
+        sys.path.insert(0, str(current_dir.parent))
+        from run_cluttered_nutassembly import create_environment
+        
+        def env_factory():
+            return create_environment(
+                env_name="ClutteredNutAssembly",
+                num_round_nuts=args.num_round,
+                num_square_nuts=args.num_square,
+                initial_stacking_prob=args.initial_stacking_prob,
+                nut_type_mode=args.nut_type_mode,
+                horizon=1000
+            )
+        return env_factory
+        
+    elif env_name in ["Stack", "Stack3", "Stack4"]:
+        sys.path.insert(0, str(current_dir.parent))
+        from run_stack import create_environment
+        
+        def env_factory():
+            return create_environment(env_name)
+        return env_factory
+        
+    elif env_name == "PickPlace":
+        sys.path.insert(0, str(current_dir.parent))
+        from run_pickplace import create_environment
+        
+        def env_factory():
+            return create_environment("PickPlaceCan")
+        return env_factory
+        
+    else:
+        raise ValueError(f"Unsupported environment: {env_name}")
 
 
 def demo_single_episode(
@@ -100,7 +123,8 @@ def demo_single_episode(
     
     # Create environment
     print(f"\n[1/3] Creating {task} environment...")
-    env = create_environment(task, render)
+    env_factory = create_env_factory(task, args)
+    env = env_factory()
     print("  ✓ Environment created")
     
     # Create controller
@@ -110,6 +134,16 @@ def demo_single_episode(
     lookahead_depth = getattr(args, 'lookahead_depth', 2)  # Default to 2-step
     predicate_threshold = getattr(args, 'predicate_threshold', 0.5)  # Default to 0.5
     
+    # Determine task type for predicate filtering
+    if task.lower() in ["clutterednutassembly", "nutassembly"]:
+        task_type = "assembly"
+    elif task.lower() in ["stack", "stack3", "stack4"]:
+        task_type = "stacking"
+    elif task.lower() == "pickplace":
+        task_type = "pickplace"
+    else:
+        task_type = "all"  # No filtering
+    
     controller = ClosedLoopController(
         args,
         env=env,
@@ -117,7 +151,11 @@ def demo_single_episode(
         lookahead_depth=lookahead_depth,
         enable_collision_checking=True,
         predicate_threshold=predicate_threshold,
-        verbose=True
+        enable_trajectory_tracking=args.enable_trajectory_tracking,
+        delta_forward=args.delta_forward,
+        latent_forward=args.latent_forward,
+        verbose=True,
+        task_type=task_type
     )
     print("  ✓ Controller initialized")
     
@@ -127,6 +165,9 @@ def demo_single_episode(
         initial_predicates = None  # Auto-detect
     elif task.lower() == "pickplace":
         task_description = "Put all objects in the bin"
+        initial_predicates = None  # Auto-detect
+    elif task.lower() == "clutterednutassembly":
+        task_description = "Assemble the cluttered nuts"
         initial_predicates = None  # Auto-detect
     else:
         task_description = "Complete the task"
@@ -170,7 +211,10 @@ def demo_batch_evaluation(
     
     # Create environment
     print(f"\nCreating {task} environment...")
-    env = create_environment(task, render=False)
+    # Create a minimal args object for env_factory
+    args_obj = type('Args', (), {})()  
+    env_factory = create_env_factory(task, args_obj)
+    env = env_factory()
     print("✓ Environment created")
     
     # Create batch controller
@@ -225,7 +269,9 @@ def demo_failure_recovery(
     print("=" * 80)
     
     # Create environment
-    env = create_environment("pickplace", render=False)
+    args_obj = type('Args', (), {})() if not args else args
+    env_factory = create_env_factory("PickPlace", args_obj)
+    env = env_factory()
     
     # Get predicate threshold from args if available
     predicate_threshold = getattr(args, 'predicate_threshold', 0.3) if args else 0.3
@@ -267,15 +313,51 @@ def demo_failure_recovery(
     
     return success, stats
 
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 
 def main():
     parser = argparse.ArgumentParser(description="Phase 3 Demo: Full Integration")
     parser.add_argument(
         "--task",
         type=str,
-        default="Stack3",
-        choices=["Stack", "Stack3", "Stack4", "PickPlace"],
+        default="ClutteredNutAssembly",
+        choices=["Stack", "Stack3", "Stack4", "PickPlace", "ClutteredNutAssembly"],
         help="Task to run"
+    )
+    # ClutteredNutAssembly specific arguments
+    parser.add_argument(
+        "--num-round",
+        type=int,
+        default=6,
+        help="Number of round nuts (ClutteredNutAssembly only)"
+    )
+    parser.add_argument(
+        "--num-square",
+        type=int,
+        default=2,
+        help="Number of square nuts (ClutteredNutAssembly only)"
+    )
+    parser.add_argument(
+        "--initial-stacking-prob",
+        type=float,
+        default=0.6,
+        help="Probability of initial nut stacking (ClutteredNutAssembly only)"
+    )
+    parser.add_argument(
+        "--nut-type-mode",
+        type=str,
+        default="roundnut",
+        choices=["roundnut", "squarenut"],
+        help="Which nut type to target (ClutteredNutAssembly only)"
     )
     parser.add_argument(
         "--checkpoint",
@@ -365,6 +447,23 @@ def main():
         type=float,
         default=0.3,
         help="Threshold for predicate matching (default 0.3, use lower for undertrained models)"
+    )
+    parser.add_argument(
+        "--enable-trajectory-tracking",
+        type=str2bool,
+        default=False,
+        help="Enable trajectory tracking during planning"
+    )
+    parser.add_argument(
+        "--collect-data",
+        action="store_true",
+        help="Enable critic data collection"
+    )
+    parser.add_argument(
+        "--data-save-dir",
+        type=str,
+        default="./data/critic",
+        help="Directory to save collected critic data"
     )
     
     args = parser.parse_args()

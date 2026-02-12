@@ -43,7 +43,8 @@ class StateConverter:
                  num_points: int = 128,
                  voxel_size: float = 0.005,
                  workspace_bounds: Optional[np.ndarray] = None,
-                 max_objects: int = 8):
+                 max_objects: int = 12,
+                 object_filter: Optional[List[str]] = None):
         """
         Initialize state converter.
         
@@ -54,12 +55,19 @@ class StateConverter:
             voxel_size: Voxel size for point cloud downsampling (meters)
             workspace_bounds: Workspace bounds for filtering [[x_min, x_max], [y_min, y_max], [z_min, z_max]]
             max_objects: Maximum number of objects for one-hot encoding (must match training config)
+            object_filter: Optional list of object name patterns to keep (e.g., ['nut', 'peg'] for assembly tasks)
+                          If None, auto-detects based on environment name
         """
         self.env = env
         self.sim = env.sim
         self.camera_names = camera_names or ["frontview", "agentview"]
         self.num_points = num_points
         self.max_objects = max_objects  # Must match training config for embedding layer
+        
+        # Auto-detect task-specific filter if not provided
+        if object_filter is None:
+            object_filter = self._get_default_filter_for_task(env)
+        self.object_filter = object_filter
         
         # Default workspace bounds
         if workspace_bounds is None:
@@ -91,11 +99,21 @@ class StateConverter:
             self.mujoco_name_map[clean_name] = full_name
             self.object_metadata[clean_name] = metadata
         
+        # Apply task-specific filtering if specified
+        if self.object_filter:
+            print(f"Applying task-specific object filter: {self.object_filter}")
+            self._apply_object_filter()
+        
         self.num_objects = len(self.object_metadata)
         
         # Use clean names everywhere
         self.object_names = sorted(self.object_metadata.keys())
         self.object_name_to_id = {name: idx for idx, name in enumerate(self.object_names)}
+        
+        # Check if we still exceed max_objects after filtering
+        if self.num_objects > self.max_objects:
+            print(f"⚠ Warning: After filtering, still have {self.num_objects} objects but model supports max {self.max_objects}")
+            print(f"  Consider refining your object filter or increasing max_objects")
         
         print(f"Detected objects (clean names): {self.object_names}")
         print(f"MuJoCo name mapping: {self.mujoco_name_map}")
@@ -317,6 +335,8 @@ class StateConverter:
         # Create one-hot encoding with max_objects columns
         # Object i gets index i in the one-hot encoding
         encodings = np.zeros((self.num_objects, self.max_objects))
+
+        print(f"Building one-hot encodings for {self.num_objects} objects (max {self.max_objects})")
         
         for obj_idx in range(self.num_objects):
             # Assign object its own index (0, 1, 2, ..., num_objects-1)
@@ -382,3 +402,75 @@ class StateConverter:
             Full MuJoCo name (e.g., "cubeA_main") or clean_name if not found
         """
         return self.mujoco_name_map.get(clean_name, clean_name)
+    
+    def _get_default_filter_for_task(self, env) -> Optional[List[str]]:
+        """
+        Get default object filter based on environment/task type.
+        
+        Args:
+            env: Robosuite environment
+        
+        Returns:
+            List of object name patterns to keep, or None for no filtering
+        """
+        env_name = env.__class__.__name__.lower()
+        
+        # Task-specific filters
+        if 'nut' in env_name or 'assembly' in env_name:
+            # NutAssembly tasks: keep nuts and pegs only
+            return ['nut', 'peg', 'round-nut', 'square-nut', 'table']
+        
+        elif 'stack' in env_name:
+            # Stacking tasks: keep cubes only
+            return ['cube', 'table']
+        
+        elif 'pickplace' in env_name:
+            # PickPlace tasks: keep manipulable objects (not bin/table)
+            return ['milk', 'bread', 'cereal', 'can', 'cube', 'object', 'table']
+        
+        elif 'door' in env_name:
+            # Door tasks: keep door and handle
+            return ['door', 'handle', 'table']
+        
+        else:
+            # Unknown task: no filtering (keep all objects)
+            return None
+    
+    def _apply_object_filter(self):
+        """
+        Apply task-specific object filtering.
+        
+        Keeps only objects whose names match any pattern in self.object_filter.
+        Uses case-insensitive substring matching.
+        """
+        if not self.object_filter:
+            return
+        
+        original_count = len(self.object_metadata)
+        original_names = list(self.object_metadata.keys())
+        
+        # Filter objects
+        filtered_metadata = {}
+        filtered_mujoco_map = {}
+        
+        for obj_name in original_names:
+            # Check if object matches any filter pattern
+            obj_lower = obj_name.lower()
+            matches = any(pattern.lower() in obj_lower for pattern in self.object_filter)
+            
+            if matches:
+                filtered_metadata[obj_name] = self.object_metadata[obj_name]
+                filtered_mujoco_map[obj_name] = self.mujoco_name_map[obj_name]
+        
+        # Update state
+        self.object_metadata = filtered_metadata
+        self.mujoco_name_map = filtered_mujoco_map
+        
+        filtered_count = len(self.object_metadata)
+        removed_count = original_count - filtered_count
+        
+        if removed_count > 0:
+            removed_names = [name for name in original_names if name not in self.object_metadata]
+            print(f"  Filtered: {original_count} → {filtered_count} objects ({removed_count} removed)")
+            print(f"  Kept: {sorted(self.object_metadata.keys())}")
+            print(f"  Removed: {sorted(removed_names)}")
