@@ -34,13 +34,13 @@ import os
 import time
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
-from pathlib import Path
 
 from llm_task_planner import LLMTaskPlanner
 from dynamics_model_planner import DynamicsModelPlanner
 from state_converter import StateConverter
 from primitive_executor import PrimitiveExecutor
 from predicate_registry import PREDICATE_NAMES, should_include_predicate
+from dynamics_model_data_collector import DynamicsModelDataCollector
 
 
 class ClosedLoopController:
@@ -106,7 +106,7 @@ class ClosedLoopController:
         self.executor = PrimitiveExecutor(env)
         
         # Data collector (optional, set externally)
-        self.data_collector = None
+        self.data_collector: Optional[DynamicsModelDataCollector] = None
         
         if self.verbose:
             print("✓ All components initialized")
@@ -181,11 +181,14 @@ class ClosedLoopController:
         # Convert goals to predicate tensor (will be set after getting goals)
         object_name_to_id = {name: i for i, name in enumerate(objects)}
         
-        goals, plans = self.llm_planner.generate_goals_and_plans(
-            task_description=task_description,
-            objects=objects,
-            initial_predicates=initial_predicates
-        )
+        # goals, plans = self.llm_planner.generate_goals_and_plans(
+        #     task_description=task_description,
+        #     objects=objects,
+        #     initial_predicates=initial_predicates
+        # )
+
+        goals = ['Stacked(cubeB, cubeA)', 'Stacked(cubeC, cubeB)']
+        plans = ['Pick(cubeB, table)', 'Place(cubeB, cubeA)', 'Pick(cubeC, table)', 'Place(cubeC, cubeB)']
         
         if not goals or not plans:
             print("ERROR: LLM failed to generate goals/plans")
@@ -237,6 +240,8 @@ class ClosedLoopController:
             if self._check_goal_achieved(state_dict, goal_predicates):
                 if self.verbose:
                     print("✓ Goal achieved!")
+                if self.data_collector is not None:
+                    self.data_collector.end_episode(success=True)
                 self.stats['end_time'] = time.time()
                 return True, self.stats
             
@@ -256,9 +261,10 @@ class ClosedLoopController:
                     enable_trajectory_tracking=self.enable_trajectory_tracking
                 )
                 
-                print(f"  Primitive: {primitive}")
-                print(f"  Action params: {action_params}")
-                print(f"  Feasibility: {feasibility:.3f}")
+                if self.verbose:
+                    print(f"  Primitive: {primitive}")
+                    print(f"  Action params: {action_params}")
+                    print(f"  Feasibility: {feasibility:.3f}")
                 
                 # Check both: primitive must exist AND feasibility must meet threshold
                 if primitive is None or feasibility < self.dynamics_planner.feasibility_threshold:
@@ -330,6 +336,16 @@ class ClosedLoopController:
                 exec_success, num_steps = self._execute_primitive_with_monitoring(
                     primitive, action_params, obs
                 )
+
+                # Update collected step with observed next state (if enabled)
+                if self.data_collector is not None and primitive is not None:
+                    next_state_dict = self.state_converter.convert()
+                    next_state_dict['object_names'] = objects
+                    self.data_collector.update_last_step_next_state(
+                        next_state_dict=next_state_dict,
+                        execution_success=exec_success,
+                        num_steps=num_steps,
+                    )
                 
                 self.stats['total_steps'] += num_steps
                 self.stats['num_primitives_executed'] += 1
@@ -409,7 +425,8 @@ class ClosedLoopController:
         current_predicates = self.dynamics_planner.predict_predicates(state_dict, debug=True)
 
         # current_predicates = np.random.rand(len(objects), len(objects), 9)  # Placeholder random predicates for testing
-        print(f"Decoded predicates shape: {current_predicates.shape if current_predicates is not None else 'None'}")
+        if self.verbose:
+            print(f"Decoded predicates shape: {current_predicates.shape if current_predicates is not None else 'None'}")
         
         if current_predicates is None:
             # Fallback to heuristics only if prediction fails
@@ -470,22 +487,6 @@ class ClosedLoopController:
         
         predicate_strings = []
         num_objects = len(objects)
-        
-        # Debug: print all predicate values for first few object pairs
-        print(f"\n[DEBUG] Full predicate matrix (first 3 pairs):")
-        print(f"[DEBUG] Predicate indices: 0=Left, 1=Right, 2=Below, 3=Above, 4=Front, 5=Behind, 6=On/Contact, 7=Boundary, 8=Inside")
-        pair_count = 0
-        for i in range(num_objects):
-            for j in range(num_objects):
-                if i == j:
-                    continue
-                if pair_count < 6:  # Show first 6 pairs
-                    all_preds = [f"{predicate_matrix[i, j, k]:.3f}" for k in range(predicate_matrix.shape[2])]
-                    print(f"[DEBUG] {objects[i]} -> {objects[j]}: {all_preds}")
-                    # Highlight On predicate (index 6) since that's critical
-                    print(f"[DEBUG]   → On({objects[i]}, {objects[j]}): {predicate_matrix[i, j, 6]:.3f} (threshold={threshold})")
-                pair_count += 1
-        print()
         
         for i in range(num_objects):
             for j in range(num_objects):

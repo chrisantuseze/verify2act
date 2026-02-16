@@ -33,6 +33,7 @@ class CriticDataCollector:
         trajectory: List[Dict],
         predicate_embeddings: List[np.ndarray],
         plan_summaries: List[np.ndarray],
+        step_metadata: Optional[List[Dict]] = None,
     ):
         """
         Add positive samples from a successful trajectory.
@@ -55,6 +56,8 @@ class CriticDataCollector:
                 "source": "successful_trajectory",
                 "step_idx": step_idx,
             }
+            if step_metadata is not None and step_idx < len(step_metadata):
+                sample.update(step_metadata[step_idx])
             self.positive_samples.append(sample)
     
     def add_failed_trajectory(
@@ -64,6 +67,7 @@ class CriticDataCollector:
         plan_summaries: List[np.ndarray],
         failure_step: int,
         failure_type: str = "predicate",
+        step_metadata: Optional[List[Dict]] = None,
     ):
         """
         Add negative samples from a failed trajectory.
@@ -91,6 +95,8 @@ class CriticDataCollector:
                     "source": "pre_failure",
                     "step_idx": step_idx,
                 }
+                if step_metadata is not None and step_idx < len(step_metadata):
+                    sample.update(step_metadata[step_idx])
                 self.positive_samples.append(sample)
             
             # Failure step is negative
@@ -107,6 +113,8 @@ class CriticDataCollector:
                     "source": f"failure_{failure_type}",
                     "step_idx": step_idx,
                 }
+                if step_metadata is not None and step_idx < len(step_metadata):
+                    sample.update(step_metadata[step_idx])
                 self.negative_samples.append(sample)
     
     def generate_hard_negatives(

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 import numpy as np
 from typing import Dict, List, Optional, Tuple
+import copy
 import torch
 
 # Add verify2act critic to path
@@ -126,21 +127,49 @@ class DynamicsModelDataCollector:
             next_state_dict: Predicted next state (optional, for z_next)
             feasibility_score: Feasibility score for this action (optional)
         """
+        if obj_id is None:
+            if self.verbose:
+                print(f"  [Step {step_idx}] Skipping record: unresolved obj_id")
+            return
+
         # Store raw data in buffer (will extract embeddings at episode end)
         step_data = {
             'step_idx': step_idx,
-            'state_dict': state_dict,
+            'state_dict': copy.deepcopy(state_dict),
             'action_params': action_params,
             'obj_id': obj_id,
             'target_id': target_id,
-            'next_state_dict': next_state_dict,
+            'next_state_dict': copy.deepcopy(next_state_dict) if next_state_dict is not None else None,
             'feasibility_score': feasibility_score,
+            'execution_success': None,
+            'num_steps': None,
         }
         
         self.current_episode_buffer.append(step_data)
         
         if self.verbose:
             print(f"  [Step {step_idx}] Recorded action: obj={obj_id}, target={target_id}")
+
+    def update_last_step_next_state(
+        self,
+        next_state_dict: Dict,
+        execution_success: Optional[bool] = None,
+        num_steps: Optional[int] = None,
+    ) -> None:
+        """
+        Update the most recently recorded step with executed next state.
+
+        Args:
+            next_state_dict: Observed post-execution state dictionary
+            execution_success: Whether primitive execution succeeded
+            num_steps: Number of simulator steps taken for execution
+        """
+        if not self.current_episode_buffer:
+            return
+
+        self.current_episode_buffer[-1]['next_state_dict'] = copy.deepcopy(next_state_dict)
+        self.current_episode_buffer[-1]['execution_success'] = execution_success
+        self.current_episode_buffer[-1]['num_steps'] = num_steps
     
     def end_episode(
         self,
@@ -164,6 +193,7 @@ class DynamicsModelDataCollector:
         trajectory = []
         predicate_embeddings = []
         plan_summaries = []
+        step_metadata = []
         
         for step_data in self.current_episode_buffer:
             # Extract z_t (current state latent)
@@ -207,6 +237,16 @@ class DynamicsModelDataCollector:
             })
             predicate_embeddings.append(predicate_embed)
             plan_summaries.append(plan_summary)
+            step_metadata.append({
+                'state_dict': step_data['state_dict'],
+                'next_state_dict': step_data['next_state_dict'],
+                'action_params': step_data['action_params'],
+                'obj_id': step_data['obj_id'],
+                'target_id': step_data['target_id'],
+                'feasibility_score': step_data.get('feasibility_score'),
+                'execution_success': step_data.get('execution_success'),
+                'num_steps': step_data.get('num_steps'),
+            })
         
         # Add to collector based on success/failure
         if success:
@@ -214,6 +254,7 @@ class DynamicsModelDataCollector:
                 trajectory=trajectory,
                 predicate_embeddings=predicate_embeddings,
                 plan_summaries=plan_summaries,
+                step_metadata=step_metadata,
             )
             self.success_count += 1
             if self.verbose:
@@ -229,6 +270,7 @@ class DynamicsModelDataCollector:
                 plan_summaries=plan_summaries,
                 failure_step=failure_step,
                 failure_type=failure_type,
+                step_metadata=step_metadata,
             )
             self.failure_count += 1
             if self.verbose:
@@ -281,7 +323,7 @@ class DynamicsModelDataCollector:
         
         # Balance dataset (generate hard negatives if enabled)
         if self.enable_hard_negatives:
-            balanced_data = self.collector.balance_dataset(
+            self.collector.balance_dataset(
                 negative_augmentation=True,
                 target_ratio=1.0,
             )

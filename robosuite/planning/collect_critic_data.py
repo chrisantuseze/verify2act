@@ -6,7 +6,8 @@ Automatically labels successful and failed trajectories.
 
 Usage:
     # Collect 50 episodes on Stack3 task
-    xvfb-run -a python collect_critic_data.py --num-episodes 50 --task Stack3
+    xvfb-run -a python collect_critic_data.py --num-episodes 50 --task Stack3 \
+    --checkpoint ../../Points2Plans/ckpt/checkpoint/cp_99.pth
     
     # Collect with specific checkpoint
     xvfb-run -a python collect_critic_data.py \
@@ -45,7 +46,7 @@ import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
 from closed_loop_controller import ClosedLoopController
 from dynamics_model_data_collector import DynamicsModelDataCollector
-
+import parse_util
 
 def create_env_factory(env_name: str, args=None):
     """
@@ -137,16 +138,6 @@ def collect_data(
     # Create controller with data collection enabled
     print(f"\n[2/3] Initializing controller with data collector...")
     
-    # Create args object for controller
-    controller_args = type('Args', (), {
-        'model_config_path': '../../Points2Plans/LLM/configs/models/pretrained/generative/gpt_4_cot.yaml',
-        'prompt_config_path': 'configs/prompts/tasks/stack_task.yaml',
-        'lookahead_depth': 2,
-        'predicate_threshold': 0.3,
-        'enable_trajectory_tracking': False,
-        'num_planning_samples': 50,
-    })()
-    
     # Determine task type for predicate filtering
     if args.task.lower() in ["clutterednutassembly", "nutassembly"]:
         task_type = "assembly"
@@ -159,15 +150,15 @@ def collect_data(
     
     # Create controller
     controller = ClosedLoopController(
-        controller_args,
+        args,
         env=env,
         checkpoint_path=checkpoint_path,
-        lookahead_depth=2,
+        lookahead_depth=args.lookahead_depth,
         enable_collision_checking=True,
-        predicate_threshold=0.3,
-        enable_trajectory_tracking=False,
-        delta_forward=True,
-        latent_forward=False,
+        predicate_threshold=args.predicate_threshold,
+        enable_trajectory_tracking=args.enable_trajectory_tracking,
+        delta_forward=args.delta_forward,
+        latent_forward=args.latent_forward,
         verbose=False,  # Disable controller verbosity for cleaner output
         task_type=task_type
     )
@@ -180,8 +171,8 @@ def collect_data(
         verbose=verbose,
     )
     
-    # Attach collector to controller's planner
-    controller.dynamics_planner.data_collector = data_collector
+    # Attach collector to controller
+    controller.data_collector = data_collector
     
     print("  ✓ Controller and data collector initialized")
     
@@ -211,21 +202,6 @@ def collect_data(
                 max_primitives=args.max_primitives,
                 initial_predicates=None
             )
-            
-            # Determine failure step if episode failed
-            failure_step = None
-            failure_type = "predicate"
-            
-            if not success:
-                # Estimate failure step from stats
-                failure_step = stats.get('num_primitives_executed', 0) - 1
-                failure_step = max(0, failure_step)
-                
-                # Determine failure type from stats
-                if stats.get('collision_detected', False):
-                    failure_type = "feasibility"
-                else:
-                    failure_type = "predicate"
             
             print(f"  Result: {'SUCCESS' if success else 'FAILED'}")
             print(f"  Primitives executed: {stats.get('num_primitives_executed', 0)}")
@@ -257,20 +233,7 @@ def collect_data(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Collect critic training data")
-    parser.add_argument(
-        "--task",
-        type=str,
-        default="ClutteredNutAssembly",
-        choices=["Stack", "Stack3", "Stack4", "PickPlace", "ClutteredNutAssembly"],
-        help="Task to collect data from"
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default="../../Points2Plans/ckpt/checkpoint/cp_99.pth",
-        help="Path to trained model checkpoint"
-    )
+    parser = parse_util.get_parser(desc="Collect critic training data")
     parser.add_argument(
         "--num-episodes",
         type=int,
@@ -286,49 +249,14 @@ def main():
     parser.add_argument(
         "--save-interval",
         type=int,
-        default=25,
+        default=1,
         help="Save dataset every N episodes"
     )
-    parser.add_argument(
-        "--max-primitives",
-        type=int,
-        default=20,
-        help="Maximum primitives per episode"
-    )
+    
     parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose output"
-    )
-
-    # ClutteredNutAssembly specific arguments
-    parser.add_argument(
-        '--num-round',
-        type=int,
-        default=6,
-        help='Number of round nuts (ClutteredNutAssembly only)'
-    )
-    
-    parser.add_argument(
-        '--num-square',
-        type=int,
-        default=2,
-        help='Number of square nuts (ClutteredNutAssembly only)'
-    )
-    
-    parser.add_argument(
-        '--initial-stacking-prob',
-        type=float,
-        default=0.6,
-        help='Probability of initial nut stacking (ClutteredNutAssembly only)'
-    )
-    
-    parser.add_argument(
-        '--nut-type-mode',
-        type=str,
-        default='roundnut',
-        choices=['roundnut', 'squarenut'],
-        help='Which nut type to target (ClutteredNutAssembly only)'
     )
     
     args = parser.parse_args()

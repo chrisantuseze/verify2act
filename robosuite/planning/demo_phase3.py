@@ -55,6 +55,8 @@ import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
 from closed_loop_controller import ClosedLoopController, BatchController
 
+import parse_util
+
 def create_env_factory(env_name: str, args):
     """
     Create environment factory function based on environment name.
@@ -134,10 +136,6 @@ def demo_single_episode(
     # Create controller
     print("\n[2/3] Initializing closed-loop controller...")
     
-    # Get lookahead depth from args if available
-    lookahead_depth = getattr(args, 'lookahead_depth', 2)  # Default to 2-step
-    predicate_threshold = getattr(args, 'predicate_threshold', 0.5)  # Default to 0.5
-    
     # Determine task type for predicate filtering
     if task.lower() in ["clutterednutassembly", "nutassembly"]:
         task_type = "assembly"
@@ -152,9 +150,9 @@ def demo_single_episode(
         args,
         env=env,
         checkpoint_path=checkpoint_path,
-        lookahead_depth=lookahead_depth,
+        lookahead_depth=args.lookahead_depth,
         enable_collision_checking=True,
-        predicate_threshold=predicate_threshold,
+        predicate_threshold=args.predicate_threshold,
         enable_trajectory_tracking=args.enable_trajectory_tracking,
         delta_forward=args.delta_forward,
         latent_forward=args.latent_forward,
@@ -317,159 +315,8 @@ def demo_failure_recovery(
     
     return success, stats
 
-def str2bool(v):
-    if isinstance(v, bool):
-       return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Phase 3 Demo: Full Integration")
-    parser.add_argument(
-        "--task",
-        type=str,
-        default="ClutteredNutAssembly",
-        choices=["Stack", "Stack3", "Stack4", "PickPlace", "ClutteredNutAssembly"],
-        help="Task to run"
-    )
-    # ClutteredNutAssembly specific arguments
-    parser.add_argument(
-        "--num-round",
-        type=int,
-        default=6,
-        help="Number of round nuts (ClutteredNutAssembly only)"
-    )
-    parser.add_argument(
-        "--num-square",
-        type=int,
-        default=2,
-        help="Number of square nuts (ClutteredNutAssembly only)"
-    )
-    parser.add_argument(
-        "--initial-stacking-prob",
-        type=float,
-        default=0.6,
-        help="Probability of initial nut stacking (ClutteredNutAssembly only)"
-    )
-    parser.add_argument(
-        "--nut-type-mode",
-        type=str,
-        default="roundnut",
-        choices=["roundnut", "squarenut"],
-        help="Which nut type to target (ClutteredNutAssembly only)"
-    )
-    parser.add_argument(
-        "--checkpoint",
-        type=str,
-        default="../../Points2Plans/ckpt/checkpoint/cp_1.pth",
-        help="Path to trained model checkpoint"
-    )
-    parser.add_argument(
-        "--model-config-path",
-        type=str,
-        default="../../Points2Plans/LLM/configs/models/pretrained/generative/gpt_4_cot.yaml",
-        help="Path to model configuration"
-    )
-    parser.add_argument(
-        "--prompt-config-path",
-        type=str,
-        default="configs/prompts/tasks/stack_task.yaml",
-        help="Path to prompt configuration"
-    )
-    parser.add_argument(
-        "--render",
-        action="store_true",
-        help="Enable on-screen rendering (requires display)"
-    )
-    parser.add_argument(
-        "--batch",
-        action="store_true",
-        help="Run batch evaluation instead of single episode"
-    )
-    parser.add_argument(
-        "--num-trials",
-        type=int,
-        default=5,
-        help="Number of trials for batch evaluation"
-    )
-    parser.add_argument(
-        "--max-primitives",
-        type=int,
-        default=5,
-        help="Maximum primitives per episode"
-    )
-    parser.add_argument(
-        "--max-replans-per-primitive",
-        type=int,
-        default=3,
-        help="Maximum replans per primitive execution"
-    )
-    parser.add_argument(
-        "--goal-threshold",
-        type=float,
-        default=0.8,
-        help="Threshold for goal achievement (predicate difference)"
-    )
-    parser.add_argument(
-        "--num-planning-samples",
-        type=int,
-        default=50,
-        help="Number of action samples for rejection sampling"
-    )
-    parser.add_argument(
-        "--delta-forward",
-        type=str2bool, 
-        default=True, #Trained with True
-        help="Use delta forward prediction in dynamics model"
-    )
-    parser.add_argument(
-        "--latent-forward",
-        type=str2bool, 
-        default=False, # Trained with False
-        help="Use latent space forward prediction in dynamics model"
-    )
-    parser.add_argument(
-        "--demo-recovery",
-        type=str2bool, 
-        default=False,
-        help="Run failure recovery demo"
-    )
-    parser.add_argument(
-        "--lookahead-depth",
-        type=int,
-        default=2,
-        choices=[1, 2, 3],
-        help="Number of primitives to simulate ahead (1=greedy, 2-3=multi-step)"
-    )
-    parser.add_argument(
-        "--predicate-threshold",
-        type=float,
-        default=0.3,
-        help="Threshold for predicate matching (default 0.3, use lower for undertrained models)"
-    )
-    parser.add_argument(
-        "--enable-trajectory-tracking",
-        type=str2bool,
-        default=False,
-        help="Enable trajectory tracking during planning"
-    )
-    parser.add_argument(
-        "--collect-data",
-        action="store_true",
-        help="Enable critic data collection"
-    )
-    parser.add_argument(
-        "--data-save-dir",
-        type=str,
-        default="./data/critic",
-        help="Directory to save collected critic data"
-    )
-    
+    parser = parse_util.get_parser(desc="Phase 3 Demo: Full Closed-Loop Controller with Robosuite Environment")
     args = parser.parse_args()
 
 
