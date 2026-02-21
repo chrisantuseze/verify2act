@@ -36,10 +36,10 @@ Usage:
     --nut-type-mode roundnut
 """
 
-import os
-# Set rendering backend before robosuite imports
-if 'MUJOCO_GL' not in os.environ:
-    os.environ['MUJOCO_GL'] = 'glx'
+# import os
+# # Set rendering backend before robosuite imports
+# if 'MUJOCO_GL' not in os.environ:
+#     os.environ['MUJOCO_GL'] = 'glx'
 
 import argparse
 import sys

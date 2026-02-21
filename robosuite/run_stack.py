@@ -24,7 +24,7 @@ class HeuristicStackPolicy:
     
     # Height offsets
     GRIP_OFFSET = 0.0  # Gripper offset for grasping
-    OBJ_OFFSET = 0.03  # Z-offset above objects before grasping
+    OBJ_OFFSET = 0.05  # Z-offset above objects before grasping
     STACK_OFFSET = 0.01  # Small additional height for safety during stacking
     SAFE_Z_OFFSET = 0.1  # Safe height for lifting and moving
     
@@ -60,6 +60,9 @@ class HeuristicStackPolicy:
         self.pair_idx = 0
         self.post_grasp_source_pos = None
         self.post_place_target_pos = None
+
+        # Cache initial EEF position for reset orientation stage
+        self.init_eef_pos = self.obs.get("robot0_eef_pos", None)
         
         self._print_initialization_info()
     
@@ -305,7 +308,11 @@ class HeuristicStackPolicy:
         
         # Move to next source cube position but maintain current height
         # This prevents knocking off stacked cubes during horizontal movement
-        desired = np.array([source_pos[0], source_pos[1], eef_pos[2]])
+        
+        if self.init_eef_pos is not None:
+            desired = np.array([source_pos[0], source_pos[1], self.init_eef_pos[2] + self.OBJ_OFFSET])  # Start from initial EEF position for consistent height
+        else:
+            desired = np.array([source_pos[0], source_pos[1], eef_pos[2] + self.OBJ_OFFSET])
         
         action[:3] = self.compute_position_action(desired, eef_pos)
         action[6] = -1  # Open gripper

@@ -44,7 +44,9 @@ class StateConverter:
                  voxel_size: float = 0.005,
                  workspace_bounds: Optional[np.ndarray] = None,
                  max_objects: int = 12,
-                 object_filter: Optional[List[str]] = None):
+                 object_filter: Optional[List[str]] = None,
+                 training_compatible_one_hot: bool = False,
+                 one_hot_seed: Optional[int] = None):
         """
         Initialize state converter.
         
@@ -57,12 +59,19 @@ class StateConverter:
             max_objects: Maximum number of objects for one-hot encoding (must match training config)
             object_filter: Optional list of object name patterns to keep (e.g., ['nut', 'peg'] for assembly tasks)
                           If None, auto-detects based on environment name
+            training_compatible_one_hot: If True, mimic Points2Plans training behavior by
+                                        assigning each object a randomized embedding slot.
+                                        Points2Plans trains with random slot assignment per scene;
+                                        enabling this at inference matches that distribution.
+            one_hot_seed: Optional int seed for deterministic slot assignment (reproducible runs).
         """
         self.env = env
         self.sim = env.sim
         self.camera_names = camera_names or ["frontview", "agentview"]
         self.num_points = num_points
         self.max_objects = max_objects  # Must match training config for embedding layer
+        self.training_compatible_one_hot = training_compatible_one_hot
+        self.one_hot_seed = one_hot_seed
         
         # Auto-detect task-specific filter if not provided
         if object_filter is None:
@@ -109,6 +118,7 @@ class StateConverter:
         # Use clean names everywhere
         self.object_names = sorted(self.object_metadata.keys())
         self.object_name_to_id = {name: idx for idx, name in enumerate(self.object_names)}
+        self.object_slot_indices = self._build_object_slot_indices()
         
         # Check if we still exceed max_objects after filtering
         if self.num_objects > self.max_objects:
@@ -130,6 +140,8 @@ class StateConverter:
         print(f"  Object types: {self.object_types}")
         print(f"  Points per object: {num_points}")
         print(f"  Cameras: {self.camera_names}")
+        if self.training_compatible_one_hot:
+            print(f"  Training-compatible one-hot slots: {self.object_slot_indices.tolist()}")
     
     def convert(self, obs: Optional[Dict] = None) -> Dict[str, torch.Tensor]:
         """
@@ -191,14 +203,29 @@ class StateConverter:
             Array of shape [num_objects, num_points, 3]
         """
         point_clouds = []
+        missing_objects = []
         
         # Generate segmented point clouds for all objects
         # Pass clean names since pointcloud_generator returns clean names (e.g., "cubeA" not "cubeA_main")
-        object_pcds = self.pcd_generator.generate_segmented(
+        object_pcds_raw = self.pcd_generator.generate_segmented(
             self.env,
             self.camera_names,
             object_names=self.object_names  # Use clean names
         )
+        
+        # Normalize point-cloud keys to clean names (e.g., "cubeA_main" -> "cubeA")
+        # to match self.object_names from metadata extraction.
+        object_pcds = {}
+        for raw_name, pcd in object_pcds_raw.items():
+            clean_name = raw_name.split('_')[0] if '_' in raw_name else raw_name
+            if clean_name not in object_pcds:
+                object_pcds[clean_name] = pcd
+                continue
+
+            # If multiple geoms/bodies map to the same clean object name,
+            # keep the richer point cloud.
+            if len(pcd.points) > len(object_pcds[clean_name].points):
+                object_pcds[clean_name] = pcd
         
         # Convert to numpy arrays and resample to fixed size
         for clean_name in self.object_names:
@@ -208,6 +235,7 @@ class StateConverter:
             if pcd is None or len(pcd.points) == 0:
                 # No points for this object, use zeros
                 resampled = np.zeros((self.num_points, 3))
+                missing_objects.append(clean_name)
             else:
                 # Convert Open3D point cloud to numpy
                 points = np.asarray(pcd.points)
@@ -216,6 +244,9 @@ class StateConverter:
             
             point_clouds.append(resampled)
         
+        if missing_objects:
+            print(f"Warning: Missing segmented points for objects: {missing_objects}")
+
         return np.array(point_clouds)  # [num_objects, num_points, 3]
     
     def _resample_point_cloud(self, points: np.ndarray, target_size: int) -> np.ndarray:
@@ -235,13 +266,17 @@ class StateConverter:
             return np.zeros((target_size, 3))
         
         if num_points >= target_size:
-            # Downsample: randomly select
-            indices = np.random.choice(num_points, target_size, replace=False)
+            # Deterministic downsample for stable inference
+            indices = np.linspace(0, num_points - 1, target_size, dtype=np.int64)
             return points[indices]
         else:
-            # Upsample: random selection with replacement
-            indices = np.random.choice(num_points, target_size, replace=True)
-            return points[indices]
+            # Deterministic upsample by tiling + remainder
+            repeats = target_size // num_points
+            remainder = target_size % num_points
+            tiled = np.tile(points, (repeats, 1))
+            if remainder > 0:
+                tiled = np.concatenate([tiled, points[:remainder]], axis=0)
+            return tiled
     
     def _extract_object_poses(self, obs: Dict) -> np.ndarray:
         """
@@ -333,17 +368,32 @@ class StateConverter:
             Array of shape [num_objects, max_objects]
         """
         # Create one-hot encoding with max_objects columns
-        # Object i gets index i in the one-hot encoding
+        # Object i gets an embedding slot from self.object_slot_indices.
         encodings = np.zeros((self.num_objects, self.max_objects))
-
-        print(f"Building one-hot encodings for {self.num_objects} objects (max {self.max_objects})")
         
         for obj_idx in range(self.num_objects):
-            # Assign object its own index (0, 1, 2, ..., num_objects-1)
-            # This is simpler than random assignment but consistent
-            encodings[obj_idx, obj_idx] = 1.0
+            encodings[obj_idx, self.object_slot_indices[obj_idx]] = 1.0
         
         return encodings
+
+    def _build_object_slot_indices(self) -> np.ndarray:
+        """Build object->embedding-slot mapping for one-hot encoding."""
+        if self.max_objects <= 0:
+            raise ValueError(f"max_objects must be > 0, got {self.max_objects}")
+
+        if self.num_objects > self.max_objects:
+            raise ValueError(
+                f"num_objects ({self.num_objects}) exceeds max_objects ({self.max_objects}). "
+                f"Use object_filter to reduce tracked objects or increase model capacity."
+            )
+
+        if not self.training_compatible_one_hot:
+            return np.arange(self.num_objects, dtype=np.int64)
+
+        all_slots = np.arange(self.max_objects, dtype=np.int64)
+        rng = np.random.default_rng(self.one_hot_seed)
+        rng.shuffle(all_slots)
+        return all_slots[:self.num_objects]
     
     def _build_edge_indices(self) -> np.ndarray:
         """

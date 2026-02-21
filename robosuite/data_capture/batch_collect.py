@@ -4,18 +4,18 @@ Batch Data Collection Script for Points2Plans Dataset
 Integrates with HeuristicStackPolicy from run_stack.py to automatically
 collect multiple episodes with progress tracking and error recovery.
 
-xvfb-run -a python data_capture/batch_collect.py \
+xvfb-run -a python batch_collect.py \
     --env Stack3 \
     --num-episodes 1 \
     --output-dir data_capture/dataset/stack_v1
 
-xvfb-run -a python data_capture/batch_collect.py \
+xvfb-run -a python batch_collect.py \
     --env ClutteredNutAssembly \
     --max-timesteps 3000 --output-dir data_capture/dataset/nut_assembly \
     --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
     --nut-type-mode roundnut --num-episodes 100 --seed 42
 
-xvfb-run -a python data_capture/batch_collect.py \
+xvfb-run -a python batch_collect.py \
     --env Stack3 \
     --max-timesteps 1000 --output-dir data_capture/dataset/stack3 \
     --num-episodes 100 --seed 42
@@ -23,10 +23,10 @@ xvfb-run -a python data_capture/batch_collect.py \
 Phase 4: Batch Collection ✓
 """
 
-# import os
-# # Set rendering backend before robosuite imports
-# if 'MUJOCO_GL' not in os.environ:
-#     os.environ['MUJOCO_GL'] = 'glx'
+import os
+# Set rendering backend before robosuite imports
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time

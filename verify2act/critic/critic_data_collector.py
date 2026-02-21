@@ -79,6 +79,7 @@ class CriticDataCollector:
             failure_step: Index of the step where failure occurred
             failure_type: "predicate", "feasibility", or "noninterference"
         """
+        print(f"Adding failed trajectory with failure at step {failure_step} ({failure_type})")
         # Label all steps
         for step_idx, step_data in enumerate(trajectory):
             # Steps before failure are positive
@@ -116,6 +117,7 @@ class CriticDataCollector:
                 if step_metadata is not None and step_idx < len(step_metadata):
                     sample.update(step_metadata[step_idx])
                 self.negative_samples.append(sample)
+                print(f"  ✓ Added failure sample at step {step_idx}")
     
     def generate_hard_negatives(
         self,

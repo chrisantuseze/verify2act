@@ -96,11 +96,11 @@ class DynamicsModelPlanner:
         # Per-channel gain (disabled by default). Use sensitivity sweep to populate indices.
         # Set `per_channel_gain_enabled=True` to enable applying multiplicative gains
         # to specific latent channels (helps amplify predicate-sensitive dims).
-        self.per_channel_gain_enabled = True
+        self.per_channel_gain_enabled = False
         # Top channels from the recent sweep (On predicate): [9,77,94,105,72,31,36,83,45,3]
         self.per_channel_gain_indices = [9, 77, 94, 105, 72, 31, 36, 83, 45, 3]
         # Multiplicative gain applied to those channels (start modest, e.g., 5.0)
-        self.per_channel_gain_value = 30.0
+        self.per_channel_gain_value = 1.0
         # Debug flag: enable detailed diagnostic logging during simulation
         self.debug = True
 
@@ -140,6 +140,40 @@ class DynamicsModelPlanner:
         self.model.emb_model.eval()
         self.model.classif_model.eval()
         self.model.classif_model_decoder.eval()
+
+        # Cache embedding table capacity for one-hot IDs used by classif_model.
+        # one_hot_encoding_embed is nn.Sequential(nn.Embedding(...)), so the Embedding
+        # is at index [0]; num_embeddings is not a property of nn.Sequential itself.
+        self.one_hot_num_embeddings = int(self.model.classif_model.one_hot_encoding_embed[0].num_embeddings)
+
+        # Align converter one-hot dimensionality with checkpoint embedding table to
+        # avoid out-of-range embedding indices (CUDA device-side assert).
+        if self.state_converter is not None and hasattr(self.state_converter, 'max_objects'):
+            if self.state_converter.max_objects != self.one_hot_num_embeddings:
+                print(
+                    f"⚠ One-hot dimension mismatch detected: "
+                    f"state_converter.max_objects={self.state_converter.max_objects}, "
+                    f"checkpoint embedding size={self.one_hot_num_embeddings}. "
+                    f"Auto-aligning converter to checkpoint size."
+                )
+                self.state_converter.max_objects = self.one_hot_num_embeddings
+
+                if hasattr(self.state_converter, '_build_object_slot_indices'):
+                    self.state_converter.object_slot_indices = self.state_converter._build_object_slot_indices()
+                    if getattr(self.state_converter, 'training_compatible_one_hot', False):
+                        print(
+                            f"  Recomputed training-compatible slots: "
+                            f"{self.state_converter.object_slot_indices.tolist()}"
+                        )
+
+            if hasattr(self.state_converter, 'num_objects'):
+                if self.state_converter.num_objects > self.one_hot_num_embeddings:
+                    raise ValueError(
+                        f"Number of objects ({self.state_converter.num_objects}) exceeds "
+                        f"checkpoint embedding capacity ({self.one_hot_num_embeddings}). "
+                        f"Reduce tracked objects via object_filter or use a checkpoint trained "
+                        f"with larger max_objects."
+                    )
         
         print(f"Dynamics Model Planner initialized:")
         print(f"  Checkpoint: {checkpoint_path}")
@@ -217,21 +251,18 @@ class DynamicsModelPlanner:
             print(f"Warning: Cannot plan, no valid primitives")
             return next_primitive, np.zeros(3), 0.0, None
         
-        # Parse the FIRST primitive (what we'll actually execute)
-        action_type, obj_name, target_name = self._parse_primitive(next_primitive)
-        obj_id = self._get_object_id(obj_name, state_dict)
-        target_id = self._get_object_id(target_name, state_dict)
+        # Parse the FIRST primitive (what we'll actually execute).
+        # Bug fix: always read action_type / target_name from lookahead_primitives[0]
+        # so the loop variable doesn't bleed the last iteration's values when
+        # actual_lookahead > 1.
+        action_type, _, target_name = lookahead_primitives[0][0], lookahead_primitives[0][1], lookahead_primitives[0][2]
+        obj_id, target_id = self.retrieve_ids_from_primitive(next_primitive, state_dict)
         
         # Handle special case: "table" is not a tracked object
         use_table_location = False
         if target_id is None and target_name.lower() == "table":
             use_table_location = True
-            poses = state_dict['batch_6DOF_pose']
-            if isinstance(poses, torch.Tensor):
-                poses = poses.cpu().numpy()
-            if poses.ndim == 3:
-                poses = poses[0]
-            table_location = poses[obj_id].copy()
+            table_location = self._poses_to_numpy(state_dict['batch_6DOF_pose'])[obj_id].copy()
             table_location[2] = 0.8 # Assume table height is 0.8m, can be adjusted based on env
         
         # Rejection sampling: sample K candidate actions
@@ -251,226 +282,160 @@ class DynamicsModelPlanner:
         object_names = state_dict.get('object_names', [f'obj_{i}' for i in range(state_dict['batch_num_objects'])])
         
         with torch.no_grad():
-            # Encode current state
-            node_embedding = self._encode_state(state_dict)
-
-            # Ensure node_embedding is on the model device for diagnostics
-            try:
-                node_embedding = node_embedding.to(self.device)
-            except Exception:
-                pass
+            # Encode current state (always on model device)
+            node_embedding = self._encode_state(state_dict).to(self.device)
 
             for sample_idx in range(self.num_samples):
-                # Sample action for FIRST primitive
+                # ------ Build action sequence for this sample ------
+                # First primitive: sample or use table location
                 if use_table_location:
-                    action_params = self._sample_action_for_table(
-                        state_dict, obj_id, action_type
-                    )
+                    action_params = self._sample_action_for_table(state_dict, obj_id, action_type)
                 else:
-                    action_params = self._sample_action(
-                        state_dict, obj_id, target_id, action_type
+                    action_params = self._sample_action(state_dict, obj_id, target_id, action_type)
+
+                first_target = target_id if target_id is not None else obj_id
+                action_sequence = [(action_type, action_params, obj_id, first_target)]
+                primitive_names = [next_primitive]
+
+                # Subsequent primitives for multi-step lookahead
+                for i in range(1, actual_lookahead):
+                    fut_action_type, _, _, fut_obj_id, fut_target_id = lookahead_primitives[i]
+                    fut_target = fut_target_id if fut_target_id is not None else fut_obj_id
+                    fut_params = self._sample_action(state_dict, fut_obj_id, fut_target, fut_action_type)
+                    action_sequence.append((fut_action_type, fut_params, fut_obj_id, fut_target))
+                    primitive_names.append(primitive_plan[i])
+
+                # ------ Simulate and optionally track per-step diagnostics ------
+                num_objects = state_dict['batch_num_objects']
+                if enable_trajectory_tracking:
+                    _, predicted_state, trajectory = self._forward_simulate_sequence_with_tracking(
+                        node_embedding, state_dict, action_sequence, primitive_names,
+                        goal_predicates, num_objects,
                     )
-                
-                # Build action sequence for lookahead
-                if actual_lookahead == 1:
-                    # Single-step: use tracking version for consistency
-                    action_sequence = [(
-                        action_type, action_params, obj_id,
-                        target_id if target_id is not None else obj_id
-                    )]
-                    primitive_names = [next_primitive]
-                    
-                    if enable_trajectory_tracking:
-                        _, predicted_state, trajectory = self._forward_simulate_sequence_with_tracking(
-                            node_embedding, state_dict, action_sequence, primitive_names,
-                            goal_predicates, state_dict['batch_num_objects']
-                        )
-                        all_trajectories.append(trajectory)
-                    else:
-                        predicted_state = self._forward_simulate(
-                            node_embedding, state_dict, action_params, obj_id, 
-                            target_id if target_id is not None else obj_id
-                        )
+                    all_trajectories.append(trajectory)
                 else:
-                    # Multi-step lookahead
-                    action_sequence = []
-                    primitive_names = []
-                    
-                    # First action: use sampled params
-                    action_sequence.append((
-                        action_type, action_params, obj_id, 
-                        target_id if target_id is not None else obj_id
-                    ))
-                    primitive_names.append(next_primitive)
-                    
-                    # Subsequent actions: sample around their targets
-                    for i in range(1, actual_lookahead):
-                        _, _, _, next_obj_id, next_target_id = lookahead_primitives[i]
-                        
-                        # Sample action for this future primitive
-                        future_action_params = self._sample_action(
-                            state_dict, next_obj_id, 
-                            next_target_id if next_target_id is not None else next_obj_id,
-                            lookahead_primitives[i][0]
-                        )
-                        
-                        action_sequence.append((
-                            lookahead_primitives[i][0], future_action_params, 
-                            next_obj_id, next_target_id if next_target_id is not None else next_obj_id
-                        ))
-                        primitive_names.append(primitive_plan[i])
-                    
-                    # Simulate with tracking
-                    if enable_trajectory_tracking:
-                        _, predicted_state, trajectory = self._forward_simulate_sequence_with_tracking(
-                            node_embedding, state_dict, action_sequence, primitive_names,
-                            goal_predicates, state_dict['batch_num_objects']
-                        )
-                        all_trajectories.append(trajectory)
-                    else:
-                        _, predicted_state = self._forward_simulate_sequence(
-                            node_embedding, state_dict, action_sequence, 
-                            state_dict['batch_num_objects']
-                        )
-                
-                # Check feasibility of TERMINAL state
+                    _, predicted_state = self._forward_simulate_sequence(
+                        node_embedding, state_dict, action_sequence, num_objects,
+                    )
+
+                # ------ Score terminal state ------
+                # TODO: replace _check_feasibility with critic model when available
                 feasibility = self._check_feasibility(
-                    predicted_state,
-                    goal_predicates,
-                    state_dict['batch_num_objects'],
+                    predicted_state, goal_predicates, num_objects,
                     obj_id=obj_id,
-                    target_id=target_id if not use_table_location else None
+                    target_id=target_id if not use_table_location else None,
                 )
-                
-                # Keep best action
+
                 if feasibility > best_feasibility:
                     best_feasibility = feasibility
                     best_action = next_primitive
                     best_params = action_params
-                
-                # Early exit if found feasible action
+
                 if feasibility >= self.feasibility_threshold:
                     print(f"  ✓ Found feasible {actual_lookahead}-step sequence at sample {sample_idx + 1}")
                     return best_action, best_params, best_feasibility, None
-                
-        # No feasible action found - analyze failures for targeted reflection
+
+        # No feasible action found – analyse failures for targeted reflection
         print(f"  ⚠ No feasible sequence found. Best feasibility: {best_feasibility:.3f}")
-        
+
         failure_analysis = None
         if enable_trajectory_tracking and all_trajectories:
             print(f"  📊 Analyzing {len(all_trajectories)} trajectories for failure patterns...")
-            
             failure_analysis = self._analyze_trajectories(all_trajectories, primitive_plan[:actual_lookahead])
             reflection_info = self._generate_reflection_info(
                 failure_analysis, primitive_plan, goal_predicates, object_names
             )
             failure_analysis['reflection_info'] = reflection_info
-            
-            # Print summary
+
             if failure_analysis['most_common_failure_step'] is not None:
                 print(f"  📍 Most common failure at step {failure_analysis['most_common_failure_step'] + 1}: "
                       f"{failure_analysis['most_common_failure_primitive']}")
                 print(f"  📍 Failure rate: {reflection_info['failure_rate']:.1%}")
                 if reflection_info['top_failure_reasons']:
                     print(f"  📍 Top failure reasons: {reflection_info['top_failure_reasons'][:3]}")
-        
+
         return best_action, best_params, best_feasibility, failure_analysis
+
+    def retrieve_ids_from_primitive(self, primitive: str, state_dict: Dict) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Helper function to retrieve object and target IDs from a primitive string.
+        
+        Args:
+            primitive: Primitive string (e.g., "Pick(milk, table)")
+            state_dict: State dictionary for object ID lookup
+        Returns:
+            obj_id: ID of the object to manipulate (or None if not found)
+            target_id: ID of the target object/location (or None if not found)
+        """
+
+        # Parse the FIRST primitive (what we'll actually execute)
+        action_type, obj_name, target_name = self._parse_primitive(primitive)
+        obj_id = self._get_object_id(obj_name, state_dict)
+        target_id = self._get_object_id(target_name, state_dict)
+        return obj_id, target_id
     
     def _encode_state(self, state_dict: Dict, debug: bool = False) -> torch.Tensor:
-        """
-        Encode current state observation through PointConv.
-        
+        """Encode current state observation through PointConv + one-hot embedding.
+
         Matches training code in base_RD.py:
-        - voxel_data: [batch, num_objects, N_points, 3] -> reshape to [batch*num_objects, N_points, 3]
-        - PointConv expects [B, C, N] format: [batch*num_objects, 3, N_points]
-        - img_emb: reshape back to [batch, num_objects, emb_dim]
-        - one_hot: argmax on dim=2 (the max_objects dimension)
-        - concat on dim=-1 (the embedding dimension)
+        - ``voxel_data``: ``[batch, N_obj, N_pts, 3]`` → reshaped for PointConv as ``[B*N_obj, 3, N_pts]``
+        - ``img_emb``: reshaped back to ``[batch, N_obj, emb_dim]``
+        - one-hot IDs via argmax on dim=2, embedded, then concatenated with img_emb on dim=-1
         """
         voxel_data = state_dict['batch_voxel_list_single']
-        
         if not isinstance(voxel_data, torch.Tensor):
             voxel_data = torch.FloatTensor(voxel_data)
-        
-        # Handle different input shapes
-        # Expected: [batch, num_objects, N_points, 3] or [num_objects, N_points, 3]
+
+        # Normalise to [batch, N_obj, N_pts, 3]
         if voxel_data.dim() == 3:
-            # [num_objects, N_points, 3] -> add batch dimension
-            voxel_data = voxel_data.unsqueeze(0)  # [1, num_objects, N_points, 3]
-        elif voxel_data.dim() == 4:
-            # Already [batch, num_objects, N_points, 3]
-            pass
-        elif voxel_data.dim() == 5:
-            # [batch, timestep, num_objects, N_points, 3] -> take first timestep
-            voxel_data = voxel_data[:, 0, :, :, :]
-        
+            voxel_data = voxel_data.unsqueeze(0)
+        elif voxel_data.dim() == 5:          # [batch, timestep, N_obj, N_pts, 3]
+            voxel_data = voxel_data[:, 0]
         voxel_data = voxel_data.to(self.device)
-        
-        batch_size = voxel_data.shape[0]
-        num_objects = voxel_data.shape[1]
-        
-        if debug:
-            print(f"[DEBUG _encode_state] voxel_data shape: {voxel_data.shape}")
-        
-        # Reshape for PointConv: [batch, num_objects, N_points, 3] -> [batch*num_objects, N_points, 3]
-        reshaped_voxel_data = voxel_data.reshape(
-            batch_size * num_objects, 
-            voxel_data.shape[2], 
-            voxel_data.shape[3]
-        )
-        
-        # PointConv expects [B, C, N] format, so transpose: [batch*num_objects, N_points, 3] -> [batch*num_objects, 3, N_points]
-        reshaped_voxel_data = reshaped_voxel_data.permute(0, 2, 1)
-        
-        if debug:
-            print(f"[DEBUG _encode_state] reshaped_voxel_data shape (after permute): {reshaped_voxel_data.shape}")
-        
-        # Per-object point cloud encoding
-        img_emb = self.model.emb_model(reshaped_voxel_data)  # [batch*num_objects, emb_dim]
-        
-        if debug:
-            print(f"[DEBUG _encode_state] img_emb shape after PointConv: {img_emb.shape}")
-            print(f"[DEBUG _encode_state] img_emb stats: min={img_emb.min():.4f}, max={img_emb.max():.4f}, mean={img_emb.mean():.4f}")
-        
-        # Reshape back to [batch, num_objects, emb_dim]
+
+        batch_size, num_objects = voxel_data.shape[0], voxel_data.shape[1]
+
+        # PointConv expects [B, C, N] = [B*N_obj, 3, N_pts]
+        x = voxel_data.reshape(batch_size * num_objects, voxel_data.shape[2], voxel_data.shape[3])
+        x = x.permute(0, 2, 1)
+        img_emb = self.model.emb_model(x)                   # [B*N_obj, emb_dim]
         img_emb = img_emb.reshape(batch_size, num_objects, img_emb.shape[-1])
-        
-        # One-hot object encoding
-        one_hot_encoding = state_dict['batch_one_hot_encoding']
-        if not isinstance(one_hot_encoding, torch.Tensor):
-            one_hot_encoding = torch.FloatTensor(one_hot_encoding)
-        
-        # Handle different input shapes for one-hot
-        # Expected: [batch, num_objects, max_objects] or [num_objects, max_objects]
-        if one_hot_encoding.dim() == 2:
-            # [num_objects, max_objects] -> add batch dimension
-            one_hot_encoding = one_hot_encoding.unsqueeze(0)  # [1, num_objects, max_objects]
-        
-        one_hot_encoding = one_hot_encoding.to(self.device)
-        
+
+        # One-hot embedding
+        one_hot = state_dict['batch_one_hot_encoding']
+        if not isinstance(one_hot, torch.Tensor):
+            one_hot = torch.FloatTensor(one_hot)
+        if one_hot.dim() == 2:
+            one_hot = one_hot.unsqueeze(0)
+
+        if one_hot.shape[-1] != self.one_hot_num_embeddings:
+            raise ValueError(
+                f"Invalid one-hot width: got {one_hot.shape[-1]}, expected "
+                f"{self.one_hot_num_embeddings} from checkpoint embedding table."
+            )
+
+        object_indices = torch.argmax(one_hot, dim=2).long()
+        lo, hi = int(object_indices.min()), int(object_indices.max())
+        if lo < 0 or hi >= self.one_hot_num_embeddings:
+            raise ValueError(
+                f"Invalid object index range for embedding lookup: min={lo}, max={hi}, "
+                f"embedding size={self.one_hot_num_embeddings}."
+            )
+        object_indices = object_indices.to(self.device)
+
+        latent_one_hot = self.model.classif_model.one_hot_encoding_embed(object_indices)
+        node_embedding = torch.cat([img_emb, latent_one_hot], dim=-1)
+
         if debug:
-            print(f"[DEBUG _encode_state] one_hot_encoding shape: {one_hot_encoding.shape}")
-            object_indices = torch.argmax(one_hot_encoding, dim=2)
-            print(f"[DEBUG _encode_state] object_indices from argmax: {object_indices}")
-        
-        # argmax on dim=2 (the max_objects dimension) to get object class indices
-        # This matches training: torch.argmax(one_hot_encoding_tensor, dim=2)
-        latent_one_hot = self.model.classif_model.one_hot_encoding_embed(
-            torch.argmax(one_hot_encoding, dim=2)
-        )  # [batch, num_objects, emb_dim]
-        
-        if debug:
-            print(f"[DEBUG _encode_state] latent_one_hot shape: {latent_one_hot.shape}")
-            print(f"[DEBUG _encode_state] latent_one_hot stats: min={latent_one_hot.min():.4f}, max={latent_one_hot.max():.4f}")
-        
-        # Concatenate embeddings on last dimension (dim=-1)
-        # This matches training: torch.cat([img_emb_single, latent_one_hot_encoding], dim=-1)
-        node_embedding = torch.cat([img_emb, latent_one_hot], dim=-1)  # [batch, num_objects, 256]
-        
-        if debug:
-            print(f"[DEBUG _encode_state] node_embedding shape: {node_embedding.shape}")
-            print(f"[DEBUG _encode_state] node_embedding stats: min={node_embedding.min():.4f}, max={node_embedding.max():.4f}")
-        
+            print(f"[_encode_state] voxel_data={tuple(voxel_data.shape)}")
+            print(f"[_encode_state] img_emb={tuple(img_emb.shape)}, "
+                  f"min={img_emb.min():.4f} max={img_emb.max():.4f} mean={img_emb.mean():.4f}")
+            print(f"[_encode_state] one_hot={tuple(one_hot.shape)}, indices={object_indices.tolist()}")
+            print(f"[_encode_state] latent_one_hot={tuple(latent_one_hot.shape)}, "
+                  f"min={latent_one_hot.min():.4f} max={latent_one_hot.max():.4f}")
+            print(f"[_encode_state] node_embedding={tuple(node_embedding.shape)}, "
+                  f"min={node_embedding.min():.4f} max={node_embedding.max():.4f}")
+
         return node_embedding
     
     def _sample_action(self,
@@ -483,12 +448,8 @@ class DynamicsModelPlanner:
         
         For Pick/Place: Sample relative position offset from object to target.
         """
-        poses = state_dict['batch_6DOF_pose']
-        if isinstance(poses, torch.Tensor):
-            poses = poses.cpu().numpy()
-        if poses.ndim == 3:
-            poses = poses[0]  # Remove batch dimension
-        
+        poses = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
+
         # Get current positions
         obj_pos = poses[obj_id][:3]
         target_pos = poses[target_id][:3]
@@ -518,12 +479,8 @@ class DynamicsModelPlanner:
         
         For Pick(obj, table): Sample small movement (lift slightly above current position)
         """
-        poses = state_dict['batch_6DOF_pose']
-        if isinstance(poses, torch.Tensor):
-            poses = poses.cpu().numpy()
-        if poses.ndim == 3:
-            poses = poses[0]  # Remove batch dimension
-        
+        poses = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
+
         # Get current position
         obj_pos = poses[obj_id][:3]
         
@@ -603,20 +560,8 @@ class DynamicsModelPlanner:
         # Concatenate: [node embeddings, action embeddings]
         graph_node_action = torch.cat([current_latent, current_action_continuous_scaled, current_action_scaled], dim=1)
         
-        # Build src_key_padding_mask
-        src_kp_mask = None
-        try:
-            if 'batch_env_identity' in state_dict:
-                env_id = state_dict['batch_env_identity']
-                if not torch.is_tensor(env_id):
-                    env_id = torch.Tensor(env_id)
-                if env_id.dim() >= 2:
-                    src_key_padding_mask = (env_id[:, :, 0] == -1).to(self.device)
-                    dynamic_mask = torch.zeros(src_key_padding_mask.shape[0], src_key_padding_mask.shape[1] + 2, dtype=torch.bool, device=self.device)
-                    dynamic_mask[:, :-2] = src_key_padding_mask
-                    src_kp_mask = dynamic_mask[0]
-        except Exception:
-            src_kp_mask = None
+        # Build padding mask (None when no masking metadata is available)
+        src_kp_mask = self._build_src_mask(state_dict)
         
         # Forward through dynamics model
         if src_kp_mask is not None:
@@ -631,7 +576,7 @@ class DynamicsModelPlanner:
         
         if self.debug and delta_scale != 1.0:
             dl = delta_latent.detach().cpu()
-            print(f"[DEBUG delta_scale] applied scale={delta_scale} delta_latent shape={tuple(dl.shape)}, mean={float(dl.mean()):.6f}")
+            # print(f"[DEBUG delta_scale] applied scale={delta_scale} delta_latent shape={tuple(dl.shape)}, mean={float(dl.mean()):.6f}")
         
         # Apply per-channel gains
         if self.per_channel_gain_enabled and len(self.per_channel_gain_indices) > 0:
@@ -650,13 +595,28 @@ class DynamicsModelPlanner:
                 delta_change_torch = self.model.classif_model_decoder.pose_estimation(delta_latent.to(self.device))
             else:
                 delta_change_torch = self.model.classif_model_decoder.pose_estimation(next_latent.to(self.device))
-        
+        # delta_change_torch: [batch, num_objects, pose_num=2] -> (dx, dy)
+
+        # Compute z_height_change from 6DOF poses (matches original base_RD.py planner logic).
+        # For pick-place: stacking height = z_target + z_obj; change = stacking_height - current_z.
+        # Only applied to obj_id (the moved object); all others get zero z-change.
         z_height_change = torch.zeros(delta_change_torch.shape[0], delta_change_torch.shape[1]).to(self.device)
-        z_height_change = z_height_change.unsqueeze(-1)
-        all_change = torch.cat((z_height_change, delta_change_torch), dim=2)
+        if target_id is not None and target_id != obj_id and 'batch_6DOF_pose' in state_dict:
+            poses_np = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
+            z_obj = float(poses_np[obj_id, 2])
+            z_target = float(poses_np[target_id, 2])
+            place_height = z_target + z_obj  # stacking height (matches original)
+            z_height_change[:, obj_id] = place_height - z_obj  # = z_target
+        z_height_change = z_height_change.unsqueeze(-1)  # [batch, num_objects, 1]
+
+        # Concatenate in Open3D [x, y, z] order so channels align with previous_pc layout.
+        # delta_change_torch = (dx, dy), z_height_change = (dz) -> [dx, dy, dz]
+        # Original code used (z, dx, dy) order matching its transposed [3, N] PC storage;
+        # here previous_pc is [batch, num_objects, N_points, 3] (xyz), so order must be [dx, dy, dz].
+        all_change = torch.cat((delta_change_torch, z_height_change), dim=2)  # [batch, N_obj, 3]
         n_points = previous_pc.shape[2]
-        all_change_flatten = all_change.unsqueeze(-1).repeat(1, 1, 1, n_points)
-        all_change_flatten = all_change_flatten.permute(0, 1, 3, 2)
+        all_change_flatten = all_change.unsqueeze(-1).repeat(1, 1, 1, n_points)  # [batch, N_obj, 3, N_pts]
+        all_change_flatten = all_change_flatten.permute(0, 1, 3, 2)  # [batch, N_obj, N_pts, 3]
         updated_pc = previous_pc + all_change_flatten
         
         # Re-encode if latent_forward is False
@@ -701,39 +661,39 @@ class DynamicsModelPlanner:
             previous_pc = previous_pc.unsqueeze(0)
         previous_pc = previous_pc.to(self.device).clone()
 
-        poses = state_dict['batch_6DOF_pose']
-        if isinstance(poses, torch.Tensor):
-            poses_np = poses.detach().cpu().numpy()
-        else:
-            poses_np = np.array(poses)
-        if poses_np.ndim == 3:
-            poses_np = poses_np[0]
-        previous_pc_center_numpy = poses_np
+        previous_pc_center_numpy = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
         
-        # Roll out each primitive in sequence
+        # Roll out each primitive in sequence.
+        # Bug fix: maintain a simulated_state_dict whose 'batch_6DOF_pose' is updated
+        # after each step so that z_height_change is computed from simulated positions
+        # rather than the original observed positions for steps > 0.
+        simulated_state_dict = dict(state_dict)
+        simulated_poses = state_dict['batch_6DOF_pose']
+        if not isinstance(simulated_poses, torch.Tensor):
+            simulated_poses = torch.FloatTensor(simulated_poses)
+        simulated_state_dict['batch_6DOF_pose'] = simulated_poses.clone()
+
         delta_latent_last = None
-        # Build edge index early for initial decoding (for debug comparisons)
-        edge_nodes_dbg = list(range(num_objects))
-        edge_list_dbg = list(permutations(edge_nodes_dbg, 2))
-        edge_index_dbg = torch.LongTensor(np.array(edge_list_dbg).T).to(self.device)
-        
         for step_idx, (action_type, action_params, obj_id, target_id) in enumerate(primitive_sequence):
             current_latent, previous_pc, delta_latent_last = self._simulate_one_step(
-                current_latent, previous_pc, action_params, obj_id, target_id, state_dict
+                current_latent, previous_pc, action_params, obj_id, target_id, simulated_state_dict
             )
+            # Update simulated poses (xyz only) from the new point-cloud centroids
+            # so subsequent steps use post-simulation positions for z_height_change.
+            with torch.no_grad():
+                new_xyz = previous_pc.mean(dim=2).cpu()  # [1, num_objects, 3]
+            simulated_state_dict['batch_6DOF_pose'] = simulated_state_dict['batch_6DOF_pose'].clone()
+            simulated_state_dict['batch_6DOF_pose'][0, :, :3] = new_xyz[0]
         
         # Decode final state
-        edge_nodes = list(range(num_objects))
-        edge_list = list(permutations(edge_nodes, 2))
-        edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
-        
+        edge_index = self._build_edge_index(num_objects)
         final_decoder_output = self.model.classif_model_decoder(current_latent, edge_index)
         if self.delta_forward and delta_latent_last is not None:
             delta_decoder = self.model.classif_model_decoder(delta_latent_last, edge_index)
             final_decoder_output['predicted_pose'] = delta_decoder.get('predicted_pose')
-        
+
         return current_latent, final_decoder_output
-    
+
     def _forward_simulate_sequence_with_tracking(
         self,
         initial_node_embedding: torch.Tensor,
@@ -776,25 +736,29 @@ class DynamicsModelPlanner:
             previous_pc = previous_pc.unsqueeze(0)
         previous_pc = previous_pc.to(self.device).clone()
 
-        poses = state_dict['batch_6DOF_pose']
-        if isinstance(poses, torch.Tensor):
-            poses_np = poses.detach().cpu().numpy()
-        else:
-            poses_np = np.array(poses)
-        if poses_np.ndim == 3:
-            poses_np = poses_np[0]
-        previous_pc_center_numpy = poses_np
+        previous_pc_center_numpy = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
         
-        # Build edge index once (reused for decoding)
-        edge_nodes = list(range(num_objects))
-        edge_list = list(permutations(edge_nodes, 2))
-        edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
+        # Build edge index once (reused for decoding at every step)
+        edge_index = self._build_edge_index(num_objects)
         
+        # Bug fix: maintain a simulated_state_dict whose 'batch_6DOF_pose' is updated
+        # after each step so z_height_change uses post-simulation positions for steps > 0.
+        simulated_state_dict = dict(state_dict)
+        simulated_poses = state_dict['batch_6DOF_pose']
+        if not isinstance(simulated_poses, torch.Tensor):
+            simulated_poses = torch.FloatTensor(simulated_poses)
+        simulated_state_dict['batch_6DOF_pose'] = simulated_poses.clone()
+
         delta_latent_last = None
         for step_idx, (action_type, action_params, obj_id, target_id) in enumerate(primitive_sequence):
             current_latent, previous_pc, delta_latent_last = self._simulate_one_step(
-                current_latent, previous_pc, action_params, obj_id, target_id, state_dict
+                current_latent, previous_pc, action_params, obj_id, target_id, simulated_state_dict
             )
+            # Update simulated poses (xyz) from new point-cloud centroids.
+            with torch.no_grad():
+                new_xyz = previous_pc.mean(dim=2).cpu()  # [1, num_objects, 3]
+            simulated_state_dict['batch_6DOF_pose'] = simulated_state_dict['batch_6DOF_pose'].clone()
+            simulated_state_dict['batch_6DOF_pose'][0, :, :3] = new_xyz[0]
             
             # Decode intermediate state for tracking
             step_decoder_output = self.model.classif_model_decoder(current_latent, edge_index)
@@ -853,16 +817,8 @@ class DynamicsModelPlanner:
         """
         failure_reasons = []
         
-        pred_relations = predicted_state['pred_sigmoid'].detach().cpu().numpy()
-        
-        # Reshape to matrix
-        pred_relations_matrix = np.zeros((num_objects, num_objects, pred_relations.shape[-1]))
-        edge_idx = 0
-        for i in range(num_objects):
-            for j in range(num_objects):
-                if i != j:
-                    pred_relations_matrix[i, j, :] = pred_relations[0, edge_idx, :]
-                    edge_idx += 1
+        pred_edges = predicted_state['pred_sigmoid'].detach().cpu().numpy()
+        pred_relations_matrix = self._edges_to_matrix(pred_edges, num_objects)
         
         # Check goal predicate mismatches
         goal_mask = goal_predicates > self.predicate_threshold
@@ -1070,6 +1026,81 @@ class DynamicsModelPlanner:
         
         return suggestions
 
+    # ------------------------------------------------------------------
+    # Low-level helpers shared across simulation / decoding methods
+    # ------------------------------------------------------------------
+
+    def _build_edge_index(self, num_objects: int) -> torch.Tensor:
+        """Return a fully-connected directed edge index for *num_objects* nodes.
+
+        Produces every ordered pair (i, j) with i != j, packed into a
+        ``[2, num_edges]`` LongTensor on self.device.
+        """
+        edge_list = list(permutations(range(num_objects), 2))
+        return torch.LongTensor(np.array(edge_list).T).to(self.device)
+
+    def _edges_to_matrix(self, pred_edges: np.ndarray, num_objects: int) -> np.ndarray:
+        """Reshape flat edge predictions to a dense [N, N, P] relation matrix.
+
+        Args:
+            pred_edges: ``[batch, num_edges, num_predicates]`` array from decoder.
+            num_objects: Number of scene objects (N).
+        Returns:
+            Dense array of shape ``[num_objects, num_objects, num_predicates]``.
+        """
+        num_predicates = pred_edges.shape[-1]
+        matrix = np.zeros((num_objects, num_objects, num_predicates), dtype=pred_edges.dtype)
+        edge_idx = 0
+        for i in range(num_objects):
+            for j in range(num_objects):
+                if i != j:
+                    matrix[i, j] = pred_edges[0, edge_idx]
+                    edge_idx += 1
+        return matrix
+
+    def _poses_to_numpy(self, poses) -> np.ndarray:
+        """Return poses as a ``[num_objects, 6]`` float32 numpy array.
+
+        Handles torch Tensors, batched ``[1, N, 6]`` arrays, and plain numpy.
+        """
+        if isinstance(poses, torch.Tensor):
+            poses = poses.detach().cpu().numpy()
+        else:
+            poses = np.asarray(poses)
+        if poses.ndim == 3:            # [1, num_objects, 6]
+            poses = poses[0]
+        return poses.astype(np.float32)
+
+    def _build_src_mask(self, state_dict: Dict, extra_tokens: int = 2) -> Optional[torch.Tensor]:
+        """Build ``src_key_padding_mask`` for the dynamics transformer.
+
+        Returns a 1-D BoolTensor (length = num_objects + extra_tokens) where
+        ``True`` marks padded / inactive positions, or *None* when no masking
+        information is available.
+
+        Args:
+            state_dict: State dict that may contain ``batch_env_identity``.
+            extra_tokens: Number of action tokens appended to the node sequence
+                (default 2 for the two action embeddings used by graph_dynamics_0).
+        """
+        env_id = state_dict.get('batch_env_identity')
+        if env_id is None:
+            return None
+        try:
+            if not torch.is_tensor(env_id):
+                env_id = torch.as_tensor(env_id)
+            if env_id.dim() < 2:
+                return None
+            # env_id: [batch, num_objects, ...]; padding flag is channel 0 == -1
+            node_pad = (env_id[:, :, 0] == -1).to(self.device)  # [batch, num_objects]
+            # Extend with False for the action tokens (they are never padding)
+            action_pad = torch.zeros(
+                node_pad.shape[0], extra_tokens, dtype=torch.bool, device=self.device
+            )
+            return torch.cat([node_pad, action_pad], dim=1)[0]   # collapse batch dim
+        except Exception:
+            return None
+
     def _forward_simulate(self,
                          node_embedding: torch.Tensor,
                          state_dict: Dict,
@@ -1091,17 +1122,15 @@ class DynamicsModelPlanner:
             previous_pc = previous_pc.unsqueeze(0)
         previous_pc = previous_pc.to(self.device).clone()
         
-        # Simulate one step with scaling
+        # Simulate one step - use same default scale (1.0) as _forward_simulate_sequence
+        # for consistency. The previous hardcoded 3x was an undocumented override that
+        # caused different behaviour depending on whether trajectory tracking was enabled.
         next_latent, updated_pc, delta_latent = self._simulate_one_step(
-            node_embedding, previous_pc, action_params, obj_id, target_id, state_dict,
-            action_scale=3.0, delta_scale=3.0
+            node_embedding, previous_pc, action_params, obj_id, target_id, state_dict
         )
         
         # Decode predicted state
-        edge_nodes = list(range(num_objects))
-        edge_list = list(permutations(edge_nodes, 2))
-        edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
-        
+        edge_index = self._build_edge_index(num_objects)
         decoder_output = self.model.classif_model_decoder(next_latent, edge_index)
         if self.delta_forward:
             # Decode pose from delta latent to match training behavior
@@ -1121,19 +1150,9 @@ class DynamicsModelPlanner:
         
         Returns feasibility score [0, 1].
         """
-        # 1. Check goal matching (existing logic)
-        pred_relations = predicted_state['pred_sigmoid'].detach().cpu().numpy()
-        
-        # Reshape: [batch, num_edges, num_predicates] -> [num_objects, num_objects, num_predicates]
-        # Edge ordering: (0,1), (0,2), ..., (1,0), (1,2), ...
-        pred_relations_matrix = np.zeros((num_objects, num_objects, pred_relations.shape[-1]))
-        
-        edge_idx = 0
-        for i in range(num_objects):
-            for j in range(num_objects):
-                if i != j:
-                    pred_relations_matrix[i, j, :] = pred_relations[0, edge_idx, :]
-                    edge_idx += 1
+        # 1. Check goal matching
+        pred_edges = predicted_state['pred_sigmoid'].detach().cpu().numpy()
+        pred_relations_matrix = self._edges_to_matrix(pred_edges, num_objects)
         
         # print(f"    Predicted relations matrix: {pred_relations_matrix}, Goal predicates: {goal_predicates}")
         # print(f"    Goal predicates in _check_feasibility: {goal_predicates > self.predicate_threshold}")
@@ -1269,9 +1288,7 @@ class DynamicsModelPlanner:
                 
                 # Build edge indices for decoder
                 num_objects = state_dict['batch_num_objects']
-                edge_nodes = list(range(num_objects))
-                edge_list = list(permutations(edge_nodes, 2))
-                edge_index = torch.LongTensor(np.array(edge_list).T).to(self.device)
+                edge_index = self._build_edge_index(num_objects)
                 
                 if debug:
                     print(f"[DEBUG predict_predicates] edge_index shape: {edge_index.shape}")
@@ -1285,18 +1302,9 @@ class DynamicsModelPlanner:
                     print(f"[DEBUG predict_predicates] pred_sigmoid shape: {pred_sigmoid.shape}")
                     print(f"[DEBUG predict_predicates] pred_sigmoid stats: min={pred_sigmoid.min():.4f}, max={pred_sigmoid.max():.4f}, mean={pred_sigmoid.mean():.4f}")
             
-            # Convert to numpy
-            pred_relations = pred_sigmoid.detach().cpu().numpy()
-            
-            # Reshape to matrix form
-            pred_relations_matrix = np.zeros((num_objects, num_objects, pred_relations.shape[-1]))
-            
-            edge_idx = 0
-            for i in range(num_objects):
-                for j in range(num_objects):
-                    if i != j:
-                        pred_relations_matrix[i, j, :] = pred_relations[0, edge_idx, :]
-                        edge_idx += 1
+            # Convert to numpy and reshape to matrix form
+            pred_edges = pred_sigmoid.detach().cpu().numpy()
+            pred_relations_matrix = self._edges_to_matrix(pred_edges, num_objects)
             
             return pred_relations_matrix
         

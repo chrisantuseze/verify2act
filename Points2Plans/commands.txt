@@ -22,6 +22,10 @@ python relational_dynamics/main.py \
     --latent_forward True \
     --max_size 0
 
+# P2P Default
+# delta_forward True
+# latent_forward False
+
 python relational_dynamics/main.py \
     --result_dir ckpt  \
     --train_dir ../robosuite/data_capture/dataset/nut_assembly/episodes \

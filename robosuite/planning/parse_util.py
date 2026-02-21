@@ -106,13 +106,13 @@ def get_parser(desc: str = "Phase 3 Demo: Full Integration") -> argparse.Argumen
     parser.add_argument(
         "--delta-forward",
         type=str2bool, 
-        default=True, #Trained with True
+        default=False, #Trained with True
         help="Use delta forward prediction in dynamics model"
     )
     parser.add_argument(
         "--latent-forward",
         type=str2bool, 
-        default=False, # Trained with False
+        default=True, # Trained with False
         help="Use latent space forward prediction in dynamics model"
     )
     parser.add_argument(

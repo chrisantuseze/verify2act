@@ -110,7 +110,7 @@ class DynamicsModelDataCollector:
         step_idx: int,
         state_dict: Dict,
         action_params: np.ndarray,
-        obj_id: int,
+        obj_id: Optional[int],
         target_id: Optional[int],
         next_state_dict: Optional[Dict] = None,
         feasibility_score: float = None,
@@ -122,15 +122,15 @@ class DynamicsModelDataCollector:
             step_idx: Index of current step in plan
             state_dict: Current state dictionary from StateConverter
             action_params: Action parameters [dx, dy, dz]
-            obj_id: Object ID being manipulated
+            obj_id: Object ID being manipulated (can be None if parsing failed)
             target_id: Target object ID (can be None)
             next_state_dict: Predicted next state (optional, for z_next)
             feasibility_score: Feasibility score for this action (optional)
         """
-        if obj_id is None:
-            if self.verbose:
-                print(f"  [Step {step_idx}] Skipping record: unresolved obj_id")
-            return
+        # Allow recording even when obj_id is None (captures planning failures)
+        # These will be useful as negative samples
+        if obj_id is None and self.verbose:
+            print(f"  [Step {step_idx}] Recording with unresolved obj_id (planning failure)")
 
         # Store raw data in buffer (will extract embeddings at episode end)
         step_data = {
@@ -199,14 +199,30 @@ class DynamicsModelDataCollector:
             # Extract z_t (current state latent)
             z_t = self._extract_state_latent(step_data['state_dict'])
             
-            # Extract a_t (action embedding)
-            a_t = self.embedding_extractor.extract_action_embedding(
-                dynamics_model=self.dynamics_planner.model,
-                action_params=step_data['action_params'],
-                obj_id=step_data['obj_id'],
-                target_id=step_data['target_id'],
-                state_dict=step_data['state_dict'],
-            )
+            # Handle case where obj_id is None (planning failure)
+            if step_data['obj_id'] is None:
+                # Create placeholder embeddings for failed planning
+                a_t = np.zeros(self.collector.action_dim, dtype=np.float32)
+                predicate_embed = np.zeros(self.collector.predicate_embed_dim, dtype=np.float32)
+                if self.verbose:
+                    print(f"  [Step {step_data['step_idx']}] Using placeholder embeddings (obj_id=None)")
+            else:
+                # Extract a_t (action embedding)
+                a_t = self.embedding_extractor.extract_action_embedding(
+                    dynamics_model=self.dynamics_planner.model,
+                    action_params=step_data['action_params'],
+                    obj_id=step_data['obj_id'],
+                    target_id=step_data['target_id'],
+                    state_dict=step_data['state_dict'],
+                )
+                
+                # Extract predicate embedding
+                predicate_embed = self.embedding_extractor.extract_predicate_embedding(
+                    goal_predicates=self.current_goal_predicates,
+                    obj_id=step_data['obj_id'],
+                    target_id=step_data['target_id'],
+                    num_objects=step_data['state_dict']['batch_num_objects'],
+                )
             
             # Extract z_next (next state latent)
             if step_data['next_state_dict'] is not None:
@@ -215,14 +231,6 @@ class DynamicsModelDataCollector:
                 # If next state not provided, use z_t as placeholder
                 # (will be labeled as failure likely)
                 z_next = z_t.copy()
-            
-            # Extract predicate embedding
-            predicate_embed = self.embedding_extractor.extract_predicate_embedding(
-                goal_predicates=self.current_goal_predicates,
-                obj_id=step_data['obj_id'],
-                target_id=step_data['target_id'],
-                num_objects=step_data['state_dict']['batch_num_objects'],
-            )
             
             # Extract plan summary
             plan_summary = self.embedding_extractor.extract_plan_summary(

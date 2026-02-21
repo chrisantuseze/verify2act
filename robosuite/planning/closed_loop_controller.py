@@ -92,7 +92,11 @@ class ClosedLoopController:
             print("Initializing closed-loop controller components...")
         
         self.llm_planner = LLMTaskPlanner(args.model_config_path, args.prompt_config_path)
-        self.state_converter = StateConverter(env)
+        self.state_converter = StateConverter(
+            env,
+            training_compatible_one_hot=getattr(args, 'training_compatible_one_hot', False),
+            one_hot_seed=getattr(args, 'one_hot_seed', None),
+        )
         self.dynamics_planner = DynamicsModelPlanner(
             checkpoint_path=checkpoint_path,
             num_samples=self.args.num_planning_samples,
@@ -150,257 +154,446 @@ class ClosedLoopController:
         self.stats['start_time'] = time.time()
         
         if self.verbose:
-            print("\n" + "=" * 80)
+            print(f"\n{'=' * 80}")
             print(f"STARTING EPISODE: {task_description}")
-            print("=" * 80)
+            print(f"{'=' * 80}")
         
-        # Reset environment
+        # Step 1: Observe initial scene
         obs = self.env.reset()
-        
-        # Step 1: Get initial state and detect objects
-        if self.verbose:
-            print("\n[1/4] Detecting objects in scene...")
-        
         state_dict = self.state_converter.convert()
         objects = state_dict['object_names']
         
         if self.verbose:
-            print(f"  ✓ Detected {len(objects)} objects: {objects}")
+            print(f"\n[1/4] Detected {len(objects)} objects: {objects}")
         
-        # Generate initial predicates if not provided
         if initial_predicates is None:
             initial_predicates = self._generate_initial_predicates(state_dict, objects)
-        
         if self.verbose:
-            print(f"  ✓ Initial predicates: {initial_predicates}")
+            print(f"  Initial predicates: {initial_predicates}")
         
-        # Step 2: Generate goals from LLM (ONCE)
+        # Step 2: Generate goals and plan from LLM (once per episode)
         if self.verbose:
             print("\n[2/4] Generating goals from LLM...")
         
-        # Convert goals to predicate tensor (will be set after getting goals)
         object_name_to_id = {name: i for i, name in enumerate(objects)}
-        
-        # goals, plans = self.llm_planner.generate_goals_and_plans(
-        #     task_description=task_description,
-        #     objects=objects,
-        #     initial_predicates=initial_predicates
-        # )
+        goals, plans = self.llm_planner.generate_goals_and_plans(
+            task_description=task_description,
+            objects=objects,
+            initial_predicates=initial_predicates,
+        )
+        goal_predicates, primitive_plan, valid_llm_plan = self._setup_llm_plan(
+            goals, plans, object_name_to_id, objects,
+        )
+        collector_started = self._start_data_collection(goal_predicates, primitive_plan) # start critic data collection episode if collector is attached
 
-        goals = ['Stacked(cubeB, cubeA)', 'Stacked(cubeC, cubeB)']
-        plans = ['Pick(cubeB, table)', 'Place(cubeB, cubeA)', 'Pick(cubeC, table)', 'Place(cubeC, cubeB)']
+        goal_achieved = False
+        execution_succeeded = True
+        plan_succeeded = False
+        failure_type = "predicate"
+        failed_step_idx = None
+
+        if not valid_llm_plan:
+            self._record_planning_failure_step(0, state_dict, 0.0) # save a synthetic failure step for critic training
+        else:
+            # Step 3: Execute plan in closed loop
+            max_primitives = len(primitive_plan)
+            if self.verbose:
+                print(f"\n[3/4] Executing plan ({max_primitives} primitives)...")
+            
+            for prim_idx in range(max_primitives):
+                if self.verbose:
+                    print(f"\n{'─' * 80}")
+                    print(f"PRIMITIVE {prim_idx + 1}/{max_primitives}")
+                    print(f"{'─' * 80}")
+                
+                state_dict = self.state_converter.convert()
+                
+                if not primitive_plan:
+                    if self.verbose:
+                        print("✓ All primitives in plan executed")
+                    break
+                
+                if self._check_goal_achieved(state_dict, goal_predicates): # this should be replaced with the call to the critic model
+                    if self.verbose:
+                        print("✓ Goal achieved!")
+                    goal_achieved = True
+                    break
+                
+                # Attempt planning + execution with replanning on failure
+                result_dict = self._attempt_primitive_with_replans(
+                            prim_idx, state_dict, goal_predicates, primitive_plan,
+                            goals, task_description, objects, initial_predicates,
+                )
+                plan_success, exec_success, feasibility, primitive_plan = result_dict['plan_success'], result_dict['exec_success'], result_dict['last_feasibility'], result_dict['updated_primitive_plan']
+
+                plan_succeeded = plan_success
+                execution_succeeded = exec_success
+                
+                if not exec_success: # planning (using RD Model) or execution failed after all replanning attempts
+                    print(f"Execution of primitive {prim_idx + 1} failed ({plan_success}) after replanning attempts (feasibility={feasibility:.3f})")
+                    failed_step_idx = prim_idx
+                    if not plan_success:
+                        failure_type = "feasibility"
+                        self._record_planning_failure_step(
+                            prim_idx, state_dict, feasibility,
+                        )
+                    else:
+                        failure_type = "predicate"
+                    if self.verbose:
+                        print("  ✗ Aborting episode (sequential dependency broken)")
+                    break
         
+        # Step 4: Finalize episode — goal check, data collection, summary
+        success = self._finalize_episode(
+            goal_achieved, plan_succeeded, execution_succeeded,
+            failure_type, failed_step_idx, goal_predicates, objects,
+            collector_started, goals
+        )
+        return success, self.stats
+
+    def _setup_llm_plan(
+        self,
+        goals: Optional[List[str]],
+        plans: Optional[List[str]],
+        object_name_to_id: Dict[str, int],
+        objects: List[str],
+    ) -> Tuple[np.ndarray, List[str], bool]:
+        """
+        Process LLM output into goal predicates and a primitive plan.
+        
+        Returns:
+            (goal_predicates, primitive_plan, planning_succeeded)
+        """
         if not goals or not plans:
             print("ERROR: LLM failed to generate goals/plans")
-            self.stats['end_time'] = time.time()
-            return False, self.stats
+            fallback = np.zeros(
+                (len(objects), len(objects), len(PREDICATE_NAMES)),
+                dtype=np.float32,
+            )
+            return fallback, [], False
         
         if self.verbose:
             print(f"  ✓ Goals: {goals}")
-            print(f"  ✓ Plan: {plans[0] if plans else 'No plan'}")
+            print(f"  ✓ Plan: {plans}")
         
         goal_predicates = self.llm_planner.goals_to_predicates(
             goals=goals,
             object_name_to_id=object_name_to_id,
-            num_objects=len(objects)
+            num_objects=len(objects),
         )
+        return goal_predicates, list(plans), True
+    
+    def _start_data_collection(
+        self,
+        goal_predicates: np.ndarray,
+        primitive_plan: List[str],
+    ) -> bool:
+        """Start data collection episode if collector is attached."""
+        if self.data_collector is None:
+            return False
+        self.data_collector.start_episode(
+            goal_predicates=goal_predicates,
+            primitive_plan=primitive_plan,
+        )
+        return True
+    
+    def _attempt_primitive_with_replans(
+        self,
+        prim_idx: int,
+        state_dict: Dict[str, Any],
+        goal_predicates: np.ndarray,
+        primitive_plan: List[str],
+        goals: List[str],
+        task_description: str,
+        objects: List[str],
+        initial_predicates: List[str],
+    ) -> Tuple[bool, bool, float, List[str]]:
+        """
+        Attempt planning and execution of a single primitive with replanning.
         
-        primitive_plan = plans  # Full plan from LLM
-        max_primitives = len(primitive_plan)  # Limit to length of LLM plan for testing
+        Tries up to max_replans_per_primitive attempts. Each attempt plans
+        a new action via rejection sampling and executes it if feasible.
         
-        # Initialize data collector if enabled
-        if self.data_collector is not None:
-            self.data_collector.start_episode(
-                goal_predicates=goal_predicates,
-                primitive_plan=primitive_plan
-            )
+        Args:
+            prim_idx: Index of current primitive in the episode
+            state_dict: Current scene state
+            goal_predicates: Target goal predicate tensor
+            primitive_plan: Remaining plan primitives
+            goals: Goal predicate strings (for LLM reflection)
+            task_description: Task description (for LLM reflection)
+            objects: Object name list
+            initial_predicates: Initial predicate strings (for LLM reflection)
         
-        # Step 3: Closed-loop planning and execution
-        if self.verbose:
-            print("\n[3/4] Starting closed-loop execution...")
-            print(f"  Max primitives: {max_primitives}")
+        Returns:
+            (exec_success, planning_failed, last_feasibility, updated_primitive_plan)
+        """
+        planning_success = False
+        last_feasibility = 0.0
         
-        for prim_idx in range(max_primitives):
-            if self.verbose:
-                print(f"\n{'─' * 80}")
-                print(f"PRIMITIVE {prim_idx + 1}/{max_primitives}")
-                print(f"{'─' * 80}")
-            
-            # Get current state
-            state_dict = self.state_converter.convert()
-            state_dict['object_names'] = objects
-            
-            # Check if plan is exhausted
-            if not primitive_plan:
+        for replan_attempt in range(self.args.max_replans_per_primitive):
+            if replan_attempt > 0:
                 if self.verbose:
-                    print("✓ All primitives in plan executed")
-                break
+                    print(f"  Replanning (attempt {replan_attempt + 1}"
+                          f"/{self.args.max_replans_per_primitive})...")
+                self.stats['num_replans'] += 1
             
-            # Check if goal already achieved #@Chris: Uncomment
-            if self._check_goal_achieved(state_dict, goal_predicates):
-                if self.verbose:
-                    print("✓ Goal achieved!")
-                if self.data_collector is not None:
-                    self.data_collector.end_episode(success=True)
-                self.stats['end_time'] = time.time()
-                return True, self.stats
-            
-            # Plan next primitive with replanning on failure
-            success = False
-            for replan_attempt in range(self.args.max_replans_per_primitive):
-                if replan_attempt > 0:
-                    if self.verbose:
-                        print(f"  Replanning (attempt {replan_attempt + 1}/{self.args.max_replans_per_primitive})...")
-                    self.stats['num_replans'] += 1
-                
-                # Plan with trajectory tracking for failure analysis
-                primitive, action_params, feasibility, failure_analysis = self.dynamics_planner.plan_next_primitive(
+            primitive, action_params, feasibility, failure_analysis = (
+                self.dynamics_planner.plan_next_primitive(
                     state_dict=state_dict,
                     goal_predicates=goal_predicates,
                     primitive_plan=primitive_plan,
-                    enable_trajectory_tracking=self.enable_trajectory_tracking
+                    enable_trajectory_tracking=self.enable_trajectory_tracking,
                 )
-                
-                if self.verbose:
-                    print(f"  Primitive: {primitive}")
-                    print(f"  Action params: {action_params}")
-                    print(f"  Feasibility: {feasibility:.3f}")
-                
-                # Check both: primitive must exist AND feasibility must meet threshold
-                if primitive is None or feasibility < self.dynamics_planner.feasibility_threshold:
-                    if self.verbose:
-                        if primitive is None:
-                            print("  ✗ Planning failed (no action found)")
-                        else:
-                            print(f"  ✗ Planning failed (feasibility {feasibility:.3f} < threshold {self.dynamics_planner.feasibility_threshold})")
-                    
-                    # Log failure analysis if available
-                    if failure_analysis is not None:
-                        self._log_failure_analysis(failure_analysis)
-
-                        # Trigger LLM reflection to suggest revised plans
-                        try:
-                            revised_plans, suggestions = self.llm_planner.reflect_on_failure(
-                                primitive_plan=primitive_plan,
-                                task_goal=goals,
-                                failure_info=failure_analysis['reflection_info'],
-                                task_description=task_description,
-                                objects=objects,
-                                initial_predicates=initial_predicates,
-                            )
-
-                            if suggestions and self.verbose:
-                                print("  LLM Suggestions:")
-                                for s in suggestions[:3]:
-                                    print(f"    - {s}")
-
-                            if revised_plans:
-                                # Use first revised plan candidate
-                                new_plan = revised_plans[0]
-                                primitive_plan = new_plan
-                                if self.verbose:
-                                    print(f"  → Updated plan from LLM reflection: {primitive_plan}")
-                                # Count this as a replan attempt
-                                self.stats['num_replans'] += 1
-
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"  Exception during LLM reflection: {e}")
-                    continue
-                
-                if self.verbose:
-                    print(f"  → Planned: {primitive} (feasibility={feasibility:.3f})")
-                
-                # Record step for data collection (if enabled)
-                if self.data_collector is not None and primitive is not None:
-                    # Parse primitive to get obj_id and target_id
-                    obj_id, target_id = self._parse_primitive_for_collection(
-                        primitive, state_dict
-                    )
-                    
-                    # Record the step (before execution)
-                    self.data_collector.record_step(
-                        step_idx=prim_idx,
-                        state_dict=state_dict,
-                        action_params=action_params,
-                        obj_id=obj_id,
-                        target_id=target_id,
-                        next_state_dict=None,  # Will be filled after execution
-                        feasibility_score=feasibility,
-                    )
-                
-                # Get current observation for execution
-                obs = self.env._get_observations()
-                
-                # Execute primitive
-                exec_success, num_steps = self._execute_primitive_with_monitoring(
-                    primitive, action_params, obs
-                )
-
-                # Update collected step with observed next state (if enabled)
-                if self.data_collector is not None and primitive is not None:
-                    next_state_dict = self.state_converter.convert()
-                    next_state_dict['object_names'] = objects
-                    self.data_collector.update_last_step_next_state(
-                        next_state_dict=next_state_dict,
-                        execution_success=exec_success,
-                        num_steps=num_steps,
-                    )
-                
-                self.stats['total_steps'] += num_steps
-                self.stats['num_primitives_executed'] += 1
-                self.stats['primitive_history'].append(primitive)
-                self.stats['feasibility_history'].append(feasibility)
-                
-                if exec_success:
-                    if self.verbose:
-                        print(f"  ✓ Execution succeeded ({num_steps} steps)")
-                    success = True
-                    # Advance to next primitive in plan
-                    primitive_plan = primitive_plan[1:]
-                    if self.verbose and primitive_plan:
-                        print(f"  Remaining plan: {primitive_plan}")
-                    break
-                else:
-                    if self.verbose:
-                        print(f"  ✗ Execution failed ({num_steps} steps)")
-                    self.stats['num_primitives_failed'] += 1
+            )
+            last_feasibility = feasibility
             
-            if not success:
+            if self.verbose:
+                print(f"  Primitive: {primitive}")
+                print(f"  Action params: {action_params}")
+                print(f"  Feasibility: {feasibility:.3f}")
+
+            # Planning failed: no action found or below feasibility threshold
+            if primitive is None or feasibility < self.dynamics_planner.feasibility_threshold:
                 if self.verbose:
-                    print(f"  ✗ Failed after {self.args.max_replans_per_primitive} replan attempts")
-                    print(f"  → Aborting episode (sequential dependency broken)")
-                break  # Abort episode - subsequent primitives depend on this one
+                    reason = ("no action found" if primitive is None
+                              else f"feasibility {feasibility:.3f} < "
+                                   f"threshold {self.dynamics_planner.feasibility_threshold}")
+                    print(f"  ✗ Planning failed ({reason})")
+                
+                if failure_analysis is not None: # Checks if reflection was enabled
+                    self._log_failure_analysis(failure_analysis)
+                    primitive_plan = self._try_llm_reflection(
+                        primitive_plan, goals, failure_analysis,
+                        task_description, objects, initial_predicates,
+                    )
+                    print(f"  Updated primitive plan after LLM reflection: {primitive_plan}")
+                continue
+            
+            # Planning succeeded
+            planning_success = True
+            if self.verbose:
+                print(f"  → Planned: {primitive} (feasibility={feasibility:.3f})")
+            
+            # Record step, execute, and update data collection
+            exec_success, num_steps = self._execute_and_record(
+                prim_idx, primitive, action_params, feasibility,
+                state_dict, objects,
+            )
+            
+            self.stats['total_steps'] += num_steps
+            self.stats['num_primitives_executed'] += 1
+            self.stats['primitive_history'].append(primitive)
+            self.stats['feasibility_history'].append(feasibility)
+
+            print(f"  Execution success: {exec_success} (steps taken: {num_steps})")
+            
+            if exec_success:
+                if self.verbose:
+                    print(f"  ✓ Execution succeeded ({num_steps} steps)")
+                primitive_plan = primitive_plan[1:]
+                if self.verbose and primitive_plan:
+                    print(f"  Remaining plan: {primitive_plan}")
+                return {
+                    'plan_success': True,
+                    'exec_success': True,
+                    'last_feasibility': feasibility,
+                    'updated_primitive_plan': primitive_plan,
+                }
+            else:
+                if self.verbose:
+                    print(f"  ✗ Execution failed ({num_steps} steps)")
+                self.stats['num_primitives_failed'] += 1
+                # Refresh state before the next replan attempt so the planner
+                # reasons from the actual post-failure scene, not the pre-execution one.
+                state_dict = self.state_converter.convert()
         
-        # Step 4: Final goal check
+        # All replan attempts exhausted
+        return {
+            'plan_success': planning_success,
+            'exec_success': False,
+            'last_feasibility': last_feasibility,
+            'updated_primitive_plan': primitive_plan,
+        }
+    
+    def _execute_and_record(
+        self,
+        prim_idx: int,
+        primitive: str,
+        action_params: Any,
+        feasibility: float,
+        state_dict: Dict[str, Any],
+        objects: List[str],
+    ) -> Tuple[bool, int]:
+        """Record step for data collection, execute primitive, and update with result."""
+        # Record step before execution
+        if self.data_collector is not None:
+            obj_id, target_id = self.dynamics_planner.retrieve_ids_from_primitive(primitive, state_dict)
+
+            self.data_collector.record_step(
+                step_idx=prim_idx,
+                state_dict=state_dict,
+                action_params=action_params,
+                obj_id=obj_id,
+                target_id=target_id,
+                next_state_dict=None,
+                feasibility_score=feasibility,
+            )
+        
+        # Execute primitive
+        exec_success = False
+        num_steps = 0
+        try:
+            obs = self.env._get_observations()
+            exec_success, num_steps = self._execute_primitive_with_monitoring(
+                primitive, action_params, obs,
+            )
+        finally:
+            # Always update the step record so the dataset never contains a
+            # dangling entry with next_state_dict=None, even on exception.
+            if self.data_collector is not None:
+                next_state_dict = self.state_converter.convert()
+                next_state_dict['object_names'] = objects
+                self.data_collector.update_last_step_next_state(
+                    next_state_dict=next_state_dict,
+                    execution_success=exec_success,
+                    num_steps=num_steps,
+                )
+        
+        return exec_success, num_steps
+    
+    def _try_llm_reflection(
+        self,
+        primitive_plan: List[str],
+        goals: List[str],
+        failure_analysis: Dict[str, Any],
+        task_description: str,
+        objects: List[str],
+        initial_predicates: List[str],
+    ) -> List[str]:
+        """Attempt LLM reflection on planning failure and return (possibly updated) plan."""
+        try:
+            revised_plans, suggestions = self.llm_planner.reflect_on_failure(
+                primitive_plan=primitive_plan,
+                task_goal=goals,
+                failure_info=failure_analysis['reflection_info'],
+                task_description=task_description,
+                objects=objects,
+                initial_predicates=initial_predicates,
+            )
+            
+            if suggestions and self.verbose:
+                print("  LLM Suggestions:")
+                for s in suggestions[:3]:
+                    print(f"    - {s}")
+            
+            if revised_plans:
+                primitive_plan = revised_plans[0]
+                if self.verbose:
+                    print(f"  → Updated plan from LLM reflection: {primitive_plan}")
+                self.stats['num_replans'] += 1
+        except Exception as e:
+            if self.verbose:
+                print(f"  Exception during LLM reflection: {e}")
+        
+        return primitive_plan
+    
+    def _record_planning_failure_step(
+        self,
+        step_idx: int,
+        state_dict: Dict[str, Any],
+        feasibility: float = 0.0,
+    ) -> None:
+        """
+        Record a synthetic step when planning fails before execution.
+        
+        Ensures failed episodes with no executed steps still appear in the
+        critic dataset as negative samples. Uses the current state as both
+        z_t and z_next, with a zero action vector.
+        
+        Args:
+            step_idx: Primitive index where planning failed
+            state_dict: Current scene state (used as both z_t and z_next)
+            feasibility: Feasibility score that caused rejection
+        """
+        if self.data_collector is None:
+            return
+        
+        self.data_collector.record_step(
+            step_idx=step_idx,
+            state_dict=state_dict,
+            action_params=np.zeros(3, dtype=np.float32),
+            obj_id=None,
+            target_id=None,
+            next_state_dict=state_dict,
+            feasibility_score=feasibility,
+        )
+        self.data_collector.update_last_step_next_state(
+            next_state_dict=state_dict,
+            execution_success=False,
+            num_steps=0,
+        )
+    
+    def _finalize_episode(
+        self,
+        goal_achieved: bool,
+        planning_succeeded: bool,
+        execution_succeeded: bool,
+        failure_type: str,
+        failed_step_idx: Optional[int],
+        goal_predicates: np.ndarray,
+        objects: List[str],
+        collector_started: bool,
+        goals: List[str],
+    ) -> bool:
+        """
+        Final goal check, data collection finalization, and episode summary.
+        
+        Success requires all three conditions:
+            planning succeeded AND execution succeeded AND goal achieved.
+        
+        Data is always saved at episode end regardless of outcome.
+        Only labeled positive when both planning and execution succeed
+        AND the goal is achieved.
+        
+        Args:
+            goal_achieved: Whether goal was detected during execution loop
+            planning_succeeded: Whether all planning attempts succeeded
+            execution_succeeded: Whether all executions succeeded
+            failure_type: Type of failure for critic labeling
+            failed_step_idx: Explicit index of the primitive that failed
+            goal_predicates: Target goal predicate tensor
+            objects: Object name list
+            collector_started: Whether data collection was started
+        
+        Returns:
+            success: Whether the episode succeeded
+        """
         if self.verbose:
             print("\n[4/4] Final goal check...")
         
-        state_dict = self.state_converter.convert()
-        state_dict['object_names'] = objects
+        # Check goal if not already achieved during execution
+        if not goal_achieved and planning_succeeded:
+            state_dict = self.state_converter.convert()
+            state_dict['object_names'] = objects
+            goal_achieved = self._check_goal_achieved(state_dict, goal_predicates, goals)
         
-        success = self._check_goal_achieved(state_dict, goal_predicates)
+        success = planning_succeeded and execution_succeeded and goal_achieved
+        print(f"  Episode success: {success} (Goal achieved: {goal_achieved}, Planning succeeded: {planning_succeeded}, Execution succeeded: {execution_succeeded})")
         
-        # End data collection episode (if enabled)
-        if self.data_collector is not None:
+        # Always finalize data collection — save regardless of outcome
+        if self.data_collector is not None and collector_started:
             failure_step = None
-            failure_type = "predicate"
-            
             if not success:
-                # Determine failure step
-                failure_step = self.stats['num_primitives_executed'] - 1
-                failure_step = max(0, failure_step)
-                
-                # Determine failure type
-                if self.stats.get('collision_detected', False):
-                    failure_type = "feasibility"
+                # Use tracked failure index; fall back to last executed step
+                if failed_step_idx is not None:
+                    failure_step = failed_step_idx
                 else:
-                    failure_type = "predicate"
+                    failure_step = max(0, self.stats['num_primitives_executed'] - 1)
             
             self.data_collector.end_episode(
                 success=success,
                 failure_step=failure_step,
-                failure_type=failure_type
+                failure_type=failure_type,
             )
         
         self.stats['end_time'] = time.time()
@@ -408,7 +601,7 @@ class ClosedLoopController:
         if self.verbose:
             self._print_episode_summary(success)
         
-        return success, self.stats
+        return success
     
     def _generate_initial_predicates(
         self,
@@ -422,7 +615,7 @@ class ClosedLoopController:
         This is more accurate than manual heuristics and consistent with goal checking.
         """
         # Use decoder to predict current predicates from state #@Chris: Uncomment
-        current_predicates = self.dynamics_planner.predict_predicates(state_dict, debug=True)
+        current_predicates = self.dynamics_planner.predict_predicates(state_dict, debug=False)
 
         # current_predicates = np.random.rand(len(objects), len(objects), 9)  # Placeholder random predicates for testing
         if self.verbose:
@@ -462,102 +655,79 @@ class ClosedLoopController:
         
         return predicates
     
+    def _format_predicate(
+        self,
+        pred_name: str,
+        obj_i: str,
+        obj_j: str,
+    ) -> Optional[str]:
+        """Return a predicate string for (pred_name, obj_i, obj_j), or *None* to skip.
+
+        Applies semantic sanity filters:
+        - ``Below(support, X)`` and ``On(support, X)`` are nonsensical for tables/pegs.
+        - ``Above(X, table)`` is redundant with ``On(X, table)``.
+        - Nut-on-nut stacking is labelled ``Stacked`` instead of ``On``.
+        """
+        li, lj = obj_i.lower(), obj_j.lower()
+        is_support_i = 'table' in li or 'peg' in li
+
+        if pred_name == 'Below' and is_support_i:
+            return None                                 # Below(table/peg, X) makes no sense
+        if pred_name == 'Above' and 'table' in lj:
+            return None                                 # Above(X, table) is redundant
+        if pred_name == 'On':
+            if is_support_i:
+                return None                             # On(table/peg, X) makes no sense
+            if 'nut' in li and 'nut' in lj:
+                return f"Stacked({obj_i}, {obj_j})"    # nut-on-nut → Stacked
+        return f"{pred_name}({obj_i}, {obj_j})"
+
     def _predicates_to_strings(
         self,
         predicate_matrix: np.ndarray,
         objects: List[str],
         threshold: float = 0.5
     ) -> List[str]:
-        """
-        Convert predicate matrix to string format for LLM.
-        
+        """Convert a predicate confidence matrix to human-readable strings for the LLM.
+
         Args:
-            predicate_matrix: [num_objects, num_objects, num_predicates] array
-            objects: List of object names
-            threshold: Minimum confidence to include predicate
-        
+            predicate_matrix: ``[num_objects, num_objects, num_predicates]`` array.
+            objects: Object name list.
+            threshold: Minimum confidence to include a predicate (default 0.5).
+
         Returns:
-            List of predicate strings like ["On(cubeA, table)", "Stacked(cubeA, cubeB)"]
+            Predicate strings like ``["On(cubeA, table)", "Stacked(cubeA, cubeB)"]``.
         """
-        # Define predicate names matching the training data format from Points2Plans
-        # Order from get_predicates() in dataloader.py:
-        # Index 0: Left, 1: Right, 2: Below, 3: Above, 4: Front, 5: Behind, 6: Contact, 7: Boundary, 8: Inside
-        # Use centralized registry
-        predicate_names = PREDICATE_NAMES
-        
         predicate_strings = []
-        num_objects = len(objects)
-        
-        for i in range(num_objects):
-            for j in range(num_objects):
+        num_preds = min(len(PREDICATE_NAMES), predicate_matrix.shape[2])
+
+        for i, obj_i in enumerate(objects):
+            for j, obj_j in enumerate(objects):
                 if i == j:
                     continue
-                
-                # Check each predicate type
-                for pred_idx in range(min(len(predicate_names), predicate_matrix.shape[2])):
-                    pred_name = predicate_names[pred_idx]
+                for pred_idx in range(num_preds):
+                    pred_name = PREDICATE_NAMES[pred_idx]
                     if pred_name is None:
                         continue
-                    
-                    # Apply task-specific filtering to reduce noise
-                    if not should_include_predicate(pred_idx, objects[i], objects[j], self.task_type):
+                    if not should_include_predicate(pred_idx, obj_i, obj_j, self.task_type):
                         continue
-                    
+
                     confidence = predicate_matrix[i, j, pred_idx]
-                    # Print predicates we care about (Above at index 3, On at index 6)
-                    if self.verbose and pred_idx in [2, 3, 6]:  # Print Below, Above, and On
-                        print(f"Predicate {pred_name}({objects[i]}, {objects[j]}) confidence: {confidence:.3f}")
-                    
+                    if self.verbose and pred_idx in (2, 3, 6):   # Below, Above, On
+                        print(f"Predicate {pred_name}({obj_i}, {obj_j}) confidence: {confidence:.3f}")
+
                     if confidence > threshold:
-                        obj_i_lower = objects[i].lower()
-                        obj_j_lower = objects[j].lower()
-                        
-                        # Filter out nonsensical directional predicates
-                        # Skip "Below" if object i is a static/support surface (table, peg)
-                        if pred_name == 'Below':
-                            if 'table' in obj_i_lower or 'peg' in obj_i_lower:
-                                continue  # Skip Below(table, X) or Below(peg, X)
-                        
-                        # Filter out nonsensical "Above" predicates
-                        if pred_name == 'Above':
-                            if 'table' in obj_j_lower:
-                                continue  # Skip Above(X, table) - redundant with On(X, table)
-                        
-                        # Handle On predicate with physical constraint:
-                        # On(A, B) is only valid if A is also Above B (physical consistency)
-                        if pred_name == 'On':
-                            # Skip nonsensical On relationships (support surface "on" object)
-                            if 'table' in obj_i_lower or 'peg' in obj_i_lower:
-                                continue  # Skip On(table, X) or On(peg, X)
-                            
-                            # Check physical constraint: A can only be "on" B if A is above B
-                            above_confidence = predicate_matrix[i, j, 3]  # Above is at index 3
-                            if above_confidence <= threshold:
-                                # Skip On if not Above - prevents On(table, cube) and other invalid configs
-                                if self.verbose and confidence > 0.4:  # Only warn for strong On predictions
-                                    print(f"  Skipping On({objects[i]}, {objects[j]}): On={confidence:.3f} but Above={above_confidence:.3f} (below threshold)")
-                                continue
-                            
-                            # Valid On predicate - check if this is stacking (nut on nut)
-                            if 'nut' in obj_i_lower and 'nut' in obj_j_lower:
-                                # Nut on nut = stacking
-                                pred_str = f"Stacked({objects[i]}, {objects[j]})"
-                            else:
-                                pred_str = f"On({objects[i]}, {objects[j]})"
-                        elif pred_name == 'Above' and 'nut' in obj_j_lower:
-                            # Above(nut, nut) indicates potential stacking
-                            pred_str = f"{pred_name}({objects[i]}, {objects[j]})"
-                        else:
-                            pred_str = f"{pred_name}({objects[i]}, {objects[j]})"
-                        
-                        predicate_strings.append(pred_str)
-        
+                        pred_str = self._format_predicate(pred_name, obj_i, obj_j)
+                        if pred_str is not None:
+                            predicate_strings.append(pred_str)
+
         return predicate_strings
-    
+
     def _check_goal_achieved(
         self,
         state_dict: Dict[str, Any],
-        goal_predicates: np.ndarray
+        goal_predicates: np.ndarray,
+        goals: Optional[List[str]] = None
     ) -> bool:
         """
         Check if current state satisfies goal predicates.
@@ -573,9 +743,18 @@ class ClosedLoopController:
         if current_predicates is None:
             return False
         
+        # For debugging
+        predicate_strings = self._predicates_to_strings(
+            current_predicates, 
+            state_dict['object_names'],
+            threshold=self.predicate_threshold
+        )
+        print(f"  Current predicates: {predicate_strings}") # I got: ['On(cubeA, table)', 'On(cubeB, table)', 'On(cubeC, table)']
+        print(f"  Goal predicates: {goals if goals else 'N/A'}") # It is: ['Stacked(cubeB, cubeA)', 'Stacked(cubeC, cubeB)']
+        
         # Only compare predicates that are set in goals (where goal_predicates > 0)
         # This handles dimension mismatch and focuses on relevant predicates
-        goal_mask = goal_predicates > self.args.goal_threshold
+        goal_mask = goal_predicates > self.predicate_threshold
         
         if goal_mask.sum() == 0:
             # No goals set, consider achieved
@@ -587,21 +766,23 @@ class ClosedLoopController:
         current_subset = current_predicates[:, :, :min_pred_dim]
         goal_subset = goal_predicates[:, :, :min_pred_dim]
         
-        # Compare only where goals are set
-        goal_mask_subset = goal_subset > self.args.goal_threshold
+        # A goal entry is satisfied when the decoder predicts it above threshold.
+        # All goal entries must be satisfied (not a fraction).
+        goal_mask_subset = goal_subset > self.predicate_threshold
         matches = np.logical_and(
             goal_mask_subset,
-            current_subset > self.args.goal_threshold
+            current_subset > self.predicate_threshold
         )
-        
-        # Success if most goals are satisfied
-        satisfaction_rate = matches.sum() / goal_mask_subset.sum()
-        
+
+        num_goals = int(goal_mask_subset.sum())
+        num_satisfied = int(matches.sum())
+        satisfaction_rate = num_satisfied / num_goals
+
         if self.verbose:
-            print(f"  Goal satisfaction: {satisfaction_rate:.2%} (threshold={self.args.goal_threshold:.2%})")
-        
-        return satisfaction_rate >= self.args.goal_threshold
-    
+            print(f"  Goal satisfaction: {num_satisfied}/{num_goals} ({satisfaction_rate:.1%})")
+
+        return num_satisfied == num_goals
+
     def _log_failure_analysis(self, failure_analysis: Dict[str, Any]):
         """
         Log failure analysis for debugging and future LLM reflection.
@@ -855,7 +1036,8 @@ class BatchController:
             'avg_replans': float(np.mean([r['num_replans'] for r in self.results])),
             'avg_failures': float(np.mean([r['num_primitives_failed'] for r in self.results])),
             'results': self.results
-        }    
+        }
+
     def _parse_primitive_for_collection(
         self,
         primitive: str,

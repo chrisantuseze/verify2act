@@ -160,6 +160,15 @@ class PointCloudGenerator:
         object_points = {}
         object_colors = {}
         
+        requested_names = None
+        requested_clean_names = None
+        if object_names is not None:
+            requested_names = {name.lower() for name in object_names}
+            requested_clean_names = {
+                name.split('_')[0].lower() if '_' in name else name.lower()
+                for name in object_names
+            }
+
         for cam_name in camera_names:
             # Get observations including segmentation
             obs = self._get_camera_observation_with_segmentation(env, cam_name)
@@ -188,16 +197,20 @@ class PointCloudGenerator:
             obj_id_to_name = self._get_object_id_mapping(env)
             
             for obj_id in unique_ids:
-                # Skip background (usually ID 0 or -1)
-                if obj_id <= 0:
+                # Skip background / invalid IDs (typically negative)
+                if obj_id < 0:
                     continue
                 
                 # Get object name
                 obj_name = obj_id_to_name.get(obj_id, f"object_{obj_id}")
+                obj_name_clean = obj_name.split('_')[0] if '_' in obj_name else obj_name # obj_name: RoundNut1_main, obj_name_clean: RoundNut1,
                 
                 # Filter by object names if specified
-                if object_names is not None and obj_name not in object_names:
-                    continue
+                if requested_names is not None:
+                    obj_lower = obj_name.lower()
+                    obj_clean_lower = obj_name_clean.lower()
+                    if obj_lower not in requested_names and obj_clean_lower not in requested_clean_names:
+                        continue
                 
                 # Extract points for this object
                 mask = (seg_flat == obj_id)
@@ -216,12 +229,12 @@ class PointCloudGenerator:
                     obj_cols = obj_cols[bounds_mask]
                 
                 # Accumulate points for this object
-                if obj_name not in object_points:
-                    object_points[obj_name] = []
-                    object_colors[obj_name] = []
+                if obj_name_clean not in object_points:
+                    object_points[obj_name_clean] = []
+                    object_colors[obj_name_clean] = []
                 
-                object_points[obj_name].append(obj_pts)
-                object_colors[obj_name].append(obj_cols)
+                object_points[obj_name_clean].append(obj_pts)
+                object_colors[obj_name_clean].append(obj_cols)
         
         # Create point clouds for each object
         object_pcds = {}
@@ -246,6 +259,16 @@ class PointCloudGenerator:
                 pcd = pcd.voxel_down_sample(self.voxel_size)
             
             object_pcds[obj_name] = pcd
+
+        # For debugging: check if any requested objects are missing from the results
+        if object_names is not None:
+            expected_clean = {
+                name.split('_')[0] if '_' in name else name
+                for name in object_names
+            }
+            missing = sorted(expected_clean - set(object_pcds.keys()))
+            if missing:
+                print(f"Warning: Segmented point clouds missing requested objects: {missing}")
         
         return object_pcds
     
@@ -305,7 +328,10 @@ class PointCloudGenerator:
         model = env.sim.model
         
         for i in range(model.ngeom):
-            geom_id = i + 1  # MuJoCo geom IDs start at 1
+            # Depending on renderer / backend, segmentation geom ids may appear
+            # as either zero-based or one-based. Register both for robustness.
+            geom_id_zero_based = i
+            geom_id_one_based = i + 1
             geom_name = model.geom_id2name(i)
             
             if geom_name is None:
@@ -314,7 +340,8 @@ class PointCloudGenerator:
             # Parse object name from geom name
             # Robosuite typically names geoms like "object_geom", "cube_g0", etc.
             obj_name = self._parse_object_name(geom_name, env)
-            id_to_name[geom_id] = obj_name
+            id_to_name[geom_id_zero_based] = obj_name
+            id_to_name[geom_id_one_based] = obj_name
         
         return id_to_name
     
