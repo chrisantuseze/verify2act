@@ -7,26 +7,26 @@ collect multiple episodes with progress tracking and error recovery.
 xvfb-run -a python batch_collect.py \
     --env Stack3 \
     --num-episodes 1 \
-    --output-dir data_capture/dataset/stack_v1
+    --output-dir dataset/stack_v1
 
 xvfb-run -a python batch_collect.py \
     --env ClutteredNutAssembly \
-    --max-timesteps 3000 --output-dir data_capture/dataset/nut_assembly \
+    --max-timesteps 3000 --output-dir dataset/nut_assembly \
     --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
     --nut-type-mode roundnut --num-episodes 100 --seed 42
 
 xvfb-run -a python batch_collect.py \
     --env Stack3 \
-    --max-timesteps 1000 --output-dir data_capture/dataset/stack3 \
+    --max-timesteps 1000 --output-dir dataset/stack3 \
     --num-episodes 100 --seed 42
 
 Phase 4: Batch Collection ✓
 """
 
-import os
-# Set rendering backend before robosuite imports
-if 'MUJOCO_GL' not in os.environ:
-    os.environ['MUJOCO_GL'] = 'glx'
+# import os
+# # Set rendering backend before robosuite imports
+# if 'MUJOCO_GL' not in os.environ:
+#     os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time
@@ -307,7 +307,7 @@ class BatchCollector:
         
 
         # End recording
-        # data_dict, attrs_dict = recorder.end_episode() # we already end the episode in save_episode
+        data_dict, attrs_dict = recorder.end_episode() # we already end the episode in save_episode - has 'episode_active' which tells us if is done or not
         
         # Only save episode if it was successful
         if episode_successful:

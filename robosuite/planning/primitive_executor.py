@@ -143,7 +143,7 @@ class PrimitiveExecutor:
             object_pos = action_params
             print(f"  Warning: Using planner params as object position")
         
-        print(f"  Target object: {object_name}, target: {target_name}, position: {object_pos}")
+        print(f"  Object: {object_name}, target: {target_name}, object position: {object_pos}, action params: {action_params}")
         
         steps = 0
         
@@ -206,7 +206,7 @@ class PrimitiveExecutor:
             target_pos = action_params
             print(f"  Warning: Using planner params as target position")
         
-        print(f"  Placing {object_name} onto {target_name}, position: {target_pos}")
+        print(f"  Placing {object_name} onto target: {target_name}, at position: {target_pos}, action params: {action_params}")
         
         steps = 0
         
