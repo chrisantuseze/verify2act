@@ -78,6 +78,7 @@ class EpisodeRecorder:
         self.episode_active = False
         self.current_timestep = 0
         self.last_manipulated_object = None  # Track last known manipulated object
+        self.active_grasp_start_pos = None
         
         # Key timestep tracking (for key_timesteps_only mode)
         self.prev_skill_type = None
@@ -111,6 +112,7 @@ class EpisodeRecorder:
         self.in_grasp_sequence = False
         self.grasp_start_timestep = None
         self.current_grasped_object = None
+        self.active_grasp_start_pos = None
 
         self.done = False
         
@@ -305,6 +307,7 @@ class EpisodeRecorder:
                         'gripper_action': release_action['gripper_action'] if release_action else -1,
                         'raw_action': release_action['raw_action'] if release_action else np.zeros(7),
                     }
+                    print(f"elif.Position_delta: {release_action['position_delta'] if release_action else np.zeros(3)}")
                     filtered_actions.append(combined_action)
                     
                 # Reset for next pick-place
@@ -327,6 +330,7 @@ class EpisodeRecorder:
                 'gripper_action': last_action['gripper_action'] if last_action else -1,
                 'raw_action': last_action['raw_action'] if last_action else np.zeros(7),
             }
+            print(f"if.Position_delta: {last_action['position_delta'] if last_action else np.zeros(3)}")
             filtered_actions.append(combined_action)
         
         # If no actions found, return just initial and final state
@@ -416,6 +420,8 @@ class EpisodeRecorder:
             'camera_obs': self._capture_camera_observations(obs) if obs is not None else None,
             'skill_type': parsed_action['skill_type'] if parsed_action is not None else None,
         }
+
+        print(f"action: {timestep_state['action']}")
         
         self.timestep_data.append(timestep_state)
         
@@ -664,6 +670,11 @@ class EpisodeRecorder:
             current_manipulated = self.state_capture.detect_manipulated_object(obs, is_grasp_action=True)
             if current_manipulated is not None:
                 self.last_manipulated_object = current_manipulated
+                
+                # Snapshot the start position
+                obj_states = self.state_capture.capture_object_states(obs)
+                if current_manipulated in obj_states and 'position' in obj_states[current_manipulated]:
+                    self.active_grasp_start_pos = obj_states[current_manipulated]['position'].copy()
                 # print(f"  T{self.current_timestep}: Detected grasp target → object {current_manipulated}")
         
         # If currently grasping or holding, maintain the same object
@@ -706,10 +717,22 @@ class EpisodeRecorder:
         else:
             object_id = None
 
+        position_delta = action[:3].copy() if len(action) >= 3 else np.zeros(3)
+
+        # If this is a release, and we have a start position, calculate the translation macro-action
+        if skill_type == 'release' and manipulated_object is not None and self.active_grasp_start_pos is not None:
+            obj_states = self.state_capture.capture_object_states(obs)
+            if manipulated_object in obj_states and 'position' in obj_states[manipulated_object]:
+                current_pos = obj_states[manipulated_object]['position']
+                position_delta = current_pos - self.active_grasp_start_pos
+                # print(f"  T{self.current_timestep}: Calculated MACRO action delta: {position_delta}")
+
+        print(f"_parsed_action.position_delta: {list(position_delta)}, is action: {len(action) >= 3}")
+
         return {
             'skill_type': skill_type,
             'object_id': object_id,
-            'position_delta': action[:3].copy() if len(action) >= 3 else np.zeros(3),
+            'position_delta': position_delta,
             'gripper_action': gripper_action,
             'raw_action': action.copy(),
         }

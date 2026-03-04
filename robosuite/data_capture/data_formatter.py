@@ -313,6 +313,7 @@ class DataFormatter:
                 continue
 
             continuous_params = action_dict.get('position_delta', np.zeros(3))
+            print(f"Action: skill={skill_type}, mapped={skill_mapped}, obj_idx={obj_idx}, obj_id_str={obj_id_str}, continuous_params={continuous_params}")
             continuous_params = np.asarray(continuous_params).tolist()
             action_list.append([skill_mapped, obj_id_str, continuous_params])
 

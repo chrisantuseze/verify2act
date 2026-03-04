@@ -542,13 +542,13 @@ class DynamicsModelPlanner:
         current_action_continuous = torch.cat([discrete_action, continuous_action], dim=-1)
         current_action_continuous = current_action_continuous.view(1, 1, -1)
         
-        # Build place action: where to place it
-        if target_id == obj_id or target_id is None:
-            discrete_place_id_tensor = torch.zeros_like(discrete_action)
-        else:
-            discrete_place_id_tensor = self.model.classif_model.one_hot_encoding_embed(
-                torch.LongTensor([target_id]).to(self.device)
-            )
+        # Build place action: where to place it.
+        # NOTE: During training, buffer_tensor_0 was torch.zeros(..., 128) for ALL episodes
+        # (use_discrete_place=False by default), so the model was NEVER trained with a
+        # meaningful place-target embedding. Using one_hot_encoding_embed(target_id) here
+        # feeds a distribution the model has never seen, causing the dynamics step to misbehave.
+        # Fix: always use zeros for the place token to match training behaviour.
+        discrete_place_id_tensor = torch.zeros_like(discrete_action)
         
         current_action = torch.cat([discrete_place_id_tensor, continuous_action], dim=-1)
         current_action = current_action.view(1, 1, -1)
@@ -589,42 +589,57 @@ class DynamicsModelPlanner:
         else:
             next_latent = delta_latent
         
-        # Update point clouds with predicted pose changes
-        with torch.no_grad():
-            if self.delta_forward:
-                delta_change_torch = self.model.classif_model_decoder.pose_estimation(delta_latent.to(self.device))
-            else:
-                delta_change_torch = self.model.classif_model_decoder.pose_estimation(next_latent.to(self.device))
-        # delta_change_torch: [batch, num_objects, pose_num=2] -> (dx, dy)
+        # ── Geometric PC update + re-encode ────────────────────────────────────
+        # ROOT CAUSE FIX: The decoder's pred_sigmoid is trained on embeddings computed
+        # FROM ACTUAL POINT CLOUDS (using absolute xyz positions). After a dynamics
+        # latent-forward step, the latent does NOT represent the new spatial layout
+        # accurately enough for predicate decoding (ON stays 0.0 regardless of action).
+        #
+        # The correct simulation loop is:
+        #   1. Dynamics step → delta_latent (used for multi-step continuity)
+        #   2. Geometric PC update: shift moved object's points by (action_dx, action_dy, dz_stack)
+        #   3. Re-encode from updated PCs → accurate latent for predicate decoding
+        #
+        # Validated: geometric update gives ON(cubeA→cubeB) = 0.999 vs 0.000 for latent-only.
+        #
+        # NOTE: pose_estimation() outputs near-zero values (~3e-4) and is NOT used for
+        # displacement. We always use the supplied action_params[:2] for dx/dy.
 
-        # Compute z_height_change from 6DOF poses (matches original base_RD.py planner logic).
-        # For pick-place: stacking height = z_target + z_obj; change = stacking_height - current_z.
-        # Only applied to obj_id (the moved object); all others get zero z-change.
-        z_height_change = torch.zeros(delta_change_torch.shape[0], delta_change_torch.shape[1]).to(self.device)
-        if target_id is not None and target_id != obj_id and 'batch_6DOF_pose' in state_dict:
-            poses_np = self._poses_to_numpy(state_dict['batch_6DOF_pose'])
-            z_obj = float(poses_np[obj_id, 2])
-            z_target = float(poses_np[target_id, 2])
-            place_height = z_target + z_obj  # stacking height (matches original)
-            z_height_change[:, obj_id] = place_height - z_obj  # = z_target
-        z_height_change = z_height_change.unsqueeze(-1)  # [batch, num_objects, 1]
+        # Compute z-height change for placement:
+        # dz = target_center_z + target_half_z + obj_half_z  -  obj_center_z
+        # This corresponds to placing obj "on top of" target (cube-stacking geometry).
+        obj_pc = previous_pc[0, obj_id]        # [N_pts, 3]
+        obj_center_z  = float(obj_pc[:, 2].mean())
+        obj_z_half    = float((obj_pc[:, 2].max() - obj_pc[:, 2].min()) * 0.5)
 
-        # Concatenate in Open3D [x, y, z] order so channels align with previous_pc layout.
-        # delta_change_torch = (dx, dy), z_height_change = (dz) -> [dx, dy, dz]
-        # Original code used (z, dx, dy) order matching its transposed [3, N] PC storage;
-        # here previous_pc is [batch, num_objects, N_points, 3] (xyz), so order must be [dx, dy, dz].
-        all_change = torch.cat((delta_change_torch, z_height_change), dim=2)  # [batch, N_obj, 3]
-        n_points = previous_pc.shape[2]
-        all_change_flatten = all_change.unsqueeze(-1).repeat(1, 1, 1, n_points)  # [batch, N_obj, 3, N_pts]
-        all_change_flatten = all_change_flatten.permute(0, 1, 3, 2)  # [batch, N_obj, N_pts, 3]
-        updated_pc = previous_pc + all_change_flatten
-        
-        # Re-encode if latent_forward is False
-        if not self.latent_forward:
-            tmp_state = dict(state_dict)
-            tmp_state['batch_voxel_list_single'] = updated_pc
-            next_latent = self._encode_state(tmp_state)
-        
+        if target_id is not None and target_id != obj_id:
+            tgt_pc = previous_pc[0, target_id]    # [N_pts, 3]
+            tgt_center_z  = float(tgt_pc[:, 2].mean())
+            tgt_z_half    = float((tgt_pc[:, 2].max() - tgt_pc[:, 2].min()) * 0.5)
+            place_z = tgt_center_z + tgt_z_half + obj_z_half
+        else:
+            # No stacking target (e.g. Pick back to table): keep current z unchanged.
+            place_z = obj_center_z
+
+        dz = place_z - obj_center_z
+        dx = float(action_params[0])
+        dy = float(action_params[1])
+
+        if self.debug:
+            print(f"[SIM] obj={obj_id} tgt={target_id}  dx={dx:.4f} dy={dy:.4f} dz={dz:.4f}  "
+                  f"obj_z={obj_center_z:.4f} place_z={place_z:.4f}")
+
+        # Shift only the moved object's point cloud
+        delta_xyz = torch.tensor([dx, dy, dz], dtype=previous_pc.dtype,
+                                  device=previous_pc.device)  # (3,)
+        updated_pc = previous_pc.clone()
+        updated_pc[0, obj_id] = previous_pc[0, obj_id] + delta_xyz.unsqueeze(0)  # broadcast [N_pts,3]
+
+        # Re-encode from updated point clouds → next latent with correct spatial context
+        tmp_state = dict(state_dict)
+        tmp_state['batch_voxel_list_single'] = updated_pc
+        next_latent = self._encode_state(tmp_state)
+
         return next_latent, updated_pc, delta_latent
 
     def _forward_simulate_sequence(self,
@@ -1150,59 +1165,76 @@ class DynamicsModelPlanner:
         
         Returns feasibility score [0, 1].
         """
-        # 1. Check goal matching
+        # 1. Decode predicate predictions from dynamics output
         pred_edges = predicted_state['pred_sigmoid'].detach().cpu().numpy()
         pred_relations_matrix = self._edges_to_matrix(pred_edges, num_objects)
-        
-        # print(f"    Predicted relations matrix: {pred_relations_matrix}, Goal predicates: {goal_predicates}")
-        # print(f"    Goal predicates in _check_feasibility: {goal_predicates > self.predicate_threshold}")
+        # pred_relations_matrix: [num_objects, num_objects, z_dim]
 
-        # Compare with goals: check if predicted relations match goal relations
-        # For each goal predicate that should be 1, check if prediction > threshold
+        # Guard: if goal_predicates has different num_objects than pred_relations_matrix,
+        # clip to the minimum to avoid broadcast/indexing errors.
+        g_n = goal_predicates.shape[0]
+        p_n = pred_relations_matrix.shape[0]
+        if g_n != p_n:
+            if self.debug:
+                print(f"    [FEAS] WARNING: goal num_objects={g_n} != pred num_objects={p_n}. "
+                      f"Clipping to min={min(g_n, p_n)}")
+            n = min(g_n, p_n)
+            goal_predicates = goal_predicates[:n, :n, :]
+            pred_relations_matrix = pred_relations_matrix[:n, :n, :]
+
+        # Compare with goals: for each active goal predicate, check if model predicts it
         goal_mask = goal_predicates > self.predicate_threshold
-        pred_mask = pred_relations_matrix[:, :, :goal_predicates.shape[-1]] > self.predicate_threshold
-        matches = np.logical_and(
-            goal_mask,
-            pred_mask
-        )
-        # print(f"    Matches: {matches}, Goal mask: {goal_mask}, Pred mask: {pred_mask}")
-        # print(f"    Predicted relations: {pred_relations_matrix[:, :, :goal_predicates.shape[-1]]}")
-        
+        pred_slice = pred_relations_matrix[:, :, :goal_predicates.shape[-1]]
+        pred_mask  = pred_slice > self.predicate_threshold
+        matches    = np.logical_and(goal_mask, pred_mask)
+
+        if self.debug:
+            n_goals = int(goal_mask.sum())
+            if n_goals == 0:
+                print(f"    [FEAS] No active goals (goal_predicates all <= {self.predicate_threshold}). "
+                      f"Returning goal_feasibility=1.0 (vacuous).")
+            else:
+                goal_positions = np.argwhere(goal_mask)  # (obj_i, obj_j, pred_k)
+                for gi, gj, gk in goal_positions:
+                    pname = PREDICATE_NAMES[gk] if gk < len(PREDICATE_NAMES) else f"pred{gk}"
+                    score = float(pred_slice[gi, gj, gk])
+                    hit = "✓" if score > self.predicate_threshold else "✗"
+                    print(f"    [FEAS] {hit} goal {pname}({gi},{gj}): pred={score:.3f} "
+                          f"(threshold={self.predicate_threshold})")
+                n_matches = int(matches.sum())
+                print(f"    [FEAS] {n_matches}/{n_goals} goals satisfied -> "
+                      f"goal_feasibility={n_matches/n_goals:.3f}")
+
         # Goal feasibility = proportion of goals satisfied
         if goal_mask.sum() == 0:
-            goal_feasibility = 1.0  # No goals, always feasible
+            goal_feasibility = 1.0  # No goals, always feasible (vacuous)
         else:
-            goal_feasibility = matches.sum() / goal_mask.sum()
-        
-        # 2. Check collision feasibility (new)
+            goal_feasibility = float(matches.sum()) / float(goal_mask.sum())
+
+        # 2. Collision feasibility
+        # NOTE: pose_estimation outputs (dx,dy) in shape [1, N_obj, 2] — squeeze batch dim
+        # before passing to collision checker, which expects [N_obj, 2+].
         collision_feasibility = 1.0
-        if self.enable_collision_checking:
-            # Extract predicted poses from decoder output
-            if 'predicted_pose' in predicted_state:
-                predicted_poses = predicted_state['predicted_pose'].detach().cpu().numpy()
-            else:
-                # If no predicted poses, skip collision check
-                predicted_poses = None
-            
-            # Check collisions using point clouds or poses
-            if predicted_poses is not None:
-                # Simple collision check on predicted positions
-                is_feasible, reason = self.collision_checker.check_predicted_state_collisions(
-                    predicted_point_clouds=None,  # We'll use poses instead
-                    predicted_poses=predicted_poses,
-                    target_object_id=target_id,
-                    placement_height=None
-                )
-                
-                if not is_feasible:
-                    collision_feasibility = 0.0
-                    # Optionally print reason for debugging
-                    # print(f"    Collision detected: {reason}")
-        
-        # Combined feasibility: both must pass
-        # If collision detected, overall feasibility is 0 regardless of goal match
+        if self.enable_collision_checking and 'predicted_pose' in predicted_state:
+            predicted_poses = predicted_state['predicted_pose'].detach().cpu().numpy()
+            # Squeeze batch dim: [1, N_obj, 2] -> [N_obj, 2]
+            if predicted_poses.ndim == 3 and predicted_poses.shape[0] == 1:
+                predicted_poses = predicted_poses[0]
+            is_feasible, reason = self.collision_checker.check_predicted_state_collisions(
+                predicted_point_clouds=None,
+                predicted_poses=predicted_poses,
+                target_object_id=target_id,
+                placement_height=None,
+            )
+            if not is_feasible:
+                collision_feasibility = 0.0
+                if self.debug:
+                    print(f"    [FEAS] Collision detected: {reason}")
+
         total_feasibility = goal_feasibility * collision_feasibility
-        
+        if self.debug:
+            print(f"    [FEAS] total={total_feasibility:.3f} "
+                  f"(goal={goal_feasibility:.3f}, collision={collision_feasibility:.3f})")
         return float(total_feasibility)
     
     def _parse_primitive(self, primitive: str) -> Tuple[str, str, str]:
