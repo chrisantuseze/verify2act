@@ -1,0 +1,238 @@
+<?xml version="1.0" ?>
+<mujoco>
+  <!--Automatically generated @ 08:16:44, 02/18/2025.-->
+  <compiler angle="radian" meshdir="." autolimits="true"/>
+  <include file="franka/panda.xml"/>
+  <include file="scene.xml"/>
+  <asset>
+    <mesh name="brick_1_hole_-7" file="./objects/circle_hole/circle_hole.stl" scale="2 2 2"/>
+    <mesh name="brick_4_hole_-7" file="./objects/circle_hole/circle_hole.stl" scale="2 2 7"/>
+    <mesh name="brick_7_nail_head" file="./objects/hexagon_prism/hexagon_prism.stl" scale="4 4 3"/>
+  </asset>
+  <worldbody>
+    <body name="brick_1" pos="-0.2 -0.5  0.5">
+      <freejoint/>
+      <geom name="brick_1_g0_purple" pos="0.    0.    0.005" type="box" size="0.175 0.15  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g1_purple" pos=" 0.   -0.12  0.02" type="box" size="0.175 0.03  0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g2_purple" pos=" 0.    -0.125  0.035" type="box" size="0.175 0.025 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g3_purple" pos=" 0.    -0.135  0.05 " type="box" size="0.175 0.015 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g4_purple" pos="-0.09 -0.11  0.05" type="box" size="0.085 0.01  0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g5_purple" pos="-0.13   0.025  0.045" type="box" size="0.045 0.125 0.015" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g6_purple" pos="-0.11  -0.06   0.015" type="box" size="0.065 0.03  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g7_purple" pos="-0.11  -0.075  0.025" type="box" size="0.065 0.015 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g8_purple" pos="-0.115 -0.045  0.025" type="box" size="0.06  0.015 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g9_purple" pos="-0.13  0.06  0.02" type="box" size="0.045 0.09  0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g10_purple" pos="-0.07  -0.045  0.045" type="box" size="0.015 0.015 0.015" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g11_purple" pos="0.045 0.08  0.015" type="box" size="0.13  0.07  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g12_purple" pos="-0.07  0.08  0.04" type="box" size="0.015 0.07  0.02 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g13_purple" pos="0.06  0.105 0.03 " type="box" size="0.115 0.045 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g14_purple" pos="-0.03   0.105  0.05 " type="box" size="0.025 0.045 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g15_purple" pos="-0.035 -0.08   0.02 " type="mesh" mesh="brick_1_hole_-7" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g16_purple" pos=" 0.065 -0.05   0.015" type="box" size="0.11  0.02  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g17_purple" pos=" 0.065 -0.065  0.025" type="box" size="0.11  0.005 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g18_purple" pos=" 0.075 -0.08   0.02 " type="box" size="0.1  0.01 0.01" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g19_purple" pos=" 0.075 -0.045  0.03 " type="box" size="0.1   0.015 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g20_purple" pos="-0.015 -0.045  0.05 " type="box" size="0.01  0.015 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g21_purple" pos="0.075 0.035 0.03 " type="box" size="0.1   0.025 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g22_purple" pos="-0.015  0.035  0.05 " type="box" size="0.01  0.025 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g23_purple" pos="0.085 0.135 0.05 " type="box" size="0.09  0.015 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g24_purple" pos=" 0.1   -0.11   0.045" type="box" size="0.075 0.01  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g25_purple" pos=" 0.035 -0.11   0.055" type="box" size="0.01  0.01  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g26_purple" pos=" 0.1   -0.045  0.045" type="box" size="0.075 0.015 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g27_purple" pos=" 0.035 -0.045  0.055" type="box" size="0.01  0.015 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g28_purple" pos="0.1   0.065 0.045" type="box" size="0.075 0.055 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g29_purple" pos="0.035 0.065 0.055" type="box" size="0.01  0.055 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g30_purple" pos=" 0.125 -0.11   0.055" type="box" size="0.05  0.01  0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g31_purple" pos=" 0.125 -0.045  0.055" type="box" size="0.05  0.015 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g32_purple" pos="0.125 0.065 0.055" type="box" size="0.05  0.055 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g33_purple" pos=" 0.13  -0.08   0.045" type="box" size="0.045 0.02  0.015" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g34_purple" pos=" 0.13  -0.01   0.035" type="box" size="0.045 0.02  0.025" rgba="0.5843 0.4235 0.7059 1.    " class="visual"/>
+      <geom name="brick_1_g0_purple_c" pos="0.    0.    0.005" type="box" size="0.174 0.149 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g1_purple_c" pos=" 0.   -0.12  0.02" type="box" size="0.174 0.029 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g2_purple_c" pos=" 0.    -0.125  0.035" type="box" size="0.174 0.024 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g3_purple_c" pos=" 0.    -0.135  0.05 " type="box" size="0.174 0.014 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g4_purple_c" pos="-0.09 -0.11  0.05" type="box" size="0.084 0.009 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g5_purple_c" pos="-0.13   0.025  0.045" type="box" size="0.044 0.124 0.015" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g6_purple_c" pos="-0.11  -0.06   0.015" type="box" size="0.064 0.029 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g7_purple_c" pos="-0.11  -0.075  0.025" type="box" size="0.064 0.014 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g8_purple_c" pos="-0.115 -0.045  0.025" type="box" size="0.059 0.014 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g9_purple_c" pos="-0.13  0.06  0.02" type="box" size="0.044 0.089 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g10_purple_c" pos="-0.07  -0.045  0.045" type="box" size="0.014 0.014 0.015" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g11_purple_c" pos="0.045 0.08  0.015" type="box" size="0.129 0.069 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g12_purple_c" pos="-0.07  0.08  0.04" type="box" size="0.014 0.069 0.02 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g13_purple_c" pos="0.06  0.105 0.03 " type="box" size="0.114 0.044 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g14_purple_c" pos="-0.03   0.105  0.05 " type="box" size="0.024 0.044 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g16_purple_c" pos=" 0.065 -0.05   0.015" type="box" size="0.109 0.019 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g17_purple_c" pos=" 0.065 -0.065  0.025" type="box" size="0.109 0.004 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g18_purple_c" pos=" 0.075 -0.08   0.02 " type="box" size="0.099 0.009 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g19_purple_c" pos=" 0.075 -0.045  0.03 " type="box" size="0.099 0.014 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g20_purple_c" pos="-0.015 -0.045  0.05 " type="box" size="0.009 0.014 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g21_purple_c" pos="0.075 0.035 0.03 " type="box" size="0.099 0.024 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g22_purple_c" pos="-0.015  0.035  0.05 " type="box" size="0.009 0.024 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g23_purple_c" pos="0.085 0.135 0.05 " type="box" size="0.089 0.014 0.01 " rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g24_purple_c" pos=" 0.1   -0.11   0.045" type="box" size="0.074 0.009 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g25_purple_c" pos=" 0.035 -0.11   0.055" type="box" size="0.009 0.009 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g26_purple_c" pos=" 0.1   -0.045  0.045" type="box" size="0.074 0.014 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g27_purple_c" pos=" 0.035 -0.045  0.055" type="box" size="0.009 0.014 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g28_purple_c" pos="0.1   0.065 0.045" type="box" size="0.074 0.054 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g29_purple_c" pos="0.035 0.065 0.055" type="box" size="0.009 0.054 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g30_purple_c" pos=" 0.125 -0.11   0.055" type="box" size="0.049 0.009 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g31_purple_c" pos=" 0.125 -0.045  0.055" type="box" size="0.049 0.014 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g32_purple_c" pos="0.125 0.065 0.055" type="box" size="0.049 0.054 0.005" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g33_purple_c" pos=" 0.13  -0.08   0.045" type="box" size="0.044 0.019 0.015" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <geom name="brick_1_g34_purple_c" pos=" 0.13  -0.01   0.035" type="box" size="0.044 0.019 0.025" rgba="0.5843 0.4235 0.7059 1.    " class="collision"/>
+      <site name="brick_1_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_1_grasp0" pos="0.095 0.    0.055" quat=" 0.7071  0.      0.     -0.7071" class="invisible_site"/>
+      <site name="brick_1_grasp1" pos="0.095 0.    0.055" quat=" 0.7071  0.     -0.      0.7071" class="invisible_site"/>
+      <site name="brick_1_side0_base" class="invisible_site" pos=" 0.   -0.15  0.03" quat=" 0.7071 -0.7071  0.      0.    "/>
+      <site name="brick_1_side1_base" class="invisible_site" pos="0.   0.15 0.03" quat=" 0.7071  0.7071 -0.      0.    "/>
+      <site name="brick_1_side0_grasp0" class="invisible_site" pos="0.095 0.145 0.03 " quat=" 0.5 -0.5  0.5  0.5"/>
+      <site name="brick_1_side0_grasp1" class="invisible_site" pos="0.095 0.145 0.03 " quat=" 0.5 -0.5 -0.5 -0.5"/>
+      <site name="brick_1_side1_grasp0" class="invisible_site" pos=" 0.095 -0.145  0.03 " quat=" 0.5  0.5 -0.5  0.5"/>
+      <site name="brick_1_side1_grasp1" class="invisible_site" pos=" 0.095 -0.145  0.03 " quat=" 0.5  0.5  0.5 -0.5"/>
+      <site name="brick_2_hole_align" pos="-2.7756e-17 -1.0000e-02  1.0000e-02" class="invisible_site"/>
+      <site name="brick_3_hole_align" pos="-0.04  0.    0.02" class="invisible_site"/>
+      <site name="brick_4_hole_align" pos="-2.7756e-17 -8.0000e-02  3.0000e-02" class="invisible_site"/>
+      <site name="brick_5_hole_align" pos="0.01 0.   0.04" class="invisible_site"/>
+      <site name="brick_6_hole_align" pos="0.06 0.   0.05" class="invisible_site"/>
+      <site name="brick_7_hole_align" pos="-0.035 -0.08   0.01 " class="invisible_site"/>
+    </body>
+    <body name="brick_2" pos=" 0.1333 -0.5     0.5   ">
+      <freejoint/>
+      <geom name="brick_2_g0_yellow" pos="0.    0.    0.005" type="box" size="0.085 0.02  0.005" rgba="0.9098 0.6784 0.1373 1.    " class="visual"/>
+      <geom name="brick_2_g1_yellow" pos="-0.07  0.    0.04" type="box" size="0.015 0.02  0.03 " rgba="0.9098 0.6784 0.1373 1.    " class="visual"/>
+      <geom name="brick_2_g2_yellow" pos="0.03 0.   0.04" type="box" size="0.055 0.02  0.03 " rgba="0.9098 0.6784 0.1373 1.    " class="visual"/>
+      <geom name="brick_2_g0_yellow_c" pos="0.    0.    0.005" type="box" size="0.084 0.019 0.005" rgba="0.9098 0.6784 0.1373 1.    " class="collision"/>
+      <geom name="brick_2_g1_yellow_c" pos="-0.07  0.    0.04" type="box" size="0.014 0.019 0.03 " rgba="0.9098 0.6784 0.1373 1.    " class="collision"/>
+      <geom name="brick_2_g2_yellow_c" pos="0.03 0.   0.04" type="box" size="0.054 0.019 0.03 " rgba="0.9098 0.6784 0.1373 1.    " class="collision"/>
+      <site name="brick_2_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_2_grasp0" pos="0.005 0.    0.065" quat=" 0.7071  0.      0.     -0.7071" class="invisible_site"/>
+      <site name="brick_2_grasp1" pos="0.005 0.    0.065" quat=" 0.7071  0.     -0.      0.7071" class="invisible_site"/>
+      <site name="brick_2_side0_base" class="invisible_site" pos=" 0.    -0.02   0.035" quat=" 0.7071 -0.7071  0.      0.    "/>
+      <site name="brick_2_side1_base" class="invisible_site" pos="0.    0.02  0.035" quat=" 0.7071  0.7071 -0.      0.    "/>
+      <site name="brick_2_side0_grasp0" class="invisible_site" pos="0.005 0.015 0.035" quat=" 0.5 -0.5  0.5  0.5"/>
+      <site name="brick_2_side0_grasp1" class="invisible_site" pos="0.005 0.015 0.035" quat=" 0.5 -0.5 -0.5 -0.5"/>
+      <site name="brick_2_side1_grasp0" class="invisible_site" pos=" 0.005 -0.015  0.035" quat=" 0.5  0.5 -0.5  0.5"/>
+      <site name="brick_2_side1_grasp1" class="invisible_site" pos=" 0.005 -0.015  0.035" quat=" 0.5  0.5  0.5 -0.5"/>
+    </body>
+    <body name="brick_3" pos=" 0.4667 -0.5     0.5   ">
+      <freejoint/>
+      <geom name="brick_3_g0_blue" pos="0.    0.    0.035" type="box" size="0.015 0.06  0.035" rgba="0.2824 0.4706 0.8157 1.    " class="visual"/>
+      <geom name="brick_3_g0_blue_c" pos="0.    0.    0.035" type="box" size="0.014 0.059 0.035" rgba="0.2824 0.4706 0.8157 1.    " class="collision"/>
+      <site name="brick_3_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_3_grasp0" pos="0.    0.    0.065" quat=" 1.  0. -0.  0." class="invisible_site"/>
+      <site name="brick_3_grasp1" pos="0.    0.    0.065" quat=" 6.1232e-17  0.0000e+00 -0.0000e+00  1.0000e+00" class="invisible_site"/>
+      <site name="brick_3_side0_base" class="invisible_site" pos="-0.015  0.     0.035" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_3_side1_base" class="invisible_site" pos="0.015 0.    0.035" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_3_side0_grasp0" class="invisible_site" pos="0.01  0.    0.035" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_3_side0_grasp1" class="invisible_site" pos="0.01  0.    0.035" quat="4.3298e-17 7.0711e-01 4.3298e-17 7.0711e-01"/>
+      <site name="brick_3_side1_grasp0" class="invisible_site" pos="-0.01   0.     0.035" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_3_side1_grasp1" class="invisible_site" pos="-0.01   0.     0.035" quat=" 4.3298e-17 -7.0711e-01 -4.3298e-17  7.0711e-01"/>
+    </body>
+    <body name="brick_4" pos=" 0.8 -0.5  0.5">
+      <freejoint/>
+      <geom name="brick_4_g0_brown" pos=" 0.    -0.015  0.035" type="box" size="0.085 0.005 0.035" rgba="0.549  0.3804 0.2353 1.    " class="visual"/>
+      <geom name="brick_4_g1_brown" pos="-0.065  0.005  0.035" type="box" size="0.02  0.015 0.035" rgba="0.549  0.3804 0.2353 1.    " class="visual"/>
+      <geom name="brick_4_g2_brown" pos="-0.035  0.     0.035" type="mesh" mesh="brick_4_hole_-7" rgba="0.549  0.3804 0.2353 1.    " class="visual"/>
+      <geom name="brick_4_g3_brown" pos="0.02  0.015 0.035" type="box" size="0.065 0.005 0.035" rgba="0.549  0.3804 0.2353 1.    " class="visual"/>
+      <geom name="brick_4_g4_brown" pos="0.03  0.    0.035" type="box" size="0.055 0.01  0.035" rgba="0.549  0.3804 0.2353 1.    " class="visual"/>
+      <geom name="brick_4_g0_brown_c" pos=" 0.    -0.015  0.035" type="box" size="0.084 0.004 0.035" rgba="0.549  0.3804 0.2353 1.    " class="collision"/>
+      <geom name="brick_4_g1_brown_c" pos="-0.065  0.005  0.035" type="box" size="0.019 0.014 0.035" rgba="0.549  0.3804 0.2353 1.    " class="collision"/>
+      <geom name="brick_4_g3_brown_c" pos="0.02  0.015 0.035" type="box" size="0.064 0.004 0.035" rgba="0.549  0.3804 0.2353 1.    " class="collision"/>
+      <geom name="brick_4_g4_brown_c" pos="0.03  0.    0.035" type="box" size="0.054 0.009 0.035" rgba="0.549  0.3804 0.2353 1.    " class="collision"/>
+      <site name="brick_4_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_4_grasp0" pos="0.005 0.    0.065" quat=" 0.7071  0.      0.     -0.7071" class="invisible_site"/>
+      <site name="brick_4_grasp1" pos="0.005 0.    0.065" quat=" 0.7071  0.     -0.      0.7071" class="invisible_site"/>
+      <site name="brick_4_side0_base" class="invisible_site" pos=" 0.    -0.02   0.035" quat=" 0.7071 -0.7071  0.      0.    "/>
+      <site name="brick_4_side1_base" class="invisible_site" pos="0.    0.02  0.035" quat=" 0.7071  0.7071 -0.      0.    "/>
+      <site name="brick_4_side0_grasp0" class="invisible_site" pos="0.005 0.015 0.035" quat=" 0.5 -0.5  0.5  0.5"/>
+      <site name="brick_4_side0_grasp1" class="invisible_site" pos="0.005 0.015 0.035" quat=" 0.5 -0.5 -0.5 -0.5"/>
+      <site name="brick_4_side1_grasp0" class="invisible_site" pos=" 0.005 -0.015  0.035" quat=" 0.5  0.5 -0.5  0.5"/>
+      <site name="brick_4_side1_grasp1" class="invisible_site" pos=" 0.005 -0.015  0.035" quat=" 0.5  0.5  0.5 -0.5"/>
+    </body>
+    <body name="brick_5" pos="-0.2  0.   0.5">
+      <freejoint/>
+      <geom name="brick_5_g0_green" pos=" 0.    -0.11   0.035" type="box" size="0.015 0.01  0.035" rgba="0.4157 0.8    0.3922 1.    " class="visual"/>
+      <geom name="brick_5_g1_green" pos="0.    0.01  0.065" type="box" size="0.015 0.11  0.005" rgba="0.4157 0.8    0.3922 1.    " class="visual"/>
+      <geom name="brick_5_g2_green" pos=" 0.    -0.045  0.03 " type="box" size="0.015 0.015 0.03 " rgba="0.4157 0.8    0.3922 1.    " class="visual"/>
+      <geom name="brick_5_g3_green" pos="0.    0.045 0.05 " type="box" size="0.015 0.075 0.01 " rgba="0.4157 0.8    0.3922 1.    " class="visual"/>
+      <geom name="brick_5_g4_green" pos="0.    0.065 0.02 " type="box" size="0.015 0.055 0.02 " rgba="0.4157 0.8    0.3922 1.    " class="visual"/>
+      <geom name="brick_5_g0_green_c" pos=" 0.    -0.11   0.035" type="box" size="0.014 0.009 0.035" rgba="0.4157 0.8    0.3922 1.    " class="collision"/>
+      <geom name="brick_5_g1_green_c" pos="0.    0.01  0.065" type="box" size="0.014 0.109 0.005" rgba="0.4157 0.8    0.3922 1.    " class="collision"/>
+      <geom name="brick_5_g2_green_c" pos=" 0.    -0.045  0.03 " type="box" size="0.014 0.014 0.03 " rgba="0.4157 0.8    0.3922 1.    " class="collision"/>
+      <geom name="brick_5_g3_green_c" pos="0.    0.045 0.05 " type="box" size="0.014 0.074 0.01 " rgba="0.4157 0.8    0.3922 1.    " class="collision"/>
+      <geom name="brick_5_g4_green_c" pos="0.    0.065 0.02 " type="box" size="0.014 0.054 0.02 " rgba="0.4157 0.8    0.3922 1.    " class="collision"/>
+      <site name="brick_5_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_5_grasp0" pos="0.    0.    0.065" quat=" 1.  0. -0.  0." class="invisible_site"/>
+      <site name="brick_5_grasp1" pos="0.    0.    0.065" quat=" 6.1232e-17  0.0000e+00 -0.0000e+00  1.0000e+00" class="invisible_site"/>
+      <site name="brick_5_side0_base" class="invisible_site" pos="-0.015  0.     0.035" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_5_side1_base" class="invisible_site" pos="0.015 0.    0.035" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_5_side0_grasp0" class="invisible_site" pos="0.01  0.    0.055" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_5_side0_grasp1" class="invisible_site" pos="0.01  0.    0.055" quat="4.3298e-17 7.0711e-01 4.3298e-17 7.0711e-01"/>
+      <site name="brick_5_side1_grasp0" class="invisible_site" pos="-0.01   0.     0.055" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_5_side1_grasp1" class="invisible_site" pos="-0.01   0.     0.055" quat=" 4.3298e-17 -7.0711e-01 -4.3298e-17  7.0711e-01"/>
+    </body>
+    <body name="brick_6" pos="0.1333 0.     0.5   ">
+      <freejoint/>
+      <geom name="brick_6_g0_gray" pos=" 0.    -0.11   0.035" type="box" size="0.015 0.01  0.035" rgba="0.4745 0.4745 0.4745 1.    " class="visual"/>
+      <geom name="brick_6_g1_gray" pos="0.   0.01 0.06" type="box" size="0.015 0.11  0.01 " rgba="0.4745 0.4745 0.4745 1.    " class="visual"/>
+      <geom name="brick_6_g2_gray" pos=" 0.    -0.045  0.025" type="box" size="0.015 0.015 0.025" rgba="0.4745 0.4745 0.4745 1.    " class="visual"/>
+      <geom name="brick_6_g3_gray" pos="0.    0.045 0.04 " type="box" size="0.015 0.075 0.01 " rgba="0.4745 0.4745 0.4745 1.    " class="visual"/>
+      <geom name="brick_6_g4_gray" pos="0.    0.065 0.015" type="box" size="0.015 0.055 0.015" rgba="0.4745 0.4745 0.4745 1.    " class="visual"/>
+      <geom name="brick_6_g0_gray_c" pos=" 0.    -0.11   0.035" type="box" size="0.014 0.009 0.035" rgba="0.4745 0.4745 0.4745 1.    " class="collision"/>
+      <geom name="brick_6_g1_gray_c" pos="0.   0.01 0.06" type="box" size="0.014 0.109 0.01 " rgba="0.4745 0.4745 0.4745 1.    " class="collision"/>
+      <geom name="brick_6_g2_gray_c" pos=" 0.    -0.045  0.025" type="box" size="0.014 0.014 0.025" rgba="0.4745 0.4745 0.4745 1.    " class="collision"/>
+      <geom name="brick_6_g3_gray_c" pos="0.    0.045 0.04 " type="box" size="0.014 0.074 0.01 " rgba="0.4745 0.4745 0.4745 1.    " class="collision"/>
+      <geom name="brick_6_g4_gray_c" pos="0.    0.065 0.015" type="box" size="0.014 0.054 0.015" rgba="0.4745 0.4745 0.4745 1.    " class="collision"/>
+      <site name="brick_6_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_6_grasp0" pos="0.    0.    0.065" quat=" 1.  0. -0.  0." class="invisible_site"/>
+      <site name="brick_6_grasp1" pos="0.    0.    0.065" quat=" 6.1232e-17  0.0000e+00 -0.0000e+00  1.0000e+00" class="invisible_site"/>
+      <site name="brick_6_side0_base" class="invisible_site" pos="-0.015  0.     0.035" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_6_side1_base" class="invisible_site" pos="0.015 0.    0.035" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_6_side0_grasp0" class="invisible_site" pos="0.01 0.   0.05" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_6_side0_grasp1" class="invisible_site" pos="0.01 0.   0.05" quat="4.3298e-17 7.0711e-01 4.3298e-17 7.0711e-01"/>
+      <site name="brick_6_side1_grasp0" class="invisible_site" pos="-0.01  0.    0.05" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_6_side1_grasp1" class="invisible_site" pos="-0.01  0.    0.05" quat=" 4.3298e-17 -7.0711e-01 -4.3298e-17  7.0711e-01"/>
+    </body>
+    <body name="brick_7" pos="0.4667 0.     0.5   ">
+      <freejoint/>
+      <geom name="brick_7_g0_red" pos="0.    0.    0.045" type="cylinder" size="0.01  0.045" rgba="0.8392 0.3725 0.3725 1.    " class="visual"/>
+      <geom name="brick_7_g1_red" pos="0.    0.    0.105" type="mesh" mesh="brick_7_nail_head" rgba="0.8392 0.3725 0.3725 1.    " class="visual"/>
+      <geom name="brick_7_g0_red_c" pos="0.    0.    0.045" type="cylinder" size="0.008 0.045" rgba="0.8392 0.3725 0.3725 1.    " class="collision"/>
+      <geom name="brick_7_g1_red_c" pos="0.    0.    0.105" type="mesh" mesh="brick_7_nail_head" rgba="0.8392 0.3725 0.3725 1.    " class="collision"/>
+      <site name="brick_7_align" pos="0 0 0" class="invisible_site"/>
+      <site name="brick_7_grasp0" pos="0.    0.    0.115" quat=" 0.9659  0.     -0.      0.2588" class="invisible_site"/>
+      <site name="brick_7_grasp1" pos="0.    0.    0.115" quat=" 0.7071  0.     -0.      0.7071" class="invisible_site"/>
+      <site name="brick_7_grasp2" pos="0.    0.    0.115" quat=" 0.2588  0.     -0.      0.9659" class="invisible_site"/>
+      <site name="brick_7_grasp3" pos="0.    0.    0.115" quat="-0.2588  0.     -0.      0.9659" class="invisible_site"/>
+      <site name="brick_7_grasp4" pos="0.    0.    0.115" quat="-0.7071  0.     -0.      0.7071" class="invisible_site"/>
+      <site name="brick_7_grasp5" pos="0.    0.    0.115" quat="-0.9659  0.     -0.      0.2588" class="invisible_site"/>
+      <site name="brick_7_ridge_grasp0" pos="0.    0.    0.115" quat=" 1.  0. -0.  0." class="invisible_site"/>
+      <site name="brick_7_ridge_grasp1" pos="0.    0.    0.115" quat=" 0.866  0.    -0.     0.5  " class="invisible_site"/>
+      <site name="brick_7_ridge_grasp2" pos="0.    0.    0.115" quat=" 0.5    0.    -0.     0.866" class="invisible_site"/>
+      <site name="brick_7_ridge_grasp3" pos="0.    0.    0.115" quat=" 6.1232e-17  0.0000e+00 -0.0000e+00  1.0000e+00" class="invisible_site"/>
+      <site name="brick_7_ridge_grasp4" pos="0.    0.    0.115" quat="-0.5    0.    -0.     0.866" class="invisible_site"/>
+      <site name="brick_7_ridge_grasp5" pos="0.    0.    0.115" quat="-0.866  0.    -0.     0.5  " class="invisible_site"/>
+      <site name="brick_7_side0_base" class="invisible_site" pos="-0.02  0.    0.06" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_7_side1_base" class="invisible_site" pos="0.02 0.   0.06" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_7_side0_grasp0" class="invisible_site" pos="0.015 0.    0.105" quat="0.7071 0.     0.7071 0.    "/>
+      <site name="brick_7_side0_grasp1" class="invisible_site" pos="0.015 0.    0.105" quat="4.3298e-17 7.0711e-01 4.3298e-17 7.0711e-01"/>
+      <site name="brick_7_side1_grasp0" class="invisible_site" pos="-0.015  0.     0.105" quat=" 0.7071  0.     -0.7071  0.    "/>
+      <site name="brick_7_side1_grasp1" class="invisible_site" pos="-0.015  0.     0.105" quat=" 4.3298e-17 -7.0711e-01 -4.3298e-17  7.0711e-01"/>
+    </body>
+  </worldbody>
+  <equality>
+    <weld name="brick_2_grasp_hand" body1="hand" body2="brick_2" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_2_on_fixture" body1="fixture" body2="brick_2" active="false"/>
+    <weld name="brick_3_grasp_hand" body1="hand" body2="brick_3" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_3_on_fixture" body1="fixture" body2="brick_3" active="false"/>
+    <weld name="brick_4_grasp_hand" body1="hand" body2="brick_4" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_4_on_fixture" body1="fixture" body2="brick_4" active="false"/>
+    <weld name="brick_5_grasp_hand" body1="hand" body2="brick_5" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_5_on_fixture" body1="fixture" body2="brick_5" active="false"/>
+    <weld name="brick_6_grasp_hand" body1="hand" body2="brick_6" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_6_on_fixture" body1="fixture" body2="brick_6" active="false"/>
+    <weld name="brick_7_grasp_hand" body1="hand" body2="brick_7" active="false" solimp="0.99  0.999 0.001" solref="0.01 1.  "/>
+    <weld name="brick_7_on_fixture" body1="fixture" body2="brick_7" active="false"/>
+  </equality>
+</mujoco>
