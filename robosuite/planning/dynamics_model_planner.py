@@ -102,7 +102,7 @@ class DynamicsModelPlanner:
         # Multiplicative gain applied to those channels (start modest, e.g., 5.0)
         self.per_channel_gain_value = 1.0
         # Debug flag: enable detailed diagnostic logging during simulation
-        self.debug = True
+        self.debug = False
 
         self.feasibility_threshold = 0.5  # Threshold for considering an action feasible
         

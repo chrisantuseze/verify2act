@@ -117,6 +117,9 @@ class StateConverter:
         
         # Use clean names everywhere
         self.object_names = sorted(self.object_metadata.keys())
+        if 'table' in self.object_names:
+            self.object_names.remove('table')
+            self.object_names.insert(0, 'table')
         self.object_name_to_id = {name: idx for idx, name in enumerate(self.object_names)}
         self.object_slot_indices = self._build_object_slot_indices()
         
