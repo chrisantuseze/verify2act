@@ -1,0 +1,16 @@
+conda activate verify2act
+cd robosuite/data_capture_wm
+clear
+
+
+conda activate verify2act
+python verify2act/train_wm.py \
+  --dataset-dir /home/scratch1/cheze/verify2act/robosuite/data_capture_wm/dataset/nut_assembly \
+  --output-dir /home/scratch1/cheze/verify2act/verify2act/output/wm \
+  --max-steps 1000 \
+  --eval-every 100 \
+  --train-batch-size 1 \
+  --gradient-accumulation-steps 1 \
+  --val-frac 0.2 \
+  --mixed-precision fp16 \
+  --device cuda

@@ -8,5 +8,5 @@ __version__ = "0.1.0"
 
 # Re-export critic module for convenience
 from .critic import *
-from .utils import camera_utils
+from .utils.utils import str2bool
 

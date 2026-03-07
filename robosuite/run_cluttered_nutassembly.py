@@ -810,7 +810,7 @@ class HeuristicNutAssemblyPolicy:
                 # In data collection mode, don't retry - end episode immediately
                 if self.data_collection_mode:
                     print(f"Data collection mode: Grasp failure detected. Ending episode.")
-                    return action, True  # End episode immediately
+                    return action, "terminate"  # End episode immediately
                 elif self.grasp_attempts < self.MAX_GRASP_ATTEMPTS:
                     print(f"Retrying grasp (attempt {self.grasp_attempts + 1}/{self.MAX_GRASP_ATTEMPTS})...")
                     next_stage = "move_to_nut"
@@ -858,7 +858,7 @@ class HeuristicNutAssemblyPolicy:
                 # In data collection mode, don't retry - end episode immediately
                 if self.data_collection_mode:
                     print(f"Data collection mode: Nut detachment detected. Ending episode.")
-                    return action, True  # End episode immediately
+                    return action, "terminate"  # End episode immediately
                 # Treat as failed grasp
                 self.grasp_attempts += 1
                 print(f"✗ Nut not attached after lift (dist={attach_dist:.3f}m)."
@@ -1250,7 +1250,7 @@ class HeuristicNutAssemblyPolicy:
 
             if self.data_collection_mode:
                 print(f"Data collection mode: Blocked nut detected. Ending episode.")
-                return np.zeros(self.env.action_dim), True  # End episode immediately
+                return np.zeros(self.env.action_dim), "terminate"  # End episode immediately
             
             # Save the original target we're trying to reach
             if self.original_target_nut is None:
@@ -1282,7 +1282,7 @@ class HeuristicNutAssemblyPolicy:
                 print(f"EEF stagnation detected (moved {moved_dist:.6f}m over {self.eef_stagnation_count} steps). Resetting episode.")
                 if self.data_collection_mode:
                     print(f"Data collection mode: Stagnation detected. Ending episode.")
-                    return np.zeros(self.env.action_dim), True  # End episode immediately
+                    return np.zeros(self.env.action_dim), "terminate"  # End episode immediately
                 
                 # Reset episode by transitioning to done stage
                 action, next_stage = self.stage_done(eef_pos, nut_pos, peg_pos)
@@ -1321,7 +1321,13 @@ class HeuristicNutAssemblyPolicy:
             raise ValueError(f"Unknown stage: {self.stage}")
         
         action, next_stage = handler(eef_pos, nut_pos, peg_pos)
-        
+
+        # next_stage == "terminate" means "end episode immediately" (e.g. detachment in
+        # data_collection_mode).  Handle it before writing to self.stage so we
+        # don't corrupt the stage machine with a boolean value.
+        if next_stage == "terminate":
+            return action, True
+
         if next_stage is not None:
             self.stage = next_stage
 
@@ -1349,7 +1355,7 @@ def create_environment(env_name: str = "NutAssembly",
         num_round_nuts: Number of round nuts in the scene
         num_square_nuts: Number of square nuts in the scene
         initial_stacking_prob: Probability that nuts start stacked
-        nut_type_mode: Which nut type to target ("roundnut" or "squarenut")
+        nut_type_mode: Which nut type mode to use ("roundnut", "squarenut", "random", or "alternate")
         has_renderer: Enable on-screen rendering
         has_offscreen_renderer: Enable offscreen rendering for cameras
         use_camera_obs: Enable camera observations
@@ -1380,13 +1386,14 @@ def create_environment(env_name: str = "NutAssembly",
     return env
 
 
-def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000):
+def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000, nut_type_mode: str = "roundnut"):
     """
     Run the heuristic nut assembly policy.
     
     Args:
         env_name: Name of the environment to run
         horizon: Maximum number of steps to run
+        nut_type_mode: Which nut type mode to use ("roundnut", "squarenut", "random", or "alternate")
     """
     print(f"Starting heuristic policy for {env_name}...")
     
@@ -1395,7 +1402,7 @@ def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000):
         np.random.seed(args.seed)
 
     # Create environment
-    env = create_environment(env_name)
+    env = create_environment(env_name, horizon=horizon, nut_type_mode=nut_type_mode)
     
     # Run policy loop
     try:
@@ -1453,6 +1460,13 @@ if __name__ == "__main__":
         default=42,
         help='Random seed for environment and policy'
     )
+    parser.add_argument(
+        '--nut-type-mode',
+        type=str,
+        default='roundnut',
+        choices=['roundnut', 'squarenut', 'random', 'alternate'],
+        help='Nut type mode for ClutteredNutAssembly'
+    )
     
     args = parser.parse_args()
-    run_heuristic_policy(env_name=args.env, horizon=args.horizon)        # Identify nut names from observations
+    run_heuristic_policy(env_name=args.env, horizon=args.horizon, nut_type_mode=args.nut_type_mode)        # Identify nut names from observations

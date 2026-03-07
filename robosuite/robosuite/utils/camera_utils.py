@@ -723,6 +723,11 @@ def render_camera(sim, camera_renderers, camera_name: str, width: int, height: i
         if renderer_key not in camera_renderers:
             import mujoco
             mj_model = sim.model._model if hasattr(sim.model, '_model') else sim.model
+            # Ensure offscreen framebuffer is large enough
+            if mj_model.vis.global_.offwidth < width:
+                mj_model.vis.global_.offwidth = width
+            if mj_model.vis.global_.offheight < height:
+                mj_model.vis.global_.offheight = height
             camera_renderers[renderer_key] = mujoco.Renderer(
                 mj_model,
                 height=height,

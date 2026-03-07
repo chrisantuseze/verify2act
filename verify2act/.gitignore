@@ -58,3 +58,4 @@ test_scenes/
 __pycache__/
 commands.txt
 *.pdf
+output/

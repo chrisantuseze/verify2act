@@ -42,8 +42,8 @@ def get_parser(desc: str = "Phase 3 Demo: Full Integration") -> argparse.Argumen
         "--nut-type-mode",
         type=str,
         default="roundnut",
-        choices=["roundnut", "squarenut"],
-        help="Which nut type to target (ClutteredNutAssembly only)"
+        choices=["roundnut", "squarenut", "random", "alternate"],
+        help="Nut type mode for ClutteredNutAssembly"
     )
     parser.add_argument(
         "--checkpoint",
