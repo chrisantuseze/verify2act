@@ -31,6 +31,7 @@ class EpisodeRecorder:
       - goal.png (last frame of successful episode)
       - meta.json (episode-level metadata)
       - Appends all transitions to a JSONL file
+            - In keyframe mode, prunes unreferenced frame/state files
     """
 
     def __init__(
@@ -52,7 +53,7 @@ class EpisodeRecorder:
         self._camera_renderers: Dict[str, Any] = {}
         self._last_mj_model = None  # track model identity across resets
 
-        self.episode_counter = 0
+        self.episode_counter = self._detect_episode_counter()
         self._reset_buffers()
 
     # ------------------------------------------------------------------
@@ -203,6 +204,11 @@ class EpisodeRecorder:
             tr["goal_image_source"] = goal_source
             tr["episode_success"] = bool(success)
 
+        # Keep only files referenced by emitted transitions (and goal image).
+        # This keeps keyframe datasets compact even though per-step capture is
+        # used online during collection.
+        self._prune_episode_artifacts(transitions, keep_goal=success)
+
         # Append to master JSONL
         jsonl_path = self.output_root / "transitions.jsonl"
         with open(jsonl_path, "a") as f:
@@ -229,6 +235,23 @@ class EpisodeRecorder:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _detect_episode_counter(self) -> int:
+        """Scan output_root/episodes/ for existing ep_NNNNN dirs and return
+        the next episode index so we never overwrite existing frame files."""
+        episodes_dir = self.output_root / "episodes"
+        if not episodes_dir.exists():
+            return 0
+        max_idx = -1
+        for p in episodes_dir.iterdir():
+            if p.is_dir() and p.name.startswith("ep_"):
+                try:
+                    idx = int(p.name[3:])
+                    if idx > max_idx:
+                        max_idx = idx
+                except ValueError:
+                    pass
+        return max_idx + 1 if max_idx >= 0 else 0
 
     def _reset_buffers(self):
         self._step_records: List[Dict] = []
@@ -326,13 +349,13 @@ class EpisodeRecorder:
                             "episode_id": row["episode_id"],
                             "timestep": start_row["timestep"],
                             "image_t": start_row["image_t"],
-                            "image_t1": row["image_t"],
+                            "image_t1": row["image_t1"],
                             "goal_image": None,
                             "goal_image_source": None,
                             "action_text": start_row["action_text"],
                             "action_params": start_row["action_params"],
                             "state_t": start_row["state_t"],
-                            "state_t1": row["state_t"],
+                            "state_t1": row["state_t1"],
                             "policy_type": start_row["policy_type"],
                             "policy_stage_t": start_row.get("policy_stage"),
                             "policy_stage_t1": row.get("policy_stage"),
@@ -349,6 +372,40 @@ class EpisodeRecorder:
             return transitions
 
         return []
+
+    def _prune_episode_artifacts(self, transitions: List[Dict], keep_goal: bool):
+        """Delete per-step frame/state files that are not referenced by transitions."""
+        if self.episode_dir is None:
+            return
+
+        keep_paths = set()
+        for tr in transitions:
+            for key in ("image_t", "image_t1", "state_t", "state_t1"):
+                rel = tr.get(key)
+                if rel:
+                    keep_paths.add(self.output_root / rel)
+
+        # If no transitions were emitted, keep the initial snapshot only.
+        if not keep_paths:
+            keep_paths.add(self.episode_dir / "frame_00000.png")
+            keep_paths.add(self.episode_dir / "state_00000.npz")
+
+        if keep_goal:
+            keep_paths.add(self.episode_dir / "goal.png")
+
+        for frame_path in self.episode_dir.glob("frame_*.png"):
+            if frame_path not in keep_paths:
+                try:
+                    frame_path.unlink()
+                except OSError:
+                    pass
+
+        for state_path in self.episode_dir.glob("state_*.npz"):
+            if state_path not in keep_paths:
+                try:
+                    state_path.unlink()
+                except OSError:
+                    pass
 
     def close(self):
         """Free all cached MuJoCo renderers."""

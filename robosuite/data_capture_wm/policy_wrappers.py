@@ -81,10 +81,10 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
     # Transitional stages (release, retract, …) inherit the previous skill
     # so that the prompt stays consistent across the manipulation phase.
     _PICK_STAGES = frozenset({
-        "move_to_nut", "lower_to_nut", "grasp", "verify_grasp", "lift_nut",
+        "move_to_nut", "lower_to_nut", #"grasp", "verify_grasp", "lift_nut",
     })
     _INSERT_STAGES = frozenset({
-        "move_to_peg", "align_over_peg", "lower_to_peg",
+        "move_to_peg", "align_over_peg", #"lower_to_peg",
     })
     _PLACE_STAGES = frozenset({
         "move_to_table", "lower_to_table",
@@ -105,7 +105,7 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
 
     def get_action_info(self) -> ActionInfo:
         p = self.policy
-        stage = getattr(p, "stage", "")
+        stage = p.stage
 
         # ── skill ──
         if stage in self._PICK_STAGES:
@@ -121,7 +121,7 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
         self._prev_skill = skill
 
         # ── object name ──
-        raw = getattr(p, "current_nut", "") or ""
+        raw = p.current_nut
         raw = raw.lower()
         if "round" in raw:
             object_name = "round nut"
@@ -134,7 +134,7 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
 
         # ── cartesian target (nut world position) ──
         cartesian_target = np.zeros(3)
-        nut_attr = getattr(p, "current_nut", None)
+        nut_attr = p.current_nut
         if nut_attr and p.obs is not None:
             for key in (f"{nut_attr}_pos",
                         f"{nut_attr.capitalize()}_pos",
@@ -163,8 +163,7 @@ class StackPolicyAdapter(PolicyAdapter):
     """Adapter for HeuristicStackPolicy."""
 
     _PICK_STAGES = frozenset({
-        "move_to_cube", "lower_to_cube", "grasp", "lift_cube",
-        "move_horizontal_to_next",
+        "move_to_cube", "lower_to_cube", #"grasp", "lift_cube", "move_horizontal_to_next",
     })
     _PLACE_STAGES = frozenset({
         "move_above_target", "lower_to_target",
@@ -184,7 +183,7 @@ class StackPolicyAdapter(PolicyAdapter):
 
     def get_action_info(self) -> ActionInfo:
         p = self.policy
-        stage = getattr(p, "stage", "")
+        stage = p.stage
 
         # ── skill ──
         if stage in self._PICK_STAGES:
