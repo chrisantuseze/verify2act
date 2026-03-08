@@ -25,11 +25,33 @@ from diffusers import StableDiffusionInstructPix2PixPipeline
 from peft import PeftModel
 from PIL import Image
 
+try:
+    from verify2act.utils import load_vae_encoder
+except ImportError:
+    from utils import load_vae_encoder
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Visual demo for Verify2Act world model")
 
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix")
+    parser.add_argument(
+        "--vae-model",
+        type=str,
+        default="",
+        help="Optional VAE source; if empty uses --pretrained-model.",
+    )
+    parser.add_argument(
+        "--vae-subfolder",
+        type=str,
+        default="auto",
+        help="VAE subfolder to load (e.g. 'vae', 'vae_ema', 'root'). Use 'auto' to resolve automatically.",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load VAE only from local cache/files; do not reach HuggingFace Hub.",
+    )
     parser.add_argument("--adapter-dir", type=str, default=None, help="Path to LoRA adapter directory")
 
     parser.add_argument("--image-path", type=str, default=None)
@@ -110,6 +132,17 @@ def main():
         safety_checker=None,
     ).to(device)
 
+    vae_model = args.vae_model if args.vae_model else args.pretrained_model
+    vae, resolved_subfolder = load_vae_encoder(
+        model_name_or_path=vae_model,
+        device=device,
+        torch_dtype=torch_dtype,
+        subfolder=args.vae_subfolder,
+        local_files_only=args.local_files_only,
+    )
+    pipe.vae = vae
+    print(f"Using VAE encoder from model={vae_model} (subfolder={resolved_subfolder})")
+
     if args.adapter_dir:
         adapter_dir = Path(args.adapter_dir)
         if not adapter_dir.exists():
@@ -142,6 +175,8 @@ def main():
 
     meta = {
         "pretrained_model": args.pretrained_model,
+        "vae_model": vae_model,
+        "vae_subfolder": resolved_subfolder,
         "adapter_dir": args.adapter_dir,
         "input_image": str(image_path),
         "prompt": prompt,

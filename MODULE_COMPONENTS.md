@@ -231,8 +231,8 @@ $$\mathcal{L}_B = \lambda_1 \|I_{t+1} - \hat{I}_{t+1}\|_1 + \lambda_2 \,\mathcal
 | Optimizer | AdamW |
 | Mixed precision | fp16 |
 
-**What is frozen:** VAE encoder (freeze to preserve embedding space for critic).
-**What is trained:** VAE decoder weights (full update, no LoRA needed — decoder is small).
+**What is frozen:** VAE encoder + `quant_conv` (freeze to preserve embedding space for critic).
+**What is trained:** VAE decoder + `post_quant_conv` weights (full update, no LoRA needed — decoder stack is small).
 
 **Can run in parallel with Phase A** because it uses only the frozen encoder, not the UNet.
 

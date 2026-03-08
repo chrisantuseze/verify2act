@@ -7,10 +7,23 @@ conda activate verify2act
 python verify2act/train_wm.py \
   --dataset-dir /home/scratch1/cheze/verify2act/robosuite/data_capture_wm/dataset/nut_assembly \
   --output-dir /home/scratch1/cheze/verify2act/verify2act/output/wm \
-  --max-steps 1000 \
+  --max-steps 10000 \
   --eval-every 100 \
-  --train-batch-size 1 \
+  --train-batch-size 2 \
   --gradient-accumulation-steps 1 \
   --val-frac 0.2 \
   --mixed-precision fp16 \
   --device cuda
+
+python verify2act/critic/train_prm.py \
+  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
+  --output-dir verify2act/output/prm \
+  --vae-model runwayml/stable-diffusion-v1-5 \
+  --epochs 100 \
+  --batch-size 8 \
+  --device cuda
+
+python verify2act/train_decoder.py \
+  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly/episodes \
+  --output-dir  verify2act/output/decoder \
+  --max-epochs 100

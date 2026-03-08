@@ -34,6 +34,11 @@ from tqdm import tqdm
 
 from diffusers import DDPMScheduler, StableDiffusionInstructPix2PixPipeline
 
+try:
+    from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
+except ImportError:
+    from utils import VAE_LATENT_SCALE, load_vae_encoder
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -238,8 +243,20 @@ def main():
     )
     tokenizer = pipeline.tokenizer
     text_encoder = pipeline.text_encoder.to(device)
-    vae = pipeline.vae.to(device)
     unet = pipeline.unet.to(device)
+
+    vae_model = args.vae_model if args.vae_model else args.pretrained_model
+    vae, resolved_subfolder = load_vae_encoder(
+        model_name_or_path=vae_model,
+        device=device,
+        torch_dtype=weight_dtype,
+        subfolder=args.vae_subfolder,
+        local_files_only=args.local_files_only,
+    )
+    accelerator.print(
+        f"Using VAE encoder from model={vae_model} "
+        f"(subfolder={resolved_subfolder}, dtype={weight_dtype}, device={device})"
+    )
 
     noise_scheduler = DDPMScheduler.from_config(pipeline.scheduler.config)
 
@@ -300,7 +317,7 @@ def main():
     )
     accelerator.print(f"Trainable dtype:  {trainable_dtype}")
     accelerator.print(f"Accelerate MP:    {accelerator.mixed_precision}")
-    latent_scale = float(getattr(vae.config, "scaling_factor", 0.18215))
+    latent_scale = float(getattr(vae.config, "scaling_factor", VAE_LATENT_SCALE))
     vae_dtype = next(vae.parameters()).dtype
 
     global_step = 0
@@ -454,6 +471,23 @@ def parse_args():
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly/episodes", required=True)
     parser.add_argument("--output-dir", type=str, default="verify2act/output/wm", required=True)
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix")
+    parser.add_argument(
+        "--vae-model",
+        type=str,
+        default="",
+        help="Optional VAE source; if empty uses --pretrained-model.",
+    )
+    parser.add_argument(
+        "--vae-subfolder",
+        type=str,
+        default="auto",
+        help="VAE subfolder to load (e.g. 'vae', 'vae_ema', 'root'). Use 'auto' to resolve automatically.",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load VAE only from local cache/files; do not reach HuggingFace Hub.",
+    )
 
     parser.add_argument("--resolution", type=int, default=512)
     parser.add_argument("--val-frac", type=float, default=0.1)

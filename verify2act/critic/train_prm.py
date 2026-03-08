@@ -4,25 +4,30 @@
 import argparse
 import json
 import random
+import sys
 from pathlib import Path
 from typing import Dict
 
+# Ensure repo root is on sys.path so the package resolves whether this file is
+# run directly (python critic/train_prm.py) or as a module (-m verify2act.critic.train_prm).
+# _repo_root = Path(__file__).resolve().parents[2]
+# if str(_repo_root) not in sys.path:
+#     sys.path.insert(0, str(_repo_root))
+
 import numpy as np
 import torch
-from diffusers import AutoencoderKL
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-try:
-    from .losses import BetaNLLLoss
-    from .model import SpatialBetaPRMCritic
-except ImportError:
-    from verify2act.critic.losses import BetaNLLLoss
-    from verify2act.critic.model import SpatialBetaPRMCritic
+# sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # robosuite/
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # data_capture_wm/
 
+from verify2act.critic.losses import BetaNLLLoss
+from verify2act.critic.model import SpatialBetaPRMCritic
 from verify2act.data_loader import build_train_val_datasets
+from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -156,14 +161,23 @@ def main():
     )
 
     weight_dtype = get_dtype(args.mixed_precision)
-    vae = AutoencoderKL.from_pretrained(args.vae_model, subfolder="vae", torch_dtype=weight_dtype).to(device)
-    vae.requires_grad_(False)
+    vae, resolved_subfolder = load_vae_encoder(
+        model_name_or_path=args.vae_model,
+        device=device,
+        torch_dtype=weight_dtype,
+        subfolder=args.vae_subfolder,
+        local_files_only=args.local_files_only,
+    )
+    print(
+        f"Loaded VAE encoder from model={args.vae_model} "
+        f"(subfolder={resolved_subfolder}, dtype={weight_dtype}, device={device})"
+    )
 
     model = SpatialBetaPRMCritic().to(device)
     criterion = BetaNLLLoss(label_smoothing=args.label_smoothing)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
-    latent_scale = 0.18215
+    latent_scale = VAE_LATENT_SCALE
     best_val = float("inf")
     history = []
 
@@ -253,7 +267,18 @@ def parse_args():
     )
     parser.add_argument("--output-dir", type=str, default="verify2act/output/prm", required=True)
 
-    parser.add_argument("--vae-model", type=str, default="runwayml/stable-diffusion-v1-5")
+    parser.add_argument("--vae-model", type=str, default="timbrooks/instruct-pix2pix")
+    parser.add_argument(
+        "--vae-subfolder",
+        type=str,
+        default="auto",
+        help="VAE subfolder to load (e.g. 'vae', 'vae_ema', 'root'). Use 'auto' to resolve automatically.",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load VAE only from local cache/files; do not reach HuggingFace Hub.",
+    )
     parser.add_argument("--image-size", type=int, default=512)
 
     parser.add_argument("--batch-size", type=int, default=8)

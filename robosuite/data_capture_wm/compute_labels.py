@@ -8,12 +8,16 @@ For each transition in transitions.jsonl:
   4. Write labels to labels.jsonl
 
 Usage:
-    python compute_labels.py \
-        --dataset-dir data_capture_wm/dataset/nut_assembly \
+    xvfb-run -a python compute_labels.py \
+        --dataset-dir dataset/nut_assembly \
         --env ClutteredNutAssembly \
         --horizon 300 \
         --output labels.jsonl
 """
+
+import os
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import json
@@ -131,11 +135,11 @@ def check_reachability(
 
     for _ in range(horizon):
         action, policy_done = policy.step()
-        obs, reward, done, info = env.step(action)
+        obs, reward, env_done, info = env.step(action)
         policy.obs = obs
-        if env._check_success():
+        if env_done:
             return True
-        if done or policy_done:
+        if policy_done:
             break
     return False
 

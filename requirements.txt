@@ -12,3 +12,4 @@ h5py
 tensorboard
 termcolor
 accelerate>=0.30.0
+lpips>=0.1.4
