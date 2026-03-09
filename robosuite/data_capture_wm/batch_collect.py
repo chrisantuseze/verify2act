@@ -14,8 +14,8 @@ Usage:
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
-        --nut-type-mode roundnut --num-episodes 100 \
+        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
+        --nut-type-mode random --num-episodes 1000 \
         --image-size 512 --seed 42
 
     # Noisy episodes (sigma=0.05)
@@ -23,8 +23,8 @@ Usage:
         --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 1 --initial-stacking-prob 0.5 \
-        --nut-type-mode roundnut --num-episodes 100 \
+        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
+        --nut-type-mode random --num-episodes 1000 \
         --image-size 512 --seed 0
 """
 
