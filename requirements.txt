@@ -13,3 +13,5 @@ tensorboard
 termcolor
 accelerate>=0.30.0
 lpips>=0.1.4
+peft>=0.18.0
+diffusers>=0.32.0

@@ -76,6 +76,23 @@ def get_saved_state_dims(dataset_dir: Path, transitions: List[Dict]) -> Tuple[in
     return int(arr["qpos"].shape[0]), int(arr["qvel"].shape[0])
 
 
+def group_transitions_by_dims(
+    dataset_dir: Path, transitions: List[Dict]
+) -> Dict[Tuple[int, int], List[Dict]]:
+    """Group transitions by their saved qpos/qvel dimensions.
+
+    This handles merged datasets collected under different env configurations
+    (e.g. different numbers of nuts → different state-space sizes).
+    """
+    groups: Dict[Tuple[int, int], List[Dict]] = {}
+    for tr in tqdm(transitions, desc="Inspecting state dims", leave=False):
+        state_path = dataset_dir / tr["state_t1"]
+        arr = np.load(state_path)
+        dims = (int(arr["qpos"].shape[0]), int(arr["qvel"].shape[0]))
+        groups.setdefault(dims, []).append(tr)
+    return groups
+
+
 def detect_cluttered_counts(
     target_qpos_dim: int,
     target_qvel_dim: int,
@@ -183,114 +200,114 @@ def main():
 
     print(f"Loaded {len(transitions)} transitions from {transitions_path}")
     metadata = load_metadata(dataset_dir)
-    saved_dims = get_saved_state_dims(dataset_dir, transitions)
-    print(f"Saved state dims: qpos={saved_dims[0]}, qvel={saved_dims[1]}")
 
-    # Create environment
-    import robosuite as suite
-    from robosuite.controllers import load_composite_controller_config
-
-    controller_config = load_composite_controller_config(controller="BASIC")
-
-    if args.env == "ClutteredNutAssembly":
-        from run_cluttered_nutassembly import create_environment
-        env_config = {
-            "num_round_nuts": args.num_round,
-            "num_square_nuts": args.num_square,
-            "initial_stacking_prob": args.initial_stacking_prob,
-            "nut_type_mode": args.nut_type_mode,
-        }
-        md_cfg = metadata.get("env_config", {})
-        if md_cfg.get("env_name") == "ClutteredNutAssembly":
-            env_config.update(
-                {
-                    "num_round_nuts": int(md_cfg.get("num_round_nuts", env_config["num_round_nuts"])),
-                    "num_square_nuts": int(md_cfg.get("num_square_nuts", env_config["num_square_nuts"])),
-                    "initial_stacking_prob": float(md_cfg.get("initial_stacking_prob", env_config["initial_stacking_prob"])),
-                    "nut_type_mode": md_cfg.get("nut_type_mode", env_config["nut_type_mode"]),
-                }
-            )
-
-        env = create_environment(
-            env_name="ClutteredNutAssembly",
-            num_round_nuts=env_config["num_round_nuts"],
-            num_square_nuts=env_config["num_square_nuts"],
-            initial_stacking_prob=env_config["initial_stacking_prob"],
-            nut_type_mode=env_config["nut_type_mode"],
-            horizon=args.horizon,
-        )
-        env.reset()
-
-        try:
-            assert_env_matches_saved_dims(env, saved_dims, "Initial cluttered config")
-        except ValueError:
-            env.close()
-            if not args.auto_detect_cluttered_config:
-                raise
-
-            matches = detect_cluttered_counts(
-                target_qpos_dim=saved_dims[0],
-                target_qvel_dim=saved_dims[1],
-                initial_stacking_prob=env_config["initial_stacking_prob"],
-                nut_type_mode=env_config["nut_type_mode"],
-                horizon=args.horizon,
-                max_round=args.max_round_search,
-                max_square=args.max_square_search,
-            )
-            if len(matches) != 1:
-                raise ValueError(
-                    f"Could not uniquely infer ClutteredNutAssembly config from saved dims {saved_dims}. "
-                    f"Candidates={matches}. Provide exact --num-round / --num-square."
-                )
-
-            inferred_round, inferred_square = matches[0]
-            print(
-                f"Auto-detected cluttered config: num_round={inferred_round}, "
-                f"num_square={inferred_square}"
-            )
-            env = create_environment(
-                env_name="ClutteredNutAssembly",
-                num_round_nuts=inferred_round,
-                num_square_nuts=inferred_square,
-                initial_stacking_prob=env_config["initial_stacking_prob"],
-                nut_type_mode=env_config["nut_type_mode"],
-                horizon=args.horizon,
-            )
-            env.reset()
-            assert_env_matches_saved_dims(env, saved_dims, "Auto-detected cluttered config")
-
-        from policy_wrappers import create_nut_assembly_policy as expert_factory
-    elif args.env == "NutAssembly":
-        from run_nutassembly import create_environment, HeuristicNutAssemblyPolicy
-        env = create_environment(env_name="NutAssembly")
-        env.reset()
-        assert_env_matches_saved_dims(env, saved_dims, "NutAssembly config")
-
-        def expert_factory(env, data_collection_mode=True):
-            return HeuristicNutAssemblyPolicy(env)
-    elif args.env in ("Stack", "Stack3"):
-        from run_stack import create_environment
-        env = create_environment(args.env)
-        env.reset()
-        assert_env_matches_saved_dims(env, saved_dims, f"{args.env} config")
-        from policy_wrappers import create_stack_policy as expert_factory
-    elif args.env == "PickPlace":
-        from run_pickplace import create_environment
-        env = create_environment("PickPlaceCan")
-        env.reset()
-        assert_env_matches_saved_dims(env, saved_dims, "PickPlace config")
-        from policy_wrappers import create_pickplace_policy as expert_factory
-    else:
-        raise ValueError(f"Unsupported env: {args.env}")
+    # Group transitions by their saved state dims to handle merged datasets
+    dim_groups = group_transitions_by_dims(dataset_dir, transitions)
+    print(f"Found {len(dim_groups)} distinct state-dim group(s): {list(dim_groups.keys())}")
 
     np.random.seed(args.seed)
 
     # Compute labels
     labels_path = dataset_dir / args.output
-    count_pos, count_neg = 0, 0
+    count_pos, count_neg, count_skip = 0, 0, 0
+    all_rows: Dict[Tuple[str, int], Dict] = {}  # keyed by (episode_id, timestep) for ordered output
 
-    with open(labels_path, "w") as out_f:
-        for tr in tqdm(transitions, desc="Labeling"):
+    for saved_dims, group_transitions in dim_groups.items():
+        print(f"\nProcessing {len(group_transitions)} transitions with dims qpos={saved_dims[0]}, qvel={saved_dims[1]}")
+
+        # ---- Build environment for this dimension group ----
+        if args.env == "ClutteredNutAssembly":
+            from run_cluttered_nutassembly import create_environment
+            env_config = {
+                "num_round_nuts": args.num_round,
+                "num_square_nuts": args.num_square,
+                "initial_stacking_prob": args.initial_stacking_prob,
+                "nut_type_mode": args.nut_type_mode,
+            }
+            md_cfg = metadata.get("env_config", {})
+            if md_cfg.get("env_name") == "ClutteredNutAssembly":
+                env_config.update(
+                    {
+                        "num_round_nuts": int(md_cfg.get("num_round_nuts", env_config["num_round_nuts"])),
+                        "num_square_nuts": int(md_cfg.get("num_square_nuts", env_config["num_square_nuts"])),
+                        "initial_stacking_prob": float(md_cfg.get("initial_stacking_prob", env_config["initial_stacking_prob"])),
+                        "nut_type_mode": md_cfg.get("nut_type_mode", env_config["nut_type_mode"]),
+                    }
+                )
+
+            env = create_environment(
+                env_name="ClutteredNutAssembly",
+                num_round_nuts=env_config["num_round_nuts"],
+                num_square_nuts=env_config["num_square_nuts"],
+                initial_stacking_prob=env_config["initial_stacking_prob"],
+                nut_type_mode=env_config["nut_type_mode"],
+                horizon=args.horizon,
+            )
+            env.reset()
+
+            try:
+                assert_env_matches_saved_dims(env, saved_dims, "Initial cluttered config")
+            except ValueError:
+                env.close()
+                matches = detect_cluttered_counts(
+                    target_qpos_dim=saved_dims[0],
+                    target_qvel_dim=saved_dims[1],
+                    initial_stacking_prob=env_config["initial_stacking_prob"],
+                    nut_type_mode=env_config["nut_type_mode"],
+                    horizon=args.horizon,
+                    max_round=args.max_round_search,
+                    max_square=args.max_square_search,
+                )
+                if len(matches) != 1:
+                    print(
+                        f"  WARNING: Could not uniquely infer ClutteredNutAssembly config "
+                        f"for dims {saved_dims}. Candidates={matches}. Skipping this group."
+                    )
+                    count_skip += len(group_transitions)
+                    continue
+
+                inferred_round, inferred_square = matches[0]
+                print(
+                    f"  Auto-detected cluttered config: num_round={inferred_round}, "
+                    f"num_square={inferred_square}"
+                )
+                env = create_environment(
+                    env_name="ClutteredNutAssembly",
+                    num_round_nuts=inferred_round,
+                    num_square_nuts=inferred_square,
+                    initial_stacking_prob=env_config["initial_stacking_prob"],
+                    nut_type_mode=env_config["nut_type_mode"],
+                    horizon=args.horizon,
+                )
+                env.reset()
+                assert_env_matches_saved_dims(env, saved_dims, "Auto-detected cluttered config")
+
+            from policy_wrappers import create_nut_assembly_policy as expert_factory
+        elif args.env == "NutAssembly":
+            from run_nutassembly import create_environment, HeuristicNutAssemblyPolicy
+            env = create_environment(env_name="NutAssembly")
+            env.reset()
+            assert_env_matches_saved_dims(env, saved_dims, "NutAssembly config")
+
+            def expert_factory(env, data_collection_mode=True):
+                return HeuristicNutAssemblyPolicy(env)
+        elif args.env in ("Stack", "Stack3"):
+            from run_stack import create_environment
+            env = create_environment(args.env)
+            env.reset()
+            assert_env_matches_saved_dims(env, saved_dims, f"{args.env} config")
+            from policy_wrappers import create_stack_policy as expert_factory
+        elif args.env == "PickPlace":
+            from run_pickplace import create_environment
+            env = create_environment("PickPlaceCan")
+            env.reset()
+            assert_env_matches_saved_dims(env, saved_dims, "PickPlace config")
+            from policy_wrappers import create_pickplace_policy as expert_factory
+        else:
+            raise ValueError(f"Unsupported env: {args.env}")
+
+        # ---- Label this group ----
+        for tr in tqdm(group_transitions, desc=f"Labeling dims={saved_dims}"):
             state_path = str(dataset_dir / tr["state_t1"])
             reachable = check_reachability(
                 env, expert_factory, state_path, args.horizon
@@ -300,25 +317,33 @@ def main():
                 count_pos += 1
             else:
                 count_neg += 1
-            row = {
+            all_rows[(tr["episode_id"], tr["timestep"])] = {
                 "episode_id": tr["episode_id"],
                 "timestep": tr["timestep"],
                 "label_reachable": label,
             }
-            out_f.write(json.dumps(row) + "\n")
+
+        env.close()
+
+    # Write output in the original transition order
+    with open(labels_path, "w") as out_f:
+        for tr in transitions:
+            key = (tr["episode_id"], tr["timestep"])
+            if key not in all_rows:
+                continue  # was skipped (dim mismatch with no unique match)
+            out_f.write(json.dumps(all_rows[key]) + "\n")
             out_f.flush()
             try:
                 os.fsync(out_f.fileno())
             except Exception:
-                # If fsync is unsupported on this filesystem, ignore and continue
                 pass
 
     total = count_pos + count_neg
     print(f"\nDone. Wrote {total} labels to {labels_path}")
     print(f"  Positive (reachable): {count_pos} ({count_pos/total*100:.1f}%)")
     print(f"  Negative:             {count_neg} ({count_neg/total*100:.1f}%)")
-
-    env.close()
+    if count_skip:
+        print(f"  Skipped (dim mismatch, no unique env match): {count_skip}")
 
 
 if __name__ == "__main__":
