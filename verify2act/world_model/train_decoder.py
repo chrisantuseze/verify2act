@@ -37,8 +37,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data_loader import WMTransitionDataset
-
+from verify2act.utils.data_loader import WMTransitionDataset
 try:
     from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 except ImportError:
@@ -247,10 +246,13 @@ def main():
 
     accelerator.print("\nLoading VAE...")
     vae_model = args.vae_model if args.vae_model else args.pretrained_model
+    # Always load VAE in float32: mixed-precision GradScaler requires FP32
+    # parameters; autocast (via accelerator.autocast()) handles FP16 in the
+    # forward pass without casting the weights themselves.
     vae, resolved_subfolder = load_vae_encoder(
         model_name_or_path=vae_model,
         device=device,
-        torch_dtype=weight_dtype,
+        torch_dtype=torch.float32,
         subfolder=args.vae_subfolder,
         local_files_only=args.local_files_only,
     )
@@ -302,7 +304,9 @@ def main():
 
     # ── Training loop ───────────────────────────────────────────────────────────
 
-    vae_dtype = weight_dtype
+    # Keep inputs in float32 to match model parameters (autocast handles FP16
+    # only inside the autocast region during the forward pass).
+    vae_dtype = torch.float32
     best_val_loss = float("inf")
     global_step = 0
 
@@ -450,7 +454,7 @@ def parse_args():
     parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default=4)
 
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--weight-decay", type=float, default=1e-2)

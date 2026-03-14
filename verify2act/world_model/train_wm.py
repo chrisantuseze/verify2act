@@ -29,11 +29,10 @@ from peft import LoraConfig, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from data_loader import WMTransitionDataset
 from tqdm import tqdm
-
 from diffusers import DDPMScheduler, StableDiffusionInstructPix2PixPipeline
 
+from verify2act.utils.data_loader import WMTransitionDataset
 try:
     from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 except ImportError:

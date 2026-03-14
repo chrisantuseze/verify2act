@@ -1,0 +1,33 @@
+# Few-shot example: mid-episode with partial history, spatial qualifiers
+task: example_2
+instruction: "Assemble all nuts onto their matching pegs."
+objects:
+  - "front-left round nut"
+  - "back-right round nut"
+  - "square nut"
+history:
+  - "pick front-left round nut"
+  - "insert front-left round nut"
+
+# Images (relative to this file)
+current_image: example_2_current.png
+goal_image: example_2_goal.png
+horizon: 10
+
+# Behaviors
+plan:
+  - "pick back-right round nut"
+  - "insert back-right round nut"
+  - "pick square nut"
+  - "insert square nut"
+  - "done"
+
+# Reflect (not used for this example)
+analysis: Null
+revised_plan: Null
+
+# OpenAI
+role: system
+name: Null
+name_query: example_user
+name_response: example_assistant

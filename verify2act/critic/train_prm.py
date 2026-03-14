@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # data_capt
 
 from verify2act.critic.losses import BetaNLLLoss
 from verify2act.critic.model import SpatialBetaPRMCritic
-from verify2act.data_loader import build_train_val_datasets
+from verify2act.utils.data_loader import build_train_val_datasets
 from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 
 def set_seed(seed: int):

@@ -26,9 +26,9 @@ from peft import PeftModel
 from PIL import Image
 
 try:
-    from verify2act.utils import load_vae_encoder
+    from verify2act.utils import load_vae_decoder, load_vae_encoder
 except ImportError:
-    from utils import load_vae_encoder
+    from utils import load_vae_decoder, load_vae_encoder
 
 
 def parse_args():
@@ -53,6 +53,18 @@ def parse_args():
         help="Load VAE only from local cache/files; do not reach HuggingFace Hub.",
     )
     parser.add_argument("--adapter-dir", type=str, default=None, help="Path to LoRA adapter directory")
+    parser.add_argument(
+        "--decoder-dir",
+        type=str,
+        default=None,
+        help=(
+            "Path to finetuned VAE decoder. Accepts either:\n"
+            "  (a) a full diffusers-format VAE directory (e.g. output/decoder/final/vae)\n"
+            "  (b) a Phase B checkpoint directory containing decoder_state_dict.pt\n"
+            "      (e.g. output/decoder/checkpoint-epoch5)\n"
+            "If omitted, the original pretrained decoder is used."
+        ),
+    )
 
     parser.add_argument("--image-path", type=str, default=None)
     parser.add_argument("--prompt", type=str, default=None)
@@ -143,6 +155,16 @@ def main():
     pipe.vae = vae
     print(f"Using VAE encoder from model={vae_model} (subfolder={resolved_subfolder})")
 
+    # ── Optionally replace the decoder with a finetuned one (Phase B) ─────────
+    if args.decoder_dir:
+        pipe.vae = load_vae_decoder(
+            decoder_dir=args.decoder_dir,
+            vae=pipe.vae,
+            device=device,
+            torch_dtype=torch_dtype,
+        )
+        print(f"Using finetuned VAE decoder from: {args.decoder_dir}")
+
     if args.adapter_dir:
         adapter_dir = Path(args.adapter_dir)
         if not adapter_dir.exists():
@@ -178,6 +200,7 @@ def main():
         "vae_model": vae_model,
         "vae_subfolder": resolved_subfolder,
         "adapter_dir": args.adapter_dir,
+        "decoder_dir": args.decoder_dir,
         "input_image": str(image_path),
         "prompt": prompt,
         "output_image": str(output_path),

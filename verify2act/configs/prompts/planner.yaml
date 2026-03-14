@@ -1,0 +1,9 @@
+prompt: PromptManager
+prompt_kwargs:
+  system_prompts:
+    propose: verify2act/configs/prompts/system/propose.yaml
+    reflect: verify2act/configs/prompts/system/reflect.yaml
+  example_prompts:
+    - verify2act/configs/prompts/examples/example_1.yaml
+    - verify2act/configs/prompts/examples/example_2.yaml
+    - verify2act/configs/prompts/examples/example_3.yaml

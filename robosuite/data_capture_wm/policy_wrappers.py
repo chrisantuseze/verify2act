@@ -15,9 +15,12 @@ subclass with its own _STAGE_SKILL map — nothing else in the pipeline changes.
 
 from __future__ import annotations
 
+import re
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
+
+from prompt_utils import spatial_qualifier
 
 
 # ─────────────────────────── shared dataclass ─────────────────────────── #
@@ -147,6 +150,29 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
                     if key in p.obs:
                         cartesian_target = np.asarray(p.obs[key][:3], dtype=np.float64)
                         break
+
+        # ── spatial qualifier for same-type nut disambiguation ──
+        # When multiple nuts of the same type are present, use both x (left/right)
+        # and y (front/back) to produce a 2D label, e.g. "front-left round nut".
+        # "RoundNut0" → type_prefix "RoundNut" → finds all "RoundNut*_pos" keys in obs.
+        if p.obs is not None and np.any(cartesian_target != 0):
+            type_prefix = re.sub(r'\d+$', '', nut_attr)
+            if type_prefix:
+                key_pattern = re.compile(
+                    rf'^{re.escape(type_prefix)}\d*_pos$', re.IGNORECASE
+                )
+                sibling_positions: List[tuple] = [
+                    (float(v[0]), float(v[1]))
+                    for k, v in p.obs.items()
+                    if key_pattern.match(k)
+                ]
+                qualifier = spatial_qualifier(
+                    float(cartesian_target[0]),
+                    float(cartesian_target[1]),
+                    sibling_positions,
+                )
+                if qualifier:
+                    object_name = f"{qualifier} {object_name}"  # e.g. "front-left round nut"
 
         return ActionInfo(
             skill=skill,

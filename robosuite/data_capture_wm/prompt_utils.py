@@ -2,25 +2,103 @@
 Action Prompt Template Builder for World Model Data Collection
 
 Generates fixed-format text prompts for InstructPix2Pix conditioning.
+
+Action text is intentionally SEMANTIC ONLY — no coordinates.
+InstructPix2Pix was pretrained on natural-language image editing instructions
+and conditions on visual descriptions of change, not metric positions.
+Coordinates belong in action_params.cartesian_target for the robot controller,
+not in the diffusion prompt.
 """
 
 
-def build_action_prompt(skill: str, object_name: str, cartesian_target) -> str:
+def build_action_prompt(skill: str, object_name: str, cartesian_target=None) -> str:
     """
-    Build a standardised action prompt string.
+    Build a semantic action prompt string for InstructPix2Pix conditioning.
 
     Args:
         skill: One of 'pick', 'place', 'insert'.
         object_name: e.g. 'round nut', 'square nut'.
-        cartesian_target: 3-element array/list [x, y, z] in world frame (metres).
+        cartesian_target: Accepted but ignored. Coordinates are stored separately
+            in action_params and are consumed by the robot controller, not the
+            diffusion world model.
 
     Returns:
-        Prompt string, e.g. "pick round nut. position: (0.12, -0.05, 0.92)."
+        Semantic prompt string, e.g. "pick round nut", "insert square nut".
     """
     skill = skill.lower().strip()
     assert skill in ("pick", "place", "insert"), f"Unknown skill: {skill}"
-    x, y, z = float(cartesian_target[0]), float(cartesian_target[1]), float(cartesian_target[2])
-    return f"{skill} {object_name}. position: ({x:.4f}, {y:.4f}, {z:.4f})."
+    return f"{skill} {object_name}"
+
+
+def spatial_qualifier(target_x: float, target_y: float, all_positions: list) -> str:
+    """
+    Returns a spatial label for an object at (target_x, target_y) relative to all
+    same-type objects in the scene.
+
+    Axis convention (robosuite world frame, agentview camera):
+      x-axis: robot's left (more negative) → robot's right (more positive)
+      y-axis: front/near robot (more negative) → back/far from robot (more positive)
+
+    Args:
+        target_x: x world-frame coordinate of the target object.
+        target_y: y world-frame coordinate of the target object.
+        all_positions: list of (x, y) tuples for ALL same-type objects
+            (including the target itself).
+
+    Returns:
+        "" if there is only one object.
+        A label like "left", "right", "front-left", "back-right", "front-center", etc.
+
+    Strategy:
+        1. Assign an x-label (left / center / right) by bucketing each object's
+           x rank into 3 equal groups (or left/right for exactly 2 distinct x values).
+        2. If the x-label alone uniquely identifies the target among its siblings,
+           return it.
+        3. Otherwise, also assign a y-label (front / middle / back) by the same
+           bucketing rule and return the compound label, e.g. "front-left".
+        4. If all objects share the same x (vertical column), return the y-label only.
+    """
+    n = len(all_positions)
+    if n <= 1:
+        return ""
+
+    def _bin(val: float, all_vals: list, labels_2: tuple, labels_3: tuple) -> str:
+        """
+        Bucket val into a label using distinct sorted values.
+          2 distinct values → labels_2  (e.g. ("left", "right"))
+          3+ distinct values → labels_3 tertiles  (e.g. ("left", "center", "right"))
+        """
+        distinct = sorted(set(round(v, 4) for v in all_vals))
+        nd = len(distinct)
+        if nd <= 1:
+            return ""
+        # find nearest distinct bucket
+        idx = min(range(nd), key=lambda i: abs(distinct[i] - round(val, 4)))
+        if nd == 2:
+            return labels_2[idx]
+        # 3+ distinct values → map index linearly to 3 buckets
+        bucket = min(int(idx * 3 / nd), 2)
+        return labels_3[bucket]
+
+    all_x = [p[0] for p in all_positions]
+    all_y = [p[1] for p in all_positions]
+
+    x_label = _bin(target_x, all_x, ("left", "right"), ("left", "center", "right"))
+    y_label = _bin(target_y, all_y, ("front", "back"), ("front", "middle", "back"))
+
+    # Check whether x_label alone uniquely identifies the target.
+    # Count siblings that fall into the same x-bucket.
+    same_x_count = sum(
+        1 for p in all_positions
+        if _bin(p[0], all_x, ("left", "right"), ("left", "center", "right")) == x_label
+    )
+
+    if same_x_count == 1 and x_label:
+        return x_label  # x is sufficient
+
+    # x is ambiguous (or absent) — combine with y
+    parts = [p for p in [y_label, x_label] if p]
+    return "-".join(parts) if parts else ""
 
 
 def skill_from_gripper(gripper_action: float, prev_skill: str | None) -> str:

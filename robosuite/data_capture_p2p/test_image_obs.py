@@ -16,6 +16,10 @@ except ImportError:
 import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
 
+import os
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
+
 
 def get_camera_image(sim, camera_name: str, width: int = 640, height: int = 480, 
                      camera_renderers=None):
@@ -214,7 +218,7 @@ def get_camera_intrinsics(sim, camera_name: str, width: int, height: int):
 # Create environment WITHOUT offscreen renderer (to avoid GLFW issues)
 controller_config = load_composite_controller_config(controller="BASIC")
 env = suite.make(
-    "Stack",  # Use simpler single-arm environment
+    "NutAssembly",  # Use simpler single-arm environment
     robots="Panda",
     controller_configs=controller_config,
     has_renderer=False,                     # no on-screen rendering
@@ -249,7 +253,7 @@ for i in range(env.sim.model.ncam):
     print(f"  - {cam_name}")
 
 print("\nRendering from primary camera...")
-primary_camera = "sideview" #-------------------------------------------
+primary_camera = "agentview" #-------------------------------------------
 img = get_camera_image(env.sim, primary_camera, width=640, height=480, 
                        camera_renderers=camera_renderers)
 
