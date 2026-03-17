@@ -21,8 +21,10 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,7 +35,12 @@ import torch.nn.functional as F
 from PIL import Image
 
 from verify2act.critic.inference import CriticDecision, decide_replan
+from verify2act.critic.model import SpatialBetaPRMCritic
+from verify2act.pipeline.env_wrapper import NutAssemblyEnvWrapper
+from verify2act.pipeline.planner import VLMPlanner
 from verify2act.pipeline.reflection import build_reflection_context
+from verify2act.pipeline.world_model import DiffusionWorldModel, OracleWorldModel
+from verify2act.utils.vae import load_vae_encoder
 from verify2act.utils.vae import VAE_LATENT_SCALE
 
 logger = logging.getLogger(__name__)
@@ -135,6 +142,7 @@ def run_episode(
     critic: torch.nn.Module,
     planner,
     *,
+    requery_world_model=None,
     horizon: int = 5,
     max_steps: int = 50,
     theta_f: float = 0.4,
@@ -153,7 +161,10 @@ def run_episode(
     vae : AutoencoderKL
         Frozen VAE encoder used by both world model and critic.
     world_model : WorldModelBase
-        Either ``OracleWorldModel`` or ``DiffusionWorldModel``.
+        Primary world model for imagined rollouts.
+    requery_world_model : WorldModelBase or None
+        Optional alternate world model used only during ``requery`` retries.
+        If ``None``, retries reuse ``world_model``.
     critic : SpatialBetaPRMCritic
         Trained feasibility critic.
     planner : VLMPlanner
@@ -248,8 +259,9 @@ def run_episode(
 
                 # ── Requery: re-sample world model on high uncertainty ─
                 if decision.action == "requery":
+                    retry_wm = requery_world_model or world_model
                     for retry_i in range(max_retries):
-                        imagined_img_next = world_model.imagine(imagined_img, action)
+                        imagined_img_next = retry_wm.imagine(imagined_img, action)
                         z_t1 = encode_image(vae, imagined_img_next, device=torch_device)
                         with torch.no_grad():
                             critic_out = critic(z_t1, z_goal)
@@ -364,3 +376,219 @@ def run_episode(
         _save_trace(trace, out_path)
 
     return trace
+
+
+def _ensure_workspace_robosuite_on_path() -> None:
+    """Ensure the local workspace robosuite package is importable."""
+    repo_root = Path(__file__).resolve().parents[2]
+    robosuite_dir = repo_root / "robosuite"
+    if robosuite_dir.exists() and str(robosuite_dir) not in sys.path:
+        sys.path.insert(0, str(robosuite_dir))
+
+
+def _dtype_from_name(name: str) -> torch.dtype:
+    name = name.lower()
+    if name == "fp16":
+        return torch.float16
+    if name == "bf16":
+        return torch.bfloat16
+    return torch.float32
+
+
+def _build_env(args: argparse.Namespace):
+    # _ensure_workspace_robosuite_on_path()
+    # import robosuite
+    # from robosuite.controllers import load_composite_controller_config
+
+    # controller_cfg = load_composite_controller_config(controller="BASIC")
+    # env = robosuite.make(
+    #     env_name=args.env_name,
+    #     robots=args.robot,
+    #     controller_configs=controller_cfg,
+    #     has_renderer=args.has_renderer,
+    #     has_offscreen_renderer=True,
+    #     use_camera_obs=False,
+    #     use_object_obs=True,
+    #     control_freq=args.control_freq,
+    #     horizon=args.env_horizon,
+    #     ignore_done=True,
+    # )
+    # return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
+
+    from run_cluttered_nutassembly import create_environment
+    return create_environment(
+        env_name="ClutteredNutAssembly",
+        num_round_nuts=args.num_round,
+        num_square_nuts=args.num_square,
+        initial_stacking_prob=args.initial_stacking_prob,
+        nut_type_mode=args.nut_type_mode,
+    )
+
+
+def _build_critic(args: argparse.Namespace, device: torch.device) -> SpatialBetaPRMCritic:
+    critic = SpatialBetaPRMCritic().to(device)
+    ckpt = torch.load(args.critic_ckpt, map_location=device)
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        state_dict = ckpt["model_state_dict"]
+    elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state_dict = ckpt["state_dict"]
+    else:
+        state_dict = ckpt
+    critic.load_state_dict(state_dict)
+    critic.eval()
+    return critic
+
+
+def _build_world_models(args: argparse.Namespace):
+    mode = args.wm_mode
+    wm = None
+    requery_wm = None
+
+    if mode in ("oracle", "hybrid"):
+        wm = OracleWorldModel(args.env_wrapper)
+
+    if mode in ("diffusion", "hybrid"):
+        diff_wm = DiffusionWorldModel(
+            pretrained_model=args.wm_model,
+            adapter_dir=args.wm_adapter_dir,
+            decoder_dir=args.wm_decoder_dir,
+            vae_model=args.vae_model,
+            vae_subfolder=args.vae_subfolder,
+            device=args.device,
+            torch_dtype=_dtype_from_name(args.dtype),
+            num_inference_steps=args.wm_steps,
+            image_guidance_scale=args.wm_image_guidance,
+            guidance_scale=args.wm_text_guidance,
+            seed=args.wm_seed,
+        )
+        if mode == "diffusion":
+            wm = diff_wm
+        else:
+            requery_wm = diff_wm
+
+    if wm is None:
+        raise ValueError(f"Unsupported wm_mode: {mode}")
+
+    return wm, requery_wm
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Verify2Act inference episode")
+    parser.add_argument("--env-name", default="NutAssembly")
+    parser.add_argument("--robot", default="Panda")
+    parser.add_argument("--camera", default="agentview")
+    parser.add_argument("--image-size", type=int, default=512)
+    parser.add_argument("--has-renderer", action="store_true")
+    parser.add_argument("--control-freq", type=int, default=20)
+    parser.add_argument("--env-horizon", type=int, default=2000)
+
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--dtype", choices=["fp32", "fp16", "bf16"], default="fp16")
+    parser.add_argument("--local-files-only", action="store_true")
+
+    parser.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
+    parser.add_argument("--vae-subfolder", default="auto")
+
+    parser.add_argument("--critic-ckpt", required=True)
+
+    parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
+    parser.add_argument("--planner-model", default="gpt-4o")
+    parser.add_argument("--planner-max-tokens", type=int, default=512)
+    parser.add_argument("--planner-temperature", type=float, default=0.2)
+
+    parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "hybrid"], default="hybrid")
+    parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
+    parser.add_argument("--wm-adapter-dir", default=None)
+    parser.add_argument("--wm-decoder-dir", default=None)
+    parser.add_argument("--wm-steps", type=int, default=30)
+    parser.add_argument("--wm-image-guidance", type=float, default=1.5)
+    parser.add_argument("--wm-text-guidance", type=float, default=7.5)
+    parser.add_argument("--wm-seed", type=int, default=None)
+
+    parser.add_argument("--horizon", type=int, default=5)
+    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--theta-f", type=float, default=0.4)
+    parser.add_argument("--theta-u", type=float, default=0.15)
+    parser.add_argument("--max-retries", type=int, default=2)
+    parser.add_argument("--max-replans", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--output-dir", default="verify2act/output/inference_run")
+
+    # Nut assembly params
+    parser.add_argument("--num-round", type=int, default=6)
+    parser.add_argument("--num-square", type=int, default=2)
+    parser.add_argument("--initial-stacking-prob", type=float, default=0.6)
+    parser.add_argument(
+        "--nut-type-mode",
+        type=str,
+        default="roundnut",
+        choices=["roundnut", "squarenut", "random", "alternate"],
+        help="Nut type mode for ClutteredNutAssembly",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    if args.seed is not None:
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+
+    device = torch.device(args.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("--device cuda requested but CUDA is unavailable")
+
+    args.env_wrapper = _build_env(args)
+    vae, _resolved = load_vae_encoder(
+        model_name_or_path=args.vae_model,
+        device=device,
+        torch_dtype=_dtype_from_name(args.dtype),
+        subfolder=args.vae_subfolder,
+        local_files_only=args.local_files_only,
+    )
+    critic = _build_critic(args, device)
+    planner = VLMPlanner.from_yaml(
+        args.prompt_config,
+        model=args.planner_model,
+        max_tokens=args.planner_max_tokens,
+        temperature=args.planner_temperature,
+    )
+    world_model, requery_world_model = _build_world_models(args)
+
+    trace = run_episode(
+        env_wrapper=args.env_wrapper,
+        vae=vae,
+        world_model=world_model,
+        requery_world_model=requery_world_model,
+        critic=critic,
+        planner=planner,
+        horizon=args.horizon,
+        max_steps=args.max_steps,
+        theta_f=args.theta_f,
+        theta_u=args.theta_u,
+        max_retries=args.max_retries,
+        max_replans=args.max_replans,
+        device=args.device,
+        output_dir=args.output_dir,
+    )
+    logger.info(
+        "Episode complete: success=%s total_steps=%d total_replans=%d",
+        trace.success,
+        trace.total_steps,
+        trace.total_replans,
+    )
+
+    args.env_wrapper.env.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

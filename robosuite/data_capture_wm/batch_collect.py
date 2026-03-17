@@ -242,6 +242,8 @@ def build_env_factory(args):
                 initial_stacking_prob=args.initial_stacking_prob,
                 nut_type_mode=args.nut_type_mode,
                 horizon=args.max_timesteps,
+                has_renderer=not args.headless,
+                has_offscreen_renderer=True,
             )
 
         return env_factory, create_nut_assembly_policy, env_name, env_config
@@ -256,7 +258,11 @@ def build_env_factory(args):
         }
 
         def env_factory():
-            return create_environment(env_name)
+            return create_environment(
+                env_name,
+                has_renderer=not args.headless,
+                has_offscreen_renderer=True,
+            )
 
         return env_factory, create_stack_policy, env_name, env_config
 
@@ -270,7 +276,11 @@ def build_env_factory(args):
         }
 
         def env_factory():
-            return create_environment("PickPlaceCan")
+            return create_environment(
+                "PickPlaceCan",
+                has_renderer=not args.headless,
+                has_offscreen_renderer=True,
+            )
 
         return env_factory, create_pickplace_policy, env_name, env_config
 
@@ -306,6 +316,13 @@ def main():
         default="roundnut",
         choices=["roundnut", "squarenut", "random", "alternate"],
         help="Nut type mode for ClutteredNutAssembly",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=False,
+        help="Run without GUI viewer (faster-than-realtime). "
+             "Offscreen rendering for image capture is always enabled.",
     )
 
     args = parser.parse_args()

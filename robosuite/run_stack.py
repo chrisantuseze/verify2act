@@ -377,12 +377,18 @@ class HeuristicStackPolicy:
         return action, False
 
 
-def create_environment(env_name: str = "Stack4"):
+def create_environment(
+    env_name: str = "Stack4",
+    has_renderer: bool = True,
+    has_offscreen_renderer: bool = False,
+):
     """
     Create and configure the robosuite stacking environment.
     
     Args:
         env_name: Name of the environment ("Stack", "Stack3", or "Stack4")
+        has_renderer: Enable on-screen GUI renderer.
+        has_offscreen_renderer: Enable offscreen renderer for camera capture.
         
     Returns:
         Configured environment instance
@@ -393,8 +399,8 @@ def create_environment(env_name: str = "Stack4"):
         env_name=env_name,
         robots="Panda",
         controller_configs=controller_config,
-        has_renderer=True,
-        has_offscreen_renderer=False,
+        has_renderer=has_renderer,
+        has_offscreen_renderer=has_offscreen_renderer,
         use_camera_obs=False,
         use_object_obs=True,
         control_freq=20,

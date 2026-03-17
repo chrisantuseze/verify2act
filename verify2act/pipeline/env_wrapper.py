@@ -29,8 +29,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from robosuite.robosuite.utils.camera_utils import render_camera
-
 logger = logging.getLogger(__name__)
 
 # ── Lazy import of render_camera (lives in the robosuite tree) ──────────
@@ -369,7 +367,7 @@ class NutAssemblyEnvWrapper:
 
     def _render_rgb(self) -> np.ndarray:
         """Render via ``render_camera`` — same path as ``EpisodeRecorder``."""
-        # render_camera = _get_render_camera()
+        render_camera = _get_render_camera()
         result = render_camera(
             self.env.sim,
             self._camera_renderers,

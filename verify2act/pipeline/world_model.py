@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import abc
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
@@ -88,6 +89,7 @@ class OracleWorldModel(WorldModelBase):
     ) -> np.ndarray:
         # Save full sim state.
         saved_state = self.env_wrapper.save_state()
+        saved_obs = deepcopy(getattr(self.env_wrapper, "_obs", None))
 
         try:
             # Execute the action inside the sim.
@@ -96,6 +98,7 @@ class OracleWorldModel(WorldModelBase):
         finally:
             # Restore state regardless of success/failure.
             self.env_wrapper.restore_state(saved_state)
+            self.env_wrapper._obs = saved_obs
 
         return imagined_img
 
