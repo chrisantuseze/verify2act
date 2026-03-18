@@ -118,8 +118,8 @@ def aggregate_field(values: List):
 def main() -> None:
     args = parse_args()
 
-    source_dirs = [(Path("dataset") / p).resolve() for p in args.source_dirs]
-    output_dir = (Path("dataset") / args.output_dir).resolve()
+    source_dirs = [Path(p).resolve() for p in args.source_dirs]
+    output_dir = Path(args.output_dir).resolve()
     output_episodes_dir = output_dir / "episodes"
 
     if output_dir.exists():

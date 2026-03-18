@@ -91,7 +91,22 @@ done
 
 # ── Derived values ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKER_BASE_DIR="${OUTPUT_DIR}/_workers"
+# Worker dirs live BESIDE the output dir (not inside it) so that overwriting
+# or deleting the merged output can never accidentally destroy collected data.
+WORKER_BASE_DIR="${OUTPUT_DIR%/}_workers"
+
+# MuJoCo headless rendering: use EGL (GPU, no display required) unless the
+# caller has already set MUJOCO_GL.  Workers inherit this via environment.
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+
+# Each worker process must not spawn dozens of BLAS/OMP threads - doing so
+# exhausts RLIMIT_NPROC when many workers run in parallel (8 workers × 64
+# OpenBLAS threads alone would need >500 threads).  Single-threaded BLAS is
+# fine here because the simulation itself is the bottleneck, not BLAS.
+export OPENBLAS_NUM_THREADS=2
+export OMP_NUM_THREADS=2
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # Distribute episodes as evenly as possible across workers
 BASE_EPS=$(( TOTAL_EPISODES / WORKERS ))
@@ -259,18 +274,22 @@ if (( ${#VALID_DIRS[@]} == 0 )); then
 fi
 
 echo "[launcher] Merging ${#VALID_DIRS[@]} worker dataset(s) -> ${OUTPUT_DIR}"
-python "${SCRIPT_DIR}/merge_datasets.py" \
+if python "${SCRIPT_DIR}/merge_datasets.py" \
     --source-dirs "${VALID_DIRS[@]}" \
     --output-dir  "${OUTPUT_DIR}" \
-    --overwrite
+    --overwrite; then
 
-echo "[launcher] Merge complete. Final dataset: ${OUTPUT_DIR}"
+    echo "[launcher] Merge complete. Final dataset: ${OUTPUT_DIR}"
 
-if [[ "${KEEP_WORKERS}" == "false" ]]; then
-    echo "[launcher] Removing worker dirs (use --keep-workers to retain them)."
-    rm -rf "${WORKER_BASE_DIR}"
+    if [[ "${KEEP_WORKERS}" == "false" ]]; then
+        echo "[launcher] Removing worker dirs (use --keep-workers to retain them)."
+        rm -rf "${WORKER_BASE_DIR}"
+    else
+        echo "[launcher] Worker dirs kept in ${WORKER_BASE_DIR}/"
+    fi
 else
-    echo "[launcher] Worker dirs kept in ${WORKER_BASE_DIR}/"
+    echo "[launcher] ERROR: Merge failed (exit $?). Worker dirs preserved in ${WORKER_BASE_DIR}/" >&2
+    exit 1
 fi
 
 echo ""

@@ -16,7 +16,6 @@ import json
 import math
 import random
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
@@ -25,11 +24,9 @@ import torch
 import torch.nn.functional as F
 import sys
 from accelerate import Accelerator
-from PIL import Image
 from peft import LoraConfig, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
-from torchvision import transforms
 from tqdm import tqdm
 from diffusers import DDPMScheduler, StableDiffusionInstructPix2PixPipeline
 
@@ -93,16 +90,7 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-@dataclass
-class TransitionRow:
-    episode_id: str
-    timestep: int
-    image_t: str
-    image_t1: str
-    action_text: str
 
-
- 
 
 
 def get_dtype(precision: str):
@@ -136,7 +124,6 @@ def evaluate(
     val_loader,
     device,
     latent_scale,
-    weight_dtype,
     eval_batches,
     accelerator=None,
 ):
@@ -486,7 +473,6 @@ def main():
                     val_loader=val_loader,
                     device=device,
                     latent_scale=latent_scale,
-                    weight_dtype=weight_dtype,
                     eval_batches=args.eval_batches,
                     accelerator=accelerator,
                 )
@@ -554,8 +540,8 @@ def main():
 def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
-    parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly", required=True)
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/wm", required=True)
+    parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly")
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/wm")
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix")
     parser.add_argument(
         "--vae-model",

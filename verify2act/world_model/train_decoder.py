@@ -26,7 +26,7 @@ import json
 import math
 import random
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import lpips
 import numpy as np
@@ -115,7 +115,8 @@ def evaluate(
 
     vae.train()
     # Re-freeze encoder after switching back to train mode
-    _freeze_encoder(vae)
+    raw_vae = accelerator.unwrap_model(vae) if accelerator is not None else vae
+    _freeze_encoder(raw_vae)
 
     if count.item() <= 0:
         return math.nan, math.nan, math.nan
@@ -148,8 +149,8 @@ def _get_trainable_params(vae):
 # ── Checkpoint ──────────────────────────────────────────────────────────────────
 
 
-def save_checkpoint(vae, output_dir: Path, epoch: int, train_state: Dict):
-    ckpt_dir = output_dir / f"checkpoint-epoch{epoch}"
+def save_checkpoint(vae, output_dir: Path, step: int, train_state: Dict):
+    ckpt_dir = output_dir / f"checkpoint-{step}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     # Save only decoder state dict (encoder is frozen/unchanged)
     torch.save(vae.decoder.state_dict(), ckpt_dir / "decoder_state_dict.pt")
@@ -201,7 +202,7 @@ def main():
     accelerator.print(f"Batch size:        {args.batch_size}")
     accelerator.print(f"Grad accum:        {args.gradient_accumulation_steps}")
     accelerator.print(f"LR:                {args.learning_rate}")
-    accelerator.print(f"Max epochs:        {args.max_epochs}")
+    accelerator.print(f"Max steps:         {args.max_steps}")
     accelerator.print(f"L1 weight:         {args.l1_weight}")
     accelerator.print(f"LPIPS weight:      {args.lpips_weight}")
 
@@ -313,20 +314,18 @@ def main():
     best_val_loss = float("inf")
     global_step = 0
 
-    for epoch in range(1, args.max_epochs + 1):
+    progress = tqdm(
+        total=args.max_steps,
+        desc="Training",
+        dynamic_ncols=True,
+        disable=not accelerator.is_local_main_process,
+    )
+
+    while global_step < args.max_steps:
         vae.train()
         _freeze_encoder(accelerator.unwrap_model(vae))
 
-        epoch_losses: List[float] = []
-
-        progress = tqdm(
-            train_loader,
-            desc=f"Epoch {epoch}/{args.max_epochs}",
-            dynamic_ncols=True,
-            disable=not accelerator.is_local_main_process,
-        )
-
-        for batch in progress:
+        for batch in train_loader:
             image_t1 = batch["image_t1"].to(device=device, dtype=vae_dtype, non_blocking=True)
 
             with accelerator.accumulate(vae):
@@ -344,7 +343,7 @@ def main():
 
                 if not torch.isfinite(loss):
                     optimizer.zero_grad(set_to_none=True)
-                    accelerator.print(f"[warn] Non-finite loss at step {global_step}; skipping.")
+                    accelerator.print(f"[warn] Non-finite loss at step {global_step + 1}; skipping batch.")
                     continue
 
                 accelerator.backward(loss)
@@ -357,54 +356,51 @@ def main():
 
             if accelerator.sync_gradients:
                 global_step += 1
-                step_loss = float(loss.item())
-                epoch_losses.append(step_loss)
+                progress.update(1)
 
                 if global_step % args.log_every == 0:
-                    avg = float(np.mean(epoch_losses[-args.log_every:]))
                     lr = optimizer.param_groups[0]["lr"]
-                    progress.set_postfix({"loss": f"{avg:.4f}", "lr": f"{lr:.2e}"})
+                    progress.set_postfix({"loss": f"{loss.item():.4f}", "lr": f"{lr:.2e}"})
 
-        # ── End-of-epoch validation ─────────────────────────────────────────────
+                if global_step % args.eval_every == 0:
+                    val_loss, val_l1, val_lpips = evaluate(
+                        vae=vae,
+                        val_loader=val_loader,
+                        device=device,
+                        latent_scale=latent_scale,
+                        lpips_fn=lpips_fn,
+                        l1_weight=args.l1_weight,
+                        lpips_weight=args.lpips_weight,
+                        eval_batches=args.eval_batches,
+                        accelerator=accelerator,
+                    )
+                    accelerator.print(
+                        f"\n[step {global_step}] val_loss={val_loss:.5f}  "
+                        f"val_l1={val_l1:.5f}  val_lpips={val_lpips:.5f}"
+                    )
+                    if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
+                        best_val_loss = val_loss
+                        save_checkpoint(
+                            accelerator.unwrap_model(vae),
+                            output_dir,
+                            global_step,
+                            {"step": global_step, "best_val_loss": best_val_loss, "is_best": True},
+                        )
+                        accelerator.print(f"  ↑ New best val_loss={best_val_loss:.5f}")
 
-        val_loss, val_l1, val_lpips = evaluate(
-            vae=vae,
-            val_loader=val_loader,
-            device=device,
-            latent_scale=latent_scale,
-            lpips_fn=lpips_fn,
-            l1_weight=args.l1_weight,
-            lpips_weight=args.lpips_weight,
-            eval_batches=args.eval_batches,
-            accelerator=accelerator,
-        )
-        avg_train = float(np.mean(epoch_losses)) if epoch_losses else math.nan
-        accelerator.print(
-            f"\n[epoch {epoch}] train_loss={avg_train:.5f}  "
-            f"val_loss={val_loss:.5f}  val_l1={val_l1:.5f}  val_lpips={val_lpips:.5f}"
-        )
+                if global_step % args.save_every == 0 and accelerator.is_main_process:
+                    save_checkpoint(
+                        accelerator.unwrap_model(vae),
+                        output_dir,
+                        global_step,
+                        {"step": global_step, "best_val_loss": best_val_loss, "is_best": False},
+                    )
+                    accelerator.print(f"Saved periodic checkpoint at step {global_step}")
 
-        if accelerator.is_main_process:
-            is_best = np.isfinite(val_loss) and val_loss < best_val_loss
-            if is_best:
-                best_val_loss = val_loss
+                if global_step >= args.max_steps:
+                    break
 
-            save_checkpoint(
-                accelerator.unwrap_model(vae),
-                output_dir,
-                epoch,
-                {
-                    "epoch": epoch,
-                    "global_step": global_step,
-                    "val_loss": val_loss,
-                    "val_l1": val_l1,
-                    "val_lpips": val_lpips,
-                    "best_val_loss": best_val_loss,
-                    "is_best": is_best,
-                },
-            )
-            if is_best:
-                accelerator.print(f"  ↑ New best val_loss={best_val_loss:.5f}")
+    progress.close()
 
     # ── Save final model ────────────────────────────────────────────────────────
 
@@ -417,7 +413,7 @@ def main():
         with open(output_dir / "final" / "train_summary.json", "w") as f:
             json.dump(
                 {
-                    "max_epochs": args.max_epochs,
+                    "max_steps": args.max_steps,
                     "global_steps": global_step,
                     "best_val_loss": best_val_loss,
                     "seed": args.seed,
@@ -461,7 +457,7 @@ def parse_args():
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--weight-decay", type=float, default=1e-2)
-    parser.add_argument("--max-epochs", type=int, default=5)
+    parser.add_argument("--max-steps", type=int, default=5000)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
 
     parser.add_argument("--l1-weight", type=float, default=1.0)
@@ -471,8 +467,10 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--mixed-precision", type=str, choices=["no", "fp16", "bf16"], default="fp16")
 
-    parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--eval-batches", type=int, default=50)
+    parser.add_argument("--save-every", type=int, default=500)
 
     return parser.parse_args()
 

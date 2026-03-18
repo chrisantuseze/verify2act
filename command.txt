@@ -26,5 +26,6 @@ python verify2act/critic/train_prm.py \
 python verify2act/world_model/train_decoder.py \
   --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
   --output-dir  verify2act/output/decoder \
-  --max-epochs 100 \
+  --max-steps 5000 \
+  --eval-every 500 \
   --batch-size 2

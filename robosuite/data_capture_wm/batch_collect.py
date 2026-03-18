@@ -101,81 +101,94 @@ class BatchCollector:
 
         for ep_idx in range(num_episodes):
             t0 = time.time()
-            obs = env.reset()
-            episode_id = f"ep_{recorder.episode_counter:05d}"
-            recorder.start_episode(episode_id=episode_id)
+            try:
+                obs = env.reset()
+                episode_id = f"ep_{recorder.episode_counter:05d}"
+                recorder.start_episode(episode_id=episode_id)
 
-            policy = self.policy_factory(env, data_collection_mode=True)
-            policy.obs = obs
-
-            policy_type = (
-                "expert"
-                if self.policy_mode == "expert"
-                else f"noisy_{self.noise_sigma}"
-            )
-
-            done = False
-            task_success = False
-            t = 0
-
-            while t < max_timesteps and not done:
-                action, policy_done = policy.step()
-
-                # Add noise if requested (skip gripper dimension)
-                if self.policy_mode == "noisy" and self.noise_sigma > 0:
-                    noise = np.random.normal(0, self.noise_sigma, size=action.shape)
-                    noise[-1] = 0.0
-                    action = action + noise
-
-                obs, reward, env_done, info = env.step(action)
+                policy = self.policy_factory(env, data_collection_mode=True)
                 policy.obs = obs
 
-                done = env_done or policy_done
-                task_success = env_done  # robosuite returns done=True on success
-
-                # Skill / target from the adapter (task-agnostic)
-                ai = policy.get_action_info()
-                action_text = build_action_prompt(
-                    ai.skill, ai.object_name, ai.cartesian_target
+                policy_type = (
+                    "expert"
+                    if self.policy_mode == "expert"
+                    else f"noisy_{self.noise_sigma}"
                 )
 
-                recorder.record_step(
-                    action=action,
-                    obs=obs,
-                    done=done,
-                    info=info,
-                    skill=ai.skill,
-                    object_name=ai.object_name,
-                    cartesian_target=ai.cartesian_target,
-                    action_text=action_text,
-                    stage=ai.stage,
-                    event_tag=ai.event_tag,
-                    policy_type=policy_type,
+                done = False
+                task_success = False
+                t = 0
+
+                while t < max_timesteps and not done:
+                    action, policy_done = policy.step()
+
+                    # Add noise if requested (skip gripper dimension)
+                    if self.policy_mode == "noisy" and self.noise_sigma > 0:
+                        noise = np.random.normal(0, self.noise_sigma, size=action.shape)
+                        noise[-1] = 0.0
+                        action = action + noise
+
+                    obs, reward, env_done, info = env.step(action)
+                    policy.obs = obs
+
+                    done = env_done or policy_done
+                    task_success = env_done  # robosuite returns done=True on success
+
+                    # Skill / target from the adapter (task-agnostic)
+                    ai = policy.get_action_info()
+                    action_text = build_action_prompt(
+                        ai.skill, ai.object_name, ai.cartesian_target
+                    )
+
+                    recorder.record_step(
+                        action=action,
+                        obs=obs,
+                        done=done,
+                        info=info,
+                        skill=ai.skill,
+                        object_name=ai.object_name,
+                        cartesian_target=ai.cartesian_target,
+                        action_text=action_text,
+                        stage=ai.stage,
+                        event_tag=ai.event_tag,
+                        policy_type=policy_type,
+                    )
+
+                    t += 1
+
+                # End episode
+                fallback_goal = self.last_success_goal
+                transitions = recorder.end_episode(
+                    success=task_success, fallback_goal=fallback_goal
                 )
 
-                t += 1
+                if task_success:
+                    self.last_success_goal = transitions[0]["goal_image"] if transitions else None
+                    self.stats["success"] += 1
+                else:
+                    self.stats["failed"] += 1
 
-            # End episode
-            fallback_goal = self.last_success_goal
-            transitions = recorder.end_episode(
-                success=task_success, fallback_goal=fallback_goal
-            )
+                self.stats["total"] += 1
+                self.stats["transitions"] += len(transitions)
+                dur = time.time() - t0
 
-            if task_success:
-                self.last_success_goal = transitions[0]["goal_image"] if transitions else None
-                self.stats["success"] += 1
-            else:
-                self.stats["failed"] += 1
+                status = "OK" if task_success else "FAIL"
+                print(
+                    f"  [{status}] Episode {ep_idx:04d} ({episode_id}): "
+                    f"{len(transitions)} transitions, {dur:.1f}s"
+                )
 
-            self.stats["total"] += 1
-            self.stats["transitions"] += len(transitions)
-            dur = time.time() - t0
-
-            status = "OK" if task_success else "FAIL"
-            print(
-                f"  [{status}] Episode {ep_idx:04d} ({episode_id}): "
-                f"{len(transitions)} transitions, {dur:.1f}s"
-            )
+            except Exception as exc:  # noqa: BLE001
+                dur = time.time() - t0
+                print(
+                    f"  [SKIP] Episode {ep_idx:04d}: render/sim error after {dur:.1f}s"
+                    f" — {type(exc).__name__}: {exc}"
+                )
+                # Flush the renderer cache and discard the partial episode dir.
+                # episode_counter is NOT incremented so the next episode reuses
+                # the same ID slot and the output numbering stays contiguous.
+                recorder.abort_episode()
+                self.stats["skipped"] = self.stats.get("skipped", 0) + 1
 
         recorder.close()
         env.close()
@@ -204,10 +217,13 @@ class BatchCollector:
     def _print_summary(self):
         s = self.stats
         rate = s["success"] / max(1, s["total"]) * 100
+        skipped = s.get("skipped", 0)
         print(f"\n{'='*50}")
-        print(f"Collection complete: {s['total']} episodes")
+        print(f"Collection complete: {s['total']} episodes attempted")
         print(f"  Success: {s['success']} ({rate:.1f}%)")
         print(f"  Failed:  {s['failed']}")
+        if skipped:
+            print(f"  Skipped (render error): {skipped}")
         print(f"  Total transitions: {s['transitions']}")
         print(f"{'='*50}\n")
 

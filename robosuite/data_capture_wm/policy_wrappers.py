@@ -89,17 +89,19 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
     _INSERT_STAGES = frozenset({
         "move_to_peg", "align_over_peg", #"lower_to_peg",
     })
-    _PLACE_STAGES = frozenset({
-        "move_to_table", "lower_to_table",
-    })
+    # No place stage exists in the NutAssembly policy; nuts go directly
+    # from insert (retract) to reset_orientation/done.
+    _PLACE_STAGES: frozenset = frozenset()
 
     _EVENT_TAG_BY_STAGE = {
-        "move_to_nut": "pick_start",
-        "move_to_peg": "pick_end",
-        "align_over_peg": "insert_start",
-        "release": "insert_end",
-        "move_to_table": "place_start",
-        "lower_to_table": "place_end",
+        "move_to_nut":        "pick_start",
+        # pick ends and insert begins simultaneously when we start moving to the peg;
+        # the recorder handles '|'-separated multi-event tags.
+        "move_to_peg":        "pick_end|insert_start",
+        # insert ends when retract completes — either reset_orientation (next nut
+        # exists) or done (episode terminates).
+        "reset_orientation":  "insert_end",
+        "done":               "insert_end",
     }
 
     def step(self) -> Tuple[np.ndarray, bool]:

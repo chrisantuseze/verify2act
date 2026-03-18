@@ -8,12 +8,6 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-# Ensure repo root is on sys.path so the package resolves whether this file is
-# run directly (python critic/train_prm.py) or as a module (-m verify2act.critic.train_prm).
-# _repo_root = Path(__file__).resolve().parents[2]
-# if str(_repo_root) not in sys.path:
-#     sys.path.insert(0, str(_repo_root))
-
 import numpy as np
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -22,11 +16,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # robosuite/
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # data_capture_wm/
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # project root (contains verify2act/)
 
 from verify2act.critic.losses import BetaNLLLoss
 from verify2act.critic.model import SpatialBetaPRMCritic
-from verify2act.utils.data_loader import build_train_val_datasets
+from verify2act.data_loader import build_train_val_datasets
 from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 
 def set_seed(seed: int):
@@ -177,7 +171,7 @@ def main():
     criterion = BetaNLLLoss(label_smoothing=args.label_smoothing)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
-    latent_scale = VAE_LATENT_SCALE
+    latent_scale = float(getattr(vae.config, "scaling_factor", VAE_LATENT_SCALE))
     best_val = float("inf")
     history = []
 
@@ -210,6 +204,7 @@ def main():
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
             optimizer.step()
 
             train_losses.append(loss.item())
@@ -265,7 +260,7 @@ def parse_args():
         default="",
         help="Fallback goal image path (relative to dataset-dir or absolute). Used when row goal_image is missing.",
     )
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/prm", required=True)
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/prm")
 
     parser.add_argument("--vae-model", type=str, default="timbrooks/instruct-pix2pix")
     parser.add_argument(
@@ -286,6 +281,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-train-batches", type=int, default=0)
     parser.add_argument("--max-val-batches", type=int, default=0)
 

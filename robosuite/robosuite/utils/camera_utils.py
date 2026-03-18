@@ -712,7 +712,7 @@ def get_camera_intrinsics(sim, camera_name: str, width: int, height: int) -> Cam
         height=height,
     )
 
-def render_camera(sim, camera_renderers, camera_name: str, width: int, height: int) -> Optional[CameraObservation]:
+def render_camera(sim, camera_renderers, camera_name: str, width: int, height: int, rgb_only: bool = False) -> Optional[CameraObservation]:
     try:
         camera_id = sim.model.camera_name2id(camera_name)
         if camera_id == -1:
@@ -743,6 +743,30 @@ def render_camera(sim, camera_renderers, camera_name: str, width: int, height: i
         renderer.disable_depth_rendering()
         renderer.disable_segmentation_rendering()
         rgb = renderer.render()
+
+        if rgb_only:
+            # Depth and segmentation not needed — skipping avoids an
+            # intermittent EGL segmentation-buffer corruption crash.
+            if rgb is None:
+                print(f"Render failed for camera '{camera_name}'")
+                return None
+            rgb = np.asarray(rgb, dtype=np.uint8).copy()
+            intrinsics = get_camera_intrinsic_matrix(sim=sim, camera_name=camera_name, camera_height=height, camera_width=width)
+            extrinsics = get_camera_extrinsic_matrix(sim=sim, camera_name=camera_name)
+            cam_pos = sim.data.cam_xpos[camera_id]
+            cam_mat = sim.data.cam_xmat[camera_id].reshape(3, 3)
+            view_matrix = np.eye(4)
+            view_matrix[:3, :3] = cam_mat.T
+            view_matrix[:3, 3] = -cam_mat.T @ cam_pos
+            return CameraObservation(
+                camera=camera_name,
+                rgb=rgb,
+                depth=None,
+                segmentation=None,
+                intrinsics=intrinsics,
+                extrinsics=extrinsics,
+                view_matrix=view_matrix,
+            ), camera_renderers
 
         # Depth
         renderer.enable_depth_rendering()

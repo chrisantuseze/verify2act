@@ -275,6 +275,7 @@ class EpisodeRecorder:
             self.camera,
             self.image_size,
             self.image_size,
+            rgb_only=True,
         )
         if result is None:
             raise RuntimeError(
@@ -298,6 +299,23 @@ class EpisodeRecorder:
 
     def _state_relpath(self, t: int) -> Path:
         return Path("episodes") / self.episode_id / f"state_{t:05d}.npz"
+
+    def abort_episode(self):
+        """Discard the current in-progress episode.
+
+        Flushes the renderer cache (so the next episode starts fresh), removes
+        the partial episode directory, and resets internal state.  Does NOT
+        increment episode_counter — the next call to start_episode() will reuse
+        the same ID slot.
+        """
+        import shutil
+        self._flush_renderers()
+        if self.episode_dir is not None and self.episode_dir.exists():
+            try:
+                shutil.rmtree(self.episode_dir)
+            except OSError:
+                pass
+        self._reset_buffers()
 
     def _flush_renderers(self):
         """Close and discard all cached renderers (called when model is replaced)."""

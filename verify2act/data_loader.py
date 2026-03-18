@@ -167,6 +167,13 @@ class CriticDataset(Dataset):
             }
 
         img_t1 = self._load_image(row["image_t1"])
+        goal_img = self._load_image(row["goal_image"])
+        return {
+            "image_t1": img_t1,
+            "goal_image": goal_img,
+            "label": label,
+        }
+
     def _load_image(self, relpath: str) -> torch.Tensor:
         path = self.root / relpath
         img = Image.open(path).convert("RGB")
