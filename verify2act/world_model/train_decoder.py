@@ -37,7 +37,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from verify2act.utils.data_loader import WMTransitionDataset
+from verify2act.data_loader import WMTransitionDataset
 try:
     from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 except ImportError:
@@ -301,6 +301,9 @@ def main():
     vae, optimizer, train_loader, val_loader, lr_scheduler = accelerator.prepare(
         vae, optimizer, train_loader, val_loader, lr_scheduler,
     )
+    # Re-derive trainable params from the (possibly wrapped) model so that
+    # clip_grad_norm_ and the optimizer act on the correct live tensors.
+    trainable_params = _get_trainable_params(accelerator.unwrap_model(vae))
 
     # ── Training loop ───────────────────────────────────────────────────────────
 
@@ -438,7 +441,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Phase B: Finetune VAE decoder for Verify2Act")
 
     parser.add_argument("--dataset-dir", type=str,
-                        default="robosuite/data_capture_wm/dataset/nut_assembly/episodes")
+                        default="robosuite/data_capture_wm/dataset/nut_assembly")
     parser.add_argument("--output-dir", type=str,
                         default="verify2act/output/decoder")
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix",

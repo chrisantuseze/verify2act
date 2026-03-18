@@ -23,6 +23,7 @@ from typing import Dict, List
 import numpy as np
 import torch
 import torch.nn.functional as F
+import sys
 from accelerate import Accelerator
 from PIL import Image
 from peft import LoraConfig, get_peft_model
@@ -32,11 +33,56 @@ from torchvision import transforms
 from tqdm import tqdm
 from diffusers import DDPMScheduler, StableDiffusionInstructPix2PixPipeline
 
-from verify2act.utils.data_loader import WMTransitionDataset
+# Ensure the project root (the directory that contains the `verify2act` package)
+# is on sys.path so imports work when running this script directly.
+# Location: .../verify2act/verify2act/world_model/train_wm.py
+# We need the parent of the outer `verify2act` folder (parents[2]).
+project_root = Path(__file__).resolve().parents[2]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from verify2act.data_loader import WMTransitionDataset
 try:
     from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
 except ImportError:
     from utils import VAE_LATENT_SCALE, load_vae_encoder
+
+
+def _init_tracker(tracker: str, output_dir: Path, config: dict):
+    """Return a lightweight logging object with .log(dict, step) and .close()."""
+    if tracker == "tensorboard":
+        from torch.utils.tensorboard import SummaryWriter
+        log_dir = output_dir / "tb_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(log_dir))
+        # Write hparams as text so they show up in the TB UI.
+        writer.add_text("hparams", json.dumps(config, indent=2), global_step=0)
+
+        class _TB:
+            def log(self, metrics: dict, step: int):
+                for k, v in metrics.items():
+                    writer.add_scalar(k, v, global_step=step)
+                writer.flush()
+            def close(self):
+                writer.close()
+        return _TB()
+
+    if tracker == "wandb":
+        import wandb
+        wandb.init(project=config.pop("wandb_project", "verify2act-wm"), config=config)
+
+        class _WB:
+            def log(self, metrics: dict, step: int):
+                wandb.log(metrics, step=step)
+            def close(self):
+                wandb.finish()
+        return _WB()
+
+    # tracker == "none"
+    class _Noop:
+        def log(self, metrics: dict, step: int): pass
+        def close(self): pass
+    return _Noop()
 
 
 def set_seed(seed: int):
@@ -67,13 +113,16 @@ def get_dtype(precision: str):
     return torch.float32
 
 
-def build_lr_lambda(warmup_steps: int):
+def build_lr_lambda(warmup_steps: int, total_steps: int, min_lr_ratio: float = 0.1):
+    """Linear warmup followed by cosine decay to min_lr_ratio * peak_lr."""
     def lr_lambda(step: int):
-        if warmup_steps <= 0:
-            return 1.0
-        if step < warmup_steps:
+        if warmup_steps > 0 and step < warmup_steps:
             return float(step + 1) / float(warmup_steps)
-        return 1.0
+        if total_steps <= warmup_steps:
+            return 1.0
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
 
     return lr_lambda
 
@@ -116,7 +165,10 @@ def evaluate(
             )
             input_ids = tokenized.input_ids.to(device)
 
-            z_t = vae.encode(image_t).latent_dist.sample() * latent_scale
+            # z_t: conditioning image – must match IP2P inference
+            # (mode, no scaling) so the UNet sees the same magnitude at
+            # train and test time.
+            z_t = vae.encode(image_t).latent_dist.mode()
             z_t1 = vae.encode(image_t1).latent_dist.sample() * latent_scale
             noise = torch.randn_like(z_t1)
             timesteps = torch.randint(
@@ -299,7 +351,7 @@ def main():
     )
     lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
-        lr_lambda=build_lr_lambda(args.warmup_steps),
+        lr_lambda=build_lr_lambda(args.warmup_steps, args.max_steps),
     )
 
     unet, optimizer, train_loader, val_loader, lr_scheduler = accelerator.prepare(
@@ -318,6 +370,28 @@ def main():
     accelerator.print(f"Accelerate MP:    {accelerator.mixed_precision}")
     latent_scale = float(getattr(vae.config, "scaling_factor", VAE_LATENT_SCALE))
     vae_dtype = next(vae.parameters()).dtype
+
+    # ── Tracker ──────────────────────────────────────────────────────────
+    tracker = None
+    if accelerator.is_main_process and args.tracker != "none":
+        tracker = _init_tracker(
+            args.tracker,
+            output_dir,
+            {
+                "learning_rate": args.learning_rate,
+                "train_batch_size": args.train_batch_size,
+                "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                "max_steps": args.max_steps,
+                "warmup_steps": args.warmup_steps,
+                "lora_rank": args.lora_rank,
+                "lora_alpha": args.lora_alpha,
+                "resolution": args.resolution,
+                "dataset_dir": args.dataset_dir,
+                "pretrained_model": args.pretrained_model,
+                "wandb_project": getattr(args, "wandb_project", "verify2act-wm"),
+            },
+        )
+        accelerator.print(f"Tracker:          {args.tracker}")
 
     global_step = 0
     loss_window: List[float] = []
@@ -346,7 +420,13 @@ def main():
             input_ids = tokenized.input_ids.to(device)
 
             with torch.no_grad():
-                z_t = vae.encode(image_t).latent_dist.sample() * latent_scale
+                # z_t is the conditioning image latent: must NOT be scaled,
+                # matching IP2P's inference pipeline (prepare_image_latents)
+                # which passes raw VAE latents without scaling_factor.
+                # Also use mode() (deterministic) to match inference.
+                z_t = vae.encode(image_t).latent_dist.mode()
+                # z_t1 is the noise-prediction target and lives in the
+                # standard scaled latent space.
                 z_t1 = vae.encode(image_t1).latent_dist.sample() * latent_scale
                 text_emb = text_encoder(input_ids)[0]
 
@@ -393,6 +473,8 @@ def main():
                 avg_loss = float(np.mean(loss_window[-args.log_every :]))
                 lr = optimizer.param_groups[0]["lr"]
                 progress.set_postfix({"loss": f"{avg_loss:.4f}", "lr": f"{lr:.2e}"})
+                if tracker is not None:
+                    tracker.log({"train/loss": avg_loss, "train/lr": lr}, step=global_step)
 
             if global_step > 0 and global_step % args.eval_every == 0:
                 val_loss = evaluate(
@@ -409,6 +491,8 @@ def main():
                     accelerator=accelerator,
                 )
                 accelerator.print(f"\n[step {global_step}] val_loss={val_loss:.6f}")
+                if tracker is not None:
+                    tracker.log({"val/loss": val_loss, "val/best_loss": min(best_val_loss, val_loss)}, step=global_step)
 
                 if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
                     best_val_loss = val_loss
@@ -463,11 +547,14 @@ def main():
         accelerator.print("\nTraining complete.")
         accelerator.print(f"Final LoRA adapter saved to: {final_dir / 'unet_lora'}")
 
+    if tracker is not None:
+        tracker.close()
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
-    parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly/episodes", required=True)
+    parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly", required=True)
     parser.add_argument("--output-dir", type=str, default="verify2act/output/wm", required=True)
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix")
     parser.add_argument(
@@ -508,13 +595,18 @@ def parse_args():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--mixed-precision", type=str, choices=["no", "fp16", "bf16"], default="fp16")
 
-    parser.add_argument("--log-every", type=int, default=20)
-    parser.add_argument("--eval-every", type=int, default=250)
-    parser.add_argument("--eval-batches", type=int, default=20)
+    parser.add_argument("--log-every", type=int, default=100)
+    parser.add_argument("--eval-every", type=int, default=1000)
+    parser.add_argument("--eval-batches", type=int, default=100)
     parser.add_argument("--save-every", type=int, default=1000)
 
     parser.add_argument("--enable-gradient-checkpointing", action="store_true")
     parser.add_argument("--enable-xformers", action="store_true")
+
+    parser.add_argument("--tracker", type=str, choices=["tensorboard", "wandb", "none"], default="tensorboard",
+                        help="Experiment tracker: tensorboard (default), wandb, or none.")
+    parser.add_argument("--wandb-project", type=str, default="verify2act-wm",
+                        help="W&B project name (only used when --tracker=wandb).")
 
     return parser.parse_args()
 

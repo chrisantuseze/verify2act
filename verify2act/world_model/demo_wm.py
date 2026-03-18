@@ -4,13 +4,13 @@ Quick visual demo for Verify2Act world-model generation.
 
 Usage patterns:
 1) Direct image + prompt:
-   python verify2act/demo_wm.py \
+   python verify2act/world_model/demo_wm.py \
      --image-path path/to/frame.png \
      --prompt "pick round nut. position: (0.1, -0.05, 0.83)." \
      --adapter-dir verify2act/output/wm/final/unet_lora
 
 2) Pull sample from dataset transitions.jsonl:
-   python verify2act/demo_wm.py \
+   python verify2act/world_model/demo_wm.py \
      --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
      --transition-index 0 \
      --adapter-dir verify2act/output/wm/final/unet_lora
@@ -18,7 +18,11 @@ Usage patterns:
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# Ensure the project root is on sys.path so `verify2act` is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import torch
 from diffusers import StableDiffusionInstructPix2PixPipeline

@@ -5,11 +5,11 @@ clear
 
 conda activate verify2act
 python verify2act/world_model/train_wm.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/merged_dataset \
+  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
   --output-dir verify2act/output/wm \
   --max-steps 10000 \
-  --eval-every 100 \
-  --train-batch-size 2 \
+  --eval-every 500 \
+  --train-batch-size 4 \
   --gradient-accumulation-steps 1 \
   --val-frac 0.2 \
   --mixed-precision fp16 \
@@ -24,7 +24,7 @@ python verify2act/critic/train_prm.py \
   --device cuda
 
 python verify2act/world_model/train_decoder.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/merged_dataset \
+  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
   --output-dir  verify2act/output/decoder \
   --max-epochs 100 \
   --batch-size 2

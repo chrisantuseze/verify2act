@@ -242,6 +242,8 @@ def main():
                 initial_stacking_prob=env_config["initial_stacking_prob"],
                 nut_type_mode=env_config["nut_type_mode"],
                 horizon=args.horizon,
+                has_renderer=False,  # no need to render for label computation
+                has_offscreen_renderer=True,
             )
             env.reset()
 
