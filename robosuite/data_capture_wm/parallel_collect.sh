@@ -33,7 +33,7 @@
 #
 # Examples:
 #   # Collect + label + merge: 1000 episodes across 8 workers
-#   bash parallel_collect.sh --workers 8 --total-episodes 1000
+#   bash parallel_collect.sh --workers 8 --total-episodes 1000 --base-seed 317 
 #
 #   # Skip labelling (label later with compute_labels.py on the merged dataset)
 #   bash parallel_collect.sh --workers 4 --total-episodes 200 --no-labels
@@ -93,7 +93,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Worker dirs live BESIDE the output dir (not inside it) so that overwriting
 # or deleting the merged output can never accidentally destroy collected data.
-WORKER_BASE_DIR="${OUTPUT_DIR%/}_workers"
+WORKER_BASE_DIR="${OUTPUT_DIR%/}_workers_${BASE_SEED}"
 
 # MuJoCo headless rendering: use EGL (GPU, no display required) unless the
 # caller has already set MUJOCO_GL.  Workers inherit this via environment.

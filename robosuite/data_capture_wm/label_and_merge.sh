@@ -11,6 +11,8 @@
 #
 # Usage:
 #   bash label_and_merge.sh [OPTIONS]
+# Example:
+#   bash label_and_merge.sh --worker-base-dir dataset/nut_assembly_workers --workers 2 
 #
 # Options (all optional — defaults shown):
 #   --worker-base-dir  PATH  Directory containing worker_<i> subdirs  (default: dataset/nut_assembly_workers_6)
@@ -32,16 +34,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
-WORKER_BASE_DIR="dataset/nut_assembly_workers_6"
+WORKER_BASE_DIR="dataset/nut_assembly_workers"
 WORKERS=6
-OUTPUT_DIR="dataset/nut_assembly_6"
+OUTPUT_DIR="dataset/nut_assembly_workers_consolidated"
 ENV="ClutteredNutAssembly"
 LABEL_HORIZON=300
 NUM_ROUND=2
 NUM_SQUARE=2
 STACKING_PROB=0.6
 NUT_TYPE_MODE="random"
-BASE_SEED=42
+BASE_SEED=44
 NO_LABELS=false
 NO_MERGE=false
 KEEP_WORKERS=false
