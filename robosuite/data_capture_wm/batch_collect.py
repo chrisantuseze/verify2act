@@ -18,6 +18,16 @@ Usage:
         --nut-type-mode random --num-episodes 1000 \
         --image-size 512 --seed 42
 
+    # Expert episodes --headless
+    xvfb-run -a python batch_collect.py \
+        --env ClutteredNutAssembly --policy-mode expert \
+        --transition-mode keyframe \
+        --output-dir dataset/nut_assembly \
+        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
+        --nut-type-mode random --num-episodes 2000 \
+        --image-size 512 --seed 12 \
+        --headless 
+
     # Noisy episodes (sigma=0.05)
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
