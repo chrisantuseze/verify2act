@@ -171,13 +171,13 @@ def main():
     parser.add_argument("--output", type=str, default="labels.jsonl")
     parser.add_argument("--seed", type=int, default=42)
     # ClutteredNutAssembly params
-    parser.add_argument("--num-round", type=int, default=6)
+    parser.add_argument("--num-round", type=int, default=2)
     parser.add_argument("--num-square", type=int, default=2)
     parser.add_argument("--initial-stacking-prob", type=float, default=0.6)
     parser.add_argument(
         "--nut-type-mode",
         type=str,
-        default="roundnut",
+        default="random",
         choices=["roundnut", "squarenut", "random", "alternate"],
         help="Nut type mode for ClutteredNutAssembly",
     )
@@ -341,9 +341,11 @@ def main():
                 pass
 
     total = count_pos + count_neg
-    print(f"\nDone. Wrote {total} labels to {labels_path}")
-    print(f"  Positive (reachable): {count_pos} ({count_pos/total*100:.1f}%)")
-    print(f"  Negative:             {count_neg} ({count_neg/total*100:.1f}%)")
+    if total > 0:
+        print(f"  Positive (reachable): {count_pos} ({count_pos/total*100:.1f}%)")
+        print(f"  Negative:             {count_neg} ({count_neg/total*100:.1f}%)")
+    else:
+        print("  No labels written — check that --num-round / --num-square match the collection config.")
     if count_skip:
         print(f"  Skipped (dim mismatch, no unique env match): {count_skip}")
 
