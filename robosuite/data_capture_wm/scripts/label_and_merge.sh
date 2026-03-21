@@ -12,7 +12,7 @@
 # Usage:
 #   bash label_and_merge.sh [OPTIONS]
 # Example:
-#   bash label_and_merge.sh --worker-base-dir dataset/nut_assembly_workers --workers 2 
+#   bash label_and_merge.sh --worker-base-dir dataset/nut_assembly_workers --workers 2 --base-seed 42
 #
 # Options (all optional — defaults shown):
 #   --worker-base-dir  PATH  Directory containing worker_<i> subdirs  (default: dataset/nut_assembly_workers_6)
@@ -76,7 +76,12 @@ if [[ "${OUTPUT_DIR}" != /* ]]; then
     OUTPUT_DIR="${SCRIPT_DIR}/${OUTPUT_DIR}"
 fi
 
-export MUJOCO_GL="${MUJOCO_GL:-egl}"
+# EGL is invalid on macOS — always use glfw there.
+if [[ "$(uname)" == "Darwin" ]]; then
+    export MUJOCO_GL="glfw"
+else
+    export MUJOCO_GL="${MUJOCO_GL:-egl}"
+fi
 export OPENBLAS_NUM_THREADS=2
 export OMP_NUM_THREADS=2
 export MKL_NUM_THREADS=1

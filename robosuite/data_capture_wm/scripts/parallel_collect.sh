@@ -95,9 +95,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # or deleting the merged output can never accidentally destroy collected data.
 WORKER_BASE_DIR="${OUTPUT_DIR%/}_workers_${BASE_SEED}"
 
-# MuJoCo headless rendering: use EGL (GPU, no display required) unless the
-# caller has already set MUJOCO_GL.  Workers inherit this via environment.
-export MUJOCO_GL="${MUJOCO_GL:-egl}"
+# MuJoCo headless rendering backend — platform-specific default:
+#   Linux  → egl  (GPU, no display required)
+#   macOS  → glfw (EGL is not supported on macOS)
+# Prefer sensible defaults but ensure macOS always uses glfw because EGL
+# is invalid on Darwin even if the caller accidentally set MUJOCO_GL=egl.
+if [[ "$(uname)" == "Darwin" ]]; then
+    export MUJOCO_GL="glfw"
+else
+    # On non-macOS, use caller-provided value if set, else default to EGL.
+    if [[ -z "${MUJOCO_GL:-}" ]]; then
+        export MUJOCO_GL="egl"
+    fi
+fi
 
 # Each worker process must not spawn dozens of BLAS/OMP threads - doing so
 # exhausts RLIMIT_NPROC when many workers run in parallel (8 workers × 64
