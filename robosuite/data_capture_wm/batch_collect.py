@@ -268,8 +268,8 @@ def build_env_factory(args):
                 initial_stacking_prob=args.initial_stacking_prob,
                 nut_type_mode=args.nut_type_mode,
                 horizon=args.max_timesteps,
-                has_renderer=not args.headless,
-                has_offscreen_renderer=True,
+                # has_renderer=not args.headless,
+                # has_offscreen_renderer=True,
             )
 
         return env_factory, create_nut_assembly_policy, env_name, env_config
@@ -286,8 +286,8 @@ def build_env_factory(args):
         def env_factory():
             return create_environment(
                 env_name,
-                has_renderer=not args.headless,
-                has_offscreen_renderer=True,
+                # has_renderer=not args.headless,
+                # has_offscreen_renderer=True,
             )
 
         return env_factory, create_stack_policy, env_name, env_config
@@ -304,8 +304,8 @@ def build_env_factory(args):
         def env_factory():
             return create_environment(
                 "PickPlaceCan",
-                has_renderer=not args.headless,
-                has_offscreen_renderer=True,
+                # has_renderer=not args.headless,
+                # has_offscreen_renderer=True,
             )
 
         return env_factory, create_pickplace_policy, env_name, env_config
@@ -356,6 +356,7 @@ def main():
 
     env_factory, policy_factory, env_name, env_config = build_env_factory(args)
 
+    args.output_dir = f"{args.output_dir}_seed_{args.seed}"
     collector = BatchCollector(
         env_factory=env_factory,
         policy_factory=policy_factory,
