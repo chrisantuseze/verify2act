@@ -13,7 +13,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATASET_DIR="${SCRIPT_DIR}/dataset"
+# dataset/ lives next to the scripts/ directory (parent of SCRIPT_DIR)
+DATASET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/dataset"
 OUTPUT_DIR="${DATASET_DIR}/nut_assembly_merged"
 EXTRA_ARGS=()
 
@@ -67,7 +68,13 @@ echo "════════════════════════�
 echo ""
 
 # ── Run merge ─────────────────────────────────────────────────────────────────
-python "${SCRIPT_DIR}/merge_datasets.py" \
+MERGE_SCRIPT="$(cd "${SCRIPT_DIR}/.." && pwd)/merge_datasets.py"
+if [[ ! -f "${MERGE_SCRIPT}" ]]; then
+    echo "ERROR: merge script not found: ${MERGE_SCRIPT}" >&2
+    exit 1
+fi
+
+python "${MERGE_SCRIPT}" \
     --source-dirs "${FILTERED_DIRS[@]}" \
     --output-dir  "${OUTPUT_DIR}" \
     "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

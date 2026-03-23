@@ -180,7 +180,11 @@ class ExamplePrompt:
         obj_str = ", ".join(self.objects or [])
         horizon = self.horizon or 10
 
-        if self.goal_image and self.current_image:
+        if (
+            self.goal_image and self.current_image
+            and pathlib.Path(self.goal_image).exists()
+            and pathlib.Path(self.current_image).exists()
+        ):
             goal_np = _load_image_np(self.goal_image)
             current_np = _load_image_np(self.current_image)
             return [
@@ -226,6 +230,10 @@ class ExamplePrompt:
         if (
             self.goal_image and self.current_image
             and self.imagined_image and self.gradcam_image
+            and pathlib.Path(self.goal_image).exists()
+            and pathlib.Path(self.current_image).exists()
+            and pathlib.Path(self.imagined_image).exists()
+            and pathlib.Path(self.gradcam_image).exists()
         ):
             goal_np = _load_image_np(self.goal_image)
             current_np = _load_image_np(self.current_image)

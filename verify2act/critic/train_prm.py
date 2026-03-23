@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -22,6 +23,44 @@ from verify2act.critic.losses import BetaNLLLoss
 from verify2act.critic.model import SpatialBetaPRMCritic
 from verify2act.data_loader import build_train_val_datasets
 from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
+
+def _init_tracker(tracker: str, output_dir: Path, config: dict):
+    """Return a lightweight logging object with .log(dict, step) and .close()."""
+    if tracker == "tensorboard":
+        from torch.utils.tensorboard import SummaryWriter
+        log_dir = output_dir / "tb_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(log_dir))
+        writer.add_text("hparams", json.dumps(config, indent=2), global_step=0)
+
+        class _TB:
+            def log(self, metrics: dict, step: int):
+                for k, v in metrics.items():
+                    writer.add_scalar(k, v, global_step=step)
+                writer.flush()
+            def close(self):
+                writer.close()
+        return _TB()
+
+    if tracker == "wandb":
+        import wandb
+        wandb.init(project=config.pop("wandb_project", "verify2act-prm"), config=config)
+
+        class _WB:
+            def log(self, metrics: dict, step: int):
+                wandb.log(metrics, step=step)
+            def close(self):
+                wandb.finish()
+        return _WB()
+
+    # tracker == "none"
+    class _Noop:
+        def log(self, metrics: dict, step: int):
+            pass
+        def close(self):
+            pass
+    return _Noop()
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -170,10 +209,16 @@ def main():
     model = SpatialBetaPRMCritic().to(device)
     criterion = BetaNLLLoss(label_smoothing=args.label_smoothing)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    scheduler = CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=args.learning_rate * 0.01
+    )
 
     latent_scale = float(getattr(vae.config, "scaling_factor", VAE_LATENT_SCALE))
     best_val = float("inf")
     history = []
+
+    tracker = _init_tracker(args.tracker, out_dir, vars(args).copy())
+    print(f"Tracker: {args.tracker} → {out_dir / 'tb_logs' if args.tracker == 'tensorboard' else args.tracker}")
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -208,7 +253,8 @@ def main():
             optimizer.step()
 
             train_losses.append(loss.item())
-            pbar.set_postfix({"loss": f"{np.mean(train_losses):.4f}"})
+            lr_now = optimizer.param_groups[0]["lr"]
+            pbar.set_postfix({"loss": f"{np.mean(train_losses):.4f}", "lr": f"{lr_now:.2e}"})
 
         val_metrics = evaluate(
             model,
@@ -230,6 +276,23 @@ def main():
         history.append(record)
         print(json.dumps(record, indent=2))
 
+        lr_now = optimizer.param_groups[0]["lr"]
+        tracker.log(
+            {
+                "train/loss": train_loss,
+                "train/lr": lr_now,
+                "val/loss": val_metrics["loss"],
+                "val/acc": val_metrics["acc"],
+                "val/auroc": val_metrics["auroc"],
+                "val/auprc": val_metrics["auprc"],
+                "val/brier": val_metrics["brier"],
+                "val/ece": val_metrics["ece"],
+            },
+            step=epoch,
+        )
+
+        scheduler.step()
+
         if val_metrics["loss"] < best_val:
             best_val = val_metrics["loss"]
             torch.save(
@@ -247,6 +310,7 @@ def main():
     with open(out_dir / "train_config.json", "w") as handle:
         json.dump(vars(args), handle, indent=2)
 
+    tracker.close()
     print(f"Saved best checkpoint to: {out_dir / 'best_prm_critic.pt'}")
 
 
@@ -294,6 +358,15 @@ def parse_args():
 
     parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     parser.add_argument("--mixed-precision", type=str, default="fp16", choices=["no", "fp16", "bf16"])
+    parser.add_argument(
+        "--tracker",
+        type=str,
+        choices=["tensorboard", "wandb", "none"],
+        default="tensorboard",
+        help="Experiment tracker: tensorboard (default), wandb, or none.",
+    )
+    parser.add_argument("--wandb-project", type=str, default="verify2act-prm",
+                        help="W&B project name (only used when --tracker wandb).")
     return parser.parse_args()
 
 if __name__ == "__main__":

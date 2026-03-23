@@ -17,6 +17,14 @@ Usage::
         horizon=5,
         output_dir="output/eval/run_001",
     )
+
+    python -m verify2act.pipeline.inference \
+    --critic-ckpt /path/to/critic_ckpt.pt \
+    --device cuda \
+    --dtype fp16 \
+    --wm-mode hybrid \
+    --vae-model runwayml/stable-diffusion-v1-5 \
+    --output-dir verify2act/output/inference_run
 """
 
 from __future__ import annotations
@@ -33,6 +41,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # project root (contains verify2act/)
 
 from verify2act.critic.inference import CriticDecision, decide_replan
 from verify2act.critic.model import SpatialBetaPRMCritic
@@ -88,7 +98,7 @@ class StepRecord:
     """What happened at one real timestep."""
 
     timestep: int
-    plan: List[str]
+    plan: List[str] = field(default_factory=list)
     replan_attempts: int = 0
     action_executed: Optional[str] = None
     all_scores: List[Tuple[float, float]] = field(default_factory=list)
@@ -230,6 +240,11 @@ def run_episode(
             step_failed = False
 
             for k, action in enumerate(plan):
+                # ── 'done' terminates the imagination loop cleanly ──────
+                if action.strip().lower() == "done":
+                    plan_accepted = True
+                    break
+
                 # ── Imagination ────────────────────────────────────────
                 imagined_img_next = world_model.imagine(imagined_img, action)
 
@@ -415,18 +430,28 @@ def _build_env(args: argparse.Namespace):
     # )
     # return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
 
+    _robosuite_root = Path(__file__).resolve().parents[2] / "robosuite"
+    if str(_robosuite_root) not in sys.path:
+        sys.path.insert(0, str(_robosuite_root))
     from run_cluttered_nutassembly import create_environment
-    return create_environment(
+
+    env = create_environment(
         env_name="ClutteredNutAssembly",
         num_round_nuts=args.num_round,
         num_square_nuts=args.num_square,
         initial_stacking_prob=args.initial_stacking_prob,
         nut_type_mode=args.nut_type_mode,
+        has_offscreen_renderer=True,
+        has_renderer=False,
+        use_camera_obs=False,
+        horizon=args.env_horizon,
     )
+    return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
 
 
 def _build_critic(args: argparse.Namespace, device: torch.device) -> SpatialBetaPRMCritic:
-    critic = SpatialBetaPRMCritic().to(device)
+    torch_dtype = _dtype_from_name(args.dtype)
+    critic = SpatialBetaPRMCritic().to(device=device, dtype=torch_dtype)
     ckpt = torch.load(args.critic_ckpt, map_location=device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         state_dict = ckpt["model_state_dict"]
@@ -435,6 +460,7 @@ def _build_critic(args: argparse.Namespace, device: torch.device) -> SpatialBeta
     else:
         state_dict = ckpt
     critic.load_state_dict(state_dict)
+    critic.to(dtype=torch_dtype)
     critic.eval()
     return critic
 
@@ -448,10 +474,26 @@ def _build_world_models(args: argparse.Namespace):
         wm = OracleWorldModel(args.env_wrapper)
 
     if mode in ("diffusion", "hybrid"):
+        # If the requested decoder directory is missing or doesn't contain
+        # the expected files, ignore it and let the pipeline use the
+        # pretrained VAE decoder (matches demo_wm.py behaviour).
+        decoder_dir = args.wm_decoder_dir
+        if decoder_dir is not None:
+            dec_path = Path(decoder_dir)
+            if not dec_path.exists() or not (
+                (dec_path / "config.json").exists() or (dec_path / "decoder_state_dict.pt").exists()
+            ):
+                logger.warning(
+                    "Requested wm-decoder-dir=%s missing config.json or decoder_state_dict.pt; "
+                    "falling back to pretrained VAE decoder.",
+                    decoder_dir,
+                )
+                decoder_dir = None
+
         diff_wm = DiffusionWorldModel(
             pretrained_model=args.wm_model,
             adapter_dir=args.wm_adapter_dir,
-            decoder_dir=args.wm_decoder_dir,
+            decoder_dir=decoder_dir,
             vae_model=args.vae_model,
             vae_subfolder=args.vae_subfolder,
             device=args.device,
@@ -474,7 +516,7 @@ def _build_world_models(args: argparse.Namespace):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Verify2Act inference episode")
-    parser.add_argument("--env-name", default="NutAssembly")
+    parser.add_argument("--env-name", default="ClutteredNutAssembly")
     parser.add_argument("--robot", default="Panda")
     parser.add_argument("--camera", default="agentview")
     parser.add_argument("--image-size", type=int, default=512)
@@ -487,9 +529,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-files-only", action="store_true")
 
     parser.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
-    parser.add_argument("--vae-subfolder", default="auto")
+    parser.add_argument("--vae-subfolder", default="vae")
 
-    parser.add_argument("--critic-ckpt", required=True)
+    parser.add_argument("--critic-ckpt", default="verify2act/output/prm/best_prm_critic.pt")
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gpt-4o")
@@ -498,8 +540,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "hybrid"], default="hybrid")
     parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
-    parser.add_argument("--wm-adapter-dir", default=None)
-    parser.add_argument("--wm-decoder-dir", default=None)
+    parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/final/unet_lora")
+    parser.add_argument("--wm-decoder-dir", default="verify2act/output/decoder")
     parser.add_argument("--wm-steps", type=int, default=30)
     parser.add_argument("--wm-image-guidance", type=float, default=1.5)
     parser.add_argument("--wm-text-guidance", type=float, default=7.5)

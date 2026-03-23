@@ -19,7 +19,7 @@ python verify2act/critic/train_prm.py \
   --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
   --output-dir verify2act/output/prm \
   --vae-model runwayml/stable-diffusion-v1-5 \
-  --epochs 100 \
+  --epochs 25 \
   --batch-size 8 \
   --device cuda
 
@@ -29,3 +29,11 @@ python verify2act/world_model/train_decoder.py \
   --max-steps 5000 \
   --eval-every 500 \
   --batch-size 2
+
+python verify2act/pipeline/inference.py \
+  --critic-ckpt verify2act/output/prm/best_prm_critic.pt \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode hybrid \
+  --vae-model runwayml/stable-diffusion-v1-5 \
+  --output-dir verify2act/output/inference_run

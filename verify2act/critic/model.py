@@ -187,9 +187,9 @@ class SpatialBetaPRMCritic(nn.Module):
         t1_tokens = self.tokenizer(z_t1)       # [B, 256, token_dim]
         goal_tokens = self.tokenizer(z_goal)   # [B, 256, token_dim]
 
-        # Spatial difference residual: encodes where z_t1 deviates from goal
-        diff_tokens = t1_tokens - goal_tokens
-        x = t1_tokens + diff_tokens            # [B, 256, token_dim]
+        # Use t1 tokens directly; cross-attention will handle the goal relationship.
+        # (Avoid the 2*t1 - goal collapse from adding diff back onto t1.)
+        x = t1_tokens                          # [B, 256, token_dim]
 
         # Layer 1: z_t1 tokens reason about themselves
         x = self.self_attn(x)

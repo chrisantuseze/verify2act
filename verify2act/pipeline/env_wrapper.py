@@ -154,8 +154,7 @@ class NutAssemblyEnvWrapper:
         saved_state = deepcopy(sim.get_state())
 
         try:
-            for nut in self._active_nuts():
-                nut_name = nut.name  # e.g. "SquareNut" or "RoundNut"
+            for nut_name in self._active_nuts():
                 peg_id = self._peg_id_for_nut(nut_name)
                 peg_body_id = self._peg_body_id(peg_id)
                 peg_pos = np.array(sim.data.body_xpos[peg_body_id])
@@ -193,35 +192,55 @@ class NutAssemblyEnvWrapper:
     def get_obj_labels(self) -> List[str]:
         """Return human-readable object labels (e.g. ``["round nut", "square nut"]``)."""
         labels = []
-        for nut in self.env.nuts:
-            name = nut.name.lower()
-            if "round" in name:
+        for name in self._nut_names():
+            nl = name.lower()
+            if "round" in nl:
                 labels.append("round nut")
-            elif "square" in name:
+            elif "square" in nl:
                 labels.append("square nut")
             else:
-                labels.append(name.replace("_", " "))
-        return sorted(labels)
+                labels.append(nl.replace("_", " "))
+        return sorted(set(labels))
 
     def is_done(self) -> bool:
         """Return ``True`` if the episode's target nut(s) are on their correct pegs."""
         return bool(self.env._check_success())
 
-    # ── active-nut helper ──────────────────────────────────────────────
+    # ── nut name helpers ───────────────────────────────────────────────
 
-    def _active_nuts(self) -> list:
-        """Return only the nuts that are active this episode.
+    def _nut_names(self) -> List[str]:
+        """Return all nut names as strings for both env variants.
 
-        In ``single_object_mode`` 1 or 2 the environment picks one nut per
-        episode and clears the others from the scene.  ``env.obj_to_use``
-        holds that nut's name.  In mode 0 (default) every nut is active.
+        - ``ClutteredNutAssembly``: ``nuts`` is an ``OrderedDict``; keys are names.
+        - Standard ``NutAssembly``: ``nuts`` is a list of nut objects.
         """
-        if getattr(self.env, "single_object_mode", 0) == 0:
-            return self.env.nuts
-        obj_to_use = getattr(self.env, "obj_to_use", None)
-        if obj_to_use is None:
-            return self.env.nuts
-        return [nut for nut in self.env.nuts if nut.name == obj_to_use]
+        nuts = self.env.nuts
+        if isinstance(nuts, dict):
+            return list(nuts.keys())
+        return [n.name for n in nuts]
+
+    def _active_nuts(self) -> List[str]:
+        """Return name strings of nuts that are targets this episode.
+
+        - ``ClutteredNutAssembly``: uses ``current_nut_type`` to select only the
+          target nut group (round or square).
+        - Standard ``NutAssembly`` with ``single_object_mode``: returns the one
+          selected nut.  Mode 0 returns all nuts.
+        """
+        # ClutteredNutAssembly exposes current_nut_type + round/square_nut_names
+        current_type = getattr(self.env, "current_nut_type", None)
+        if current_type == "roundnut":
+            return list(self.env.round_nut_names)
+        if current_type == "squarenut":
+            return list(self.env.square_nut_names)
+
+        # Standard NutAssembly
+        if getattr(self.env, "single_object_mode", 0) != 0:
+            obj_to_use = getattr(self.env, "obj_to_use", None)
+            if obj_to_use is not None:
+                return [obj_to_use]
+
+        return self._nut_names()
 
     # ── state save / restore (for oracle world model) ──────────────────
 
@@ -293,6 +312,15 @@ class NutAssemblyEnvWrapper:
         raise ValueError(f"Cannot determine peg for nut '{nut_name}'")
 
     def _peg_body_id(self, peg_id: int) -> int:
+        """Return the MuJoCo body id for a peg.
+
+        - ``ClutteredNutAssembly`` stores ``peg_body_ids`` as a dict ``{0: id, 1: id}``.
+        - Standard ``NutAssembly`` exposes ``peg1_body_id`` / ``peg2_body_id``.
+        """
+        peg_body_ids = getattr(self.env, "peg_body_ids", None)
+        if peg_body_ids is not None:
+            return peg_body_ids[peg_id]
+        # Standard NutAssembly fallback
         if peg_id == 0:
             return self.env.peg1_body_id
         return self.env.peg2_body_id
@@ -301,26 +329,27 @@ class NutAssemblyEnvWrapper:
     def _parse_action_text(text: str) -> Tuple[str, str]:
         """Split ``'pick round nut'`` into ``('pick', 'round nut')``."""
         parts = text.strip().lower().split()
-        if len(parts) < 2:
+        if len(parts) < 1:
             raise ValueError(f"Cannot parse action_text: '{text}'")
         skill = parts[0]
+        if skill == "done" or len(parts) == 1:
+            return skill, ""
         nut_query = " ".join(parts[1:])
         return skill, nut_query
 
     def _resolve_nut_name(self, nut_query: str) -> str:
         """Map an object query like ``'round nut'`` to the env's nut name
-        (e.g. ``'RoundNut'``).  Ignores spatial qualifiers (front-left etc.)."""
+        (e.g. ``'RoundNut0'``).  Ignores spatial qualifiers (front-left etc.)."""
         query_lower = nut_query.lower()
-        for nut in self.env.nuts:
-            name_lower = nut.name.lower()
-            # Match core nut type, ignoring spatial qualifiers
-            if "round" in query_lower and "round" in name_lower:
-                return nut.name
-            if "square" in query_lower and "square" in name_lower:
-                return nut.name
+        nut_names = self._nut_names()
+        for name in nut_names:
+            nl = name.lower()
+            if "round" in query_lower and "round" in nl:
+                return name
+            if "square" in query_lower and "square" in nl:
+                return name
         raise ValueError(
-            f"No nut matching '{nut_query}' found. "
-            f"Known nuts: {[n.name for n in self.env.nuts]}"
+            f"No nut matching '{nut_query}' found. Known nuts: {nut_names}"
         )
 
     @staticmethod
@@ -374,6 +403,7 @@ class NutAssemblyEnvWrapper:
             self.camera,
             self.image_size,
             self.image_size,
+            rgb_only=True,
         )
         if result is None:
             raise RuntimeError(

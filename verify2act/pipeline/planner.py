@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import pathlib
@@ -19,6 +20,8 @@ import re
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
+import openai
+import httpx
 
 from verify2act.pipeline.prompt_utils import PromptManager
 
@@ -40,8 +43,11 @@ class VLMPlanner:
         self._max_tokens = max_tokens
         self._temperature = temperature
 
-        import openai
-        self._client = openai.OpenAI()  # uses OPENAI_API_KEY env var
+        self._api_key = os.environ.get("OPENAI_API_KEY")
+        if self._api_key is None:
+            raise ValueError("API key must be provided.")
+
+        self._client = openai.OpenAI(api_key=self._api_key, http_client=httpx.Client())  # uses OPENAI_API_KEY env var
 
     @classmethod
     def from_yaml(
