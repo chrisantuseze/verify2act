@@ -313,6 +313,7 @@ def main():
     vae_dtype = torch.float32
     best_val_loss = float("inf")
     global_step = 0
+    history: List[Dict] = []
 
     progress = tqdm(
         total=args.max_steps,
@@ -378,6 +379,19 @@ def main():
                         f"\n[step {global_step}] val_loss={val_loss:.5f}  "
                         f"val_l1={val_l1:.5f}  val_lpips={val_lpips:.5f}"
                     )
+                    # Record training history (collected on evaluation steps)
+                    try:
+                        train_loss = float(loss.item()) if 'loss' in locals() else float('nan')
+                    except Exception:
+                        train_loss = float('nan')
+                    history.append({
+                        "step": int(global_step),
+                        "train_loss": train_loss,
+                        "val_loss": float(val_loss) if np.isfinite(val_loss) else None,
+                        "val_l1": float(val_l1) if np.isfinite(val_l1) else None,
+                        "val_lpips": float(val_lpips) if np.isfinite(val_lpips) else None,
+                        "best_val_loss": float(best_val_loss) if np.isfinite(best_val_loss) else None,
+                    })
                     if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
                         best_val_loss = val_loss
                         save_checkpoint(
@@ -428,6 +442,18 @@ def main():
 
         accelerator.print("\nTraining complete.")
         accelerator.print(f"Finetuned VAE saved to: {output_dir / 'final' / 'vae'}")
+        # Save train history and config (similar to train_prm)
+        try:
+            with open(output_dir / "train_history.json", "w") as f:
+                json.dump(history, f, indent=2)
+        except Exception:
+            accelerator.print("[warn] Could not write train_history.json")
+
+        try:
+            with open(output_dir / "train_config.json", "w") as f:
+                json.dump(vars(args), f, indent=2)
+        except Exception:
+            accelerator.print("[warn] Could not write train_config.json")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────

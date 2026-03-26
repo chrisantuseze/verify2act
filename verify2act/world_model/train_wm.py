@@ -383,6 +383,7 @@ def main():
     global_step = 0
     loss_window: List[float] = []
     best_val_loss = float("inf")
+    history: List[Dict] = []
 
     progress = tqdm(
         total=args.max_steps,
@@ -480,6 +481,18 @@ def main():
                 if tracker is not None:
                     tracker.log({"val/loss": val_loss, "val/best_loss": min(best_val_loss, val_loss)}, step=global_step)
 
+                # Record training history (collected on evaluation steps)
+                try:
+                    train_loss = float(np.mean(loss_window[-args.log_every :])) if loss_window else float("nan")
+                except Exception:
+                    train_loss = float("nan")
+                history.append({
+                    "step": int(global_step),
+                    "train_loss": train_loss,
+                    "val_loss": float(val_loss) if np.isfinite(val_loss) else None,
+                    "best_val_loss": float(best_val_loss) if np.isfinite(best_val_loss) else None,
+                })
+
                 if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
                     best_val_loss = val_loss
                     save_checkpoint(
@@ -529,6 +542,19 @@ def main():
                 handle,
                 indent=2,
             )
+
+        # Save train history and config (similar to train_prm)
+        try:
+            with open(output_dir / "train_history.json", "w") as handle:
+                json.dump(history, handle, indent=2)
+        except Exception:
+            accelerator.print("[warn] Could not write train_history.json")
+
+        try:
+            with open(output_dir / "train_config.json", "w") as handle:
+                json.dump(vars(args), handle, indent=2)
+        except Exception:
+            accelerator.print("[warn] Could not write train_config.json")
 
         accelerator.print("\nTraining complete.")
         accelerator.print(f"Final LoRA adapter saved to: {final_dir / 'unet_lora'}")
