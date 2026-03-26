@@ -11,7 +11,7 @@ Usage:
     xvfb-run -a python compute_labels.py \
         --dataset-dir dataset/nut_assembly \
         --env ClutteredNutAssembly \
-        --horizon 300 \
+        --seed 42 \
         --output labels.jsonl
 """
 
@@ -167,7 +167,7 @@ def main():
     parser.add_argument("--env", type=str, required=True,
                         choices=["ClutteredNutAssembly", "NutAssembly",
                                  "Stack", "Stack3", "PickPlace"])
-    parser.add_argument("--horizon", type=int, default=300)
+    parser.add_argument("--horizon", type=int, default=1000)
     parser.add_argument("--output", type=str, default="labels.jsonl")
     parser.add_argument("--seed", type=int, default=42)
     # ClutteredNutAssembly params
