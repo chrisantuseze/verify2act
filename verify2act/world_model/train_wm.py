@@ -245,6 +245,7 @@ def main():
         split="train",
         val_frac=args.val_frac,
         seed=args.seed,
+        transitions_file=args.transitions_file,
     )
     val_ds = WMTransitionDataset(
         dataset_dir=args.dataset_dir,
@@ -252,6 +253,7 @@ def main():
         split="val",
         val_frac=args.val_frac,
         seed=args.seed,
+        transitions_file=args.transitions_file,
     )
     accelerator.print(f"Train samples: {len(train_ds)}")
     accelerator.print(f"Val samples:   {len(val_ds)}")
@@ -567,6 +569,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly")
+    parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
+                        help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
+                             "'transitions_subskill.jsonl').")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/wm")
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix")
     parser.add_argument(

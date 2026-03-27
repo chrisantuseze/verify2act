@@ -33,6 +33,8 @@ class ActionInfo:
     cartesian_target: np.ndarray    # shape (3,), world-frame metres
     stage: str                      # raw policy stage name
     event_tag: Optional[str] = None # optional keyframe marker, e.g. "pick_start"
+    sub_skill: Optional[str] = None # finer-grained sub-skill, e.g. "approach", "grasp"
+    subskill_event_tag: Optional[str] = None  # sub-skill keyframe marker
 
 
 # ─────────────────────────── base class ───────────────────────────────── #
@@ -44,12 +46,20 @@ class PolicyAdapter:
         self.policy = policy
         self._prev_skill: str = "pick"     # safe default
         self._prev_stage: Optional[str] = None
+        self._prev_stage_subskill: Optional[str] = None
 
     def _event_on_stage_entry(self, stage: str, stage_to_event: dict[str, str]) -> Optional[str]:
         event_tag = None
         if stage != self._prev_stage:
             event_tag = stage_to_event.get(stage)
         self._prev_stage = stage
+        return event_tag
+
+    def _subskill_event_on_stage_entry(self, stage: str, stage_to_event: dict[str, str]) -> Optional[str]:
+        event_tag = None
+        if stage != self._prev_stage_subskill:
+            event_tag = stage_to_event.get(stage)
+        self._prev_stage_subskill = stage
         return event_tag
 
     def step(self) -> Tuple[np.ndarray, bool]:
@@ -102,6 +112,34 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
         # exists) or done (episode terminates).
         "reset_orientation":  "insert_end",
         "done":               "insert_end",
+    }
+
+    # ── Sub-skill keyframe events (finer-grained transitions) ──
+    # Splits each pick/insert into multiple sub-skill transitions.
+    _SUBSKILL_EVENT_TAG_BY_STAGE = {
+        "move_to_nut":        "approach_start",
+        "lower_to_nut":       "approach_end|grasp_start",
+        "lift_nut":           "grasp_end|carry_start",
+        "move_to_peg":        "carry_start",       # alt entry if lift_nut is brief
+        "align_over_peg":     "carry_end|align_start",
+        "lower_to_peg":       "align_end|lower_start",
+        "release":            "lower_end",
+        "reset_orientation":  "lower_end",          # fallback
+        "done":               "lower_end",
+    }
+
+    # Sub-skill name by policy stage (for enriched action text)
+    _SUBSKILL_BY_STAGE = {
+        "move_to_nut":       "approach",
+        "lower_to_nut":      "approach",
+        "grasp":             "grasp",
+        "verify_grasp":      "grasp",
+        "lift_nut":          "grasp",
+        "move_to_peg":       "carry",
+        "align_over_peg":    "align",
+        "lower_to_peg":      "lower_insert",
+        "release":           "lower_insert",
+        "retract":           "lower_insert",
     }
 
     def step(self) -> Tuple[np.ndarray, bool]:
@@ -176,12 +214,19 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
                 if qualifier:
                     object_name = f"{qualifier} {object_name}"  # e.g. "front-left round nut"
 
+        # Sub-skill for enriched action text
+        sub_skill = self._SUBSKILL_BY_STAGE.get(stage, skill)
+
         return ActionInfo(
             skill=skill,
             object_name=object_name,
             cartesian_target=cartesian_target,
             stage=stage,
             event_tag=self._event_on_stage_entry(stage, self._EVENT_TAG_BY_STAGE),
+            sub_skill=sub_skill,
+            subskill_event_tag=self._subskill_event_on_stage_entry(
+                stage, self._SUBSKILL_EVENT_TAG_BY_STAGE
+            ),
         )
 
 

@@ -30,7 +30,7 @@ python verify2act/world_model/train_decoder.py \
   --eval-every 500 \
   --batch-size 2
 
-python verify2act/pipeline/inference.py \
+xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/prm/best_prm_critic.pt \
   --device cuda \
   --dtype fp16 \

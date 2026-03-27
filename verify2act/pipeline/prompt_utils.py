@@ -142,7 +142,8 @@ class ExamplePrompt:
     analysis: Optional[str] = None
     revised_plan: Optional[List[str]] = None
     failed_step: Optional[int] = None
-    failed_action: Optional[str] = None
+    failed_nut: Optional[str] = None      # nut name that owns the failed sub-skill
+    failed_action: Optional[str] = None  # the failed sub-skill string
     mean_feasibility: Optional[float] = None
     uncertainty: Optional[float] = None
     score_trajectory: Optional[List[List[float]]] = None
@@ -193,19 +194,18 @@ class ExamplePrompt:
                 _text_block("### Current state (robot's current observation)"),
                 _img_block(current_np),
                 _text_block(
-                    f"### Execution history\n{history_str}\n\n"
+                    f"### Assembled nuts (history)\n{history_str}\n\n"
                     f"### Planning request\n"
-                    f"Generate a plan of up to {horizon} actions to move from the "
-                    f"current state toward the goal state.\n"
-                    f"Available objects: {obj_str}\n\n"
-                    f'Respond with JSON only: {{"plan": ["action1", "action2", ...]}}'
+                    f"List the available nuts in the order they should be assembled.\n"
+                    f"Available nuts: {obj_str}\n\n"
+                    f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
                 ),
             ]
 
         # Text-only fallback (no images in YAML)
         return (
-            f"Execution history:\n{history_str}\n\n"
-            f"Available objects: {obj_str}\n\n"
+            f"Assembled nuts (history):\n{history_str}\n\n"
+            f"Available nuts: {obj_str}\n\n"
             f"Plan: "
         )
 
@@ -246,15 +246,16 @@ class ExamplePrompt:
                 _text_block("Current real state (robot's current observation):"),
                 _img_block(current_np),
                 _text_block(f"### 2. Execution history\n{history_str}"),
-                _text_block(f"### 3. Original proposed plan\n{plan_str}"),
+                _text_block(f"### 3. Proposed nut ordering\n{plan_str}"),
                 _text_block(
-                    f"### 4. Critic diagnosis (failure at step {self.failed_step})\n"
-                    f"- Failed action: {self.failed_action}\n"
-                    f"- Feasibility score at failure step: {mean_f:.1%} "
-                    f"  (critic confidence: {1 - uncert:.1%})\n"
-                    f"- Score trajectory: {scores_str}\n"
-                    f"- Failure pattern: {self.failure_pattern}\n"
-                    f"- Region of highest goal mismatch: {self.worst_region}"
+                    "### 4. Critic diagnosis\n"
+                    + (f"- Failed nut: {self.failed_nut}\n" if self.failed_nut else "")
+                    + f"- Failed sub-skill: {self.failed_action}\n"
+                    + f"- Feasibility at failure: {mean_f:.1%} "
+                    + f"  (critic confidence: {1 - uncert:.1%})\n"
+                    + f"- Score trajectory: {scores_str}\n"
+                    + f"- Failure pattern: {self.failure_pattern}\n"
+                    + f"- Region of highest goal mismatch: {self.worst_region}"
                 ),
                 _text_block(
                     f"### 5. World model output at step {self.failed_step}\n"
@@ -265,29 +266,28 @@ class ExamplePrompt:
                 _img_block(gradcam_np),
                 _text_block(
                     f"### 6. Replanning instruction\n"
-                    f"Identify the root cause of the failure. You may revise from step "
-                    f"{self.failed_step} onward, or replace the full plan if the root "
-                    f"cause is earlier.\n"
-                    f"Available objects: {obj_str}\n\n"
+                    f"Identify the root cause of the failure. Revise the nut assembly "
+                    f"ordering to avoid repeating the failure.\n"
+                    f"Available nuts: {obj_str}\n\n"
                     f"Respond with JSON only:\n"
                     f'  {{"analysis": "one-sentence diagnosis", '
-                    f'"revised_plan": ["action1", ...]}}'
+                    f'"revised_plan": ["nut_label_1", ...]}}'
                 ),
             ]
 
         # Text-only fallback (no images in YAML)
+        failed_nut_line = f"  - Failed nut: {self.failed_nut}\n" if self.failed_nut else ""
         return (
-            f"Execution history:\n{history_str}\n\n"
-            f"Original plan:\n{plan_str}\n\n"
-            f"Critic diagnosis (failure at step {self.failed_step}):\n"
-            f"  - Failed action: {self.failed_action}\n"
-            f"  - Feasibility score: {mean_f:.1%} "
-            f"(confidence: {1 - uncert:.1%})\n"
-            f"  - Score trajectory: {scores_str}\n"
-            f"  - Failure pattern: {self.failure_pattern}\n"
-            f"  - Region of highest goal mismatch: {self.worst_region}\n\n"
-            f"Available objects: {obj_str}\n\n"
-            f"Revised plan: "
+            f"Assembled nuts (history):\n{history_str}\n\n"
+            f"Proposed nut ordering:\n{plan_str}\n\n"
+            f"Critic diagnosis:\n"
+            + failed_nut_line
+            + f"  - Failed sub-skill: {self.failed_action}\n"
+            + f"  - Feasibility: {mean_f:.1%} (confidence: {1 - uncert:.1%})\n"
+            + f"  - Failure pattern: {self.failure_pattern}\n"
+            + f"  - Region of highest goal mismatch: {self.worst_region}\n\n"
+            + f"Available nuts: {obj_str}\n\n"
+            + f"Revised nut ordering: "
         )
 
     def _reflect_response(self) -> str:
@@ -376,6 +376,7 @@ class PromptManager:
         history: List[str],
         obj_labels: List[str],
         horizon: int,
+        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
     ) -> List[Dict[str, Any]]:
         """Build the full message list for a ``propose`` call to GPT-4o."""
@@ -405,12 +406,12 @@ class PromptManager:
             _text_block("### Current state (robot's current observation)"),
             _img_block(current_image_np),
             _text_block(
-                f"### Execution history\n{history_str}\n\n"
+                f"### Task instruction\n{task_instruction}\n\n"
+                f"### Assembled nuts (history)\n{history_str}\n\n"
                 f"### Planning request\n"
-                f"Generate a plan of up to {horizon} actions to move from the "
-                f"current state toward the goal state.\n"
-                f"Available objects: {obj_str}\n\n"
-                f'Respond with JSON only: {{"plan": ["action1", "action2", ...]}}'
+                f"List the available nuts in the order they should be assembled.\n"
+                f"Available nuts: {obj_str}\n\n"
+                f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
             ),
         ]
         msgs.append(format_openai(role="user", content=user_content))
@@ -424,6 +425,7 @@ class PromptManager:
         obj_labels: List[str],
         full_plan: List[str],
         ctx: Dict[str, Any],
+        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
     ) -> List[Dict[str, Any]]:
         """Build the full message list for a ``reflect`` call to GPT-4o.
@@ -486,17 +488,17 @@ class PromptManager:
             ),
             # 3. Original proposed plan
             _text_block(
-                f"### 3. Original proposed plan\n{plan_str}"
+                f"### 3. Proposed nut ordering\n{plan_str}"
             ),
             # 4. Critic diagnosis
             _text_block(
-                f"### 4. Critic diagnosis (failure at step {ctx['failed_step']})\n"
-                f"- Failed action: {ctx['failed_action']}\n"
-                f"- Feasibility score at failure step: {ctx['mean_feasibility']:.1%} "
-                f"  (critic confidence: {1 - ctx['uncertainty']:.1%})\n"
-                f"- Score trajectory: {scores_str}\n"
-                f"- Failure pattern: {ctx['failure_pattern']}\n"
-                f"- Region of highest goal mismatch: {ctx['worst_region']}"
+                "### 4. Critic diagnosis\n"
+                + (f"- Failed nut: {ctx['failed_highlevel_action']}\n" if ctx.get('failed_highlevel_action') else "")
+                + f"- Failed sub-skill: {ctx['failed_action']}\n"
+                + f"- Feasibility at failure: {ctx['mean_feasibility']:.1%} "
+                + f"  (critic confidence: {1 - ctx['uncertainty']:.1%})\n"
+                + f"- Failure pattern: {ctx['failure_pattern']}\n"
+                + f"- Region of highest goal mismatch: {ctx['worst_region']}"
             ),
             # 5. Imagined state + attention map
             _text_block(
@@ -509,13 +511,13 @@ class PromptManager:
             # 6. Replanning instruction
             _text_block(
                 f"### 6. Replanning instruction\n"
-                f"Identify the root cause of the failure. You may revise from step "
-                f"{ctx['failed_step']} onward, or replace the full plan if the root "
-                f"cause is earlier.\n"
-                f"Available objects: {obj_str}\n\n"
+                f"Task: {task_instruction}\n"
+                f"Identify the root cause of the failure. Revise the nut assembly "
+                f"ordering to avoid repeating the failure.\n"
+                f"Available nuts: {obj_str}\n\n"
                 f"Respond with JSON only:\n"
                 f'  {{"analysis": "one-sentence diagnosis", '
-                f'"revised_plan": ["action1", ...]}}'
+                f'"revised_plan": ["nut_label_1", ...]}}'
             ),
         ]
         msgs.append(format_openai(role="user", content=user_content))

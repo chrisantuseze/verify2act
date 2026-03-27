@@ -12,14 +12,14 @@ import numpy as np
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 # sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # robosuite/
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # project root (contains verify2act/)
 
-from verify2act.critic.losses import BetaNLLLoss
+from verify2act.critic.losses import PRMCriticLoss
 from verify2act.critic.model import SpatialBetaPRMCritic
 from verify2act.data_loader import build_train_val_datasets
 from verify2act.utils import VAE_LATENT_SCALE, load_vae_encoder
@@ -207,11 +207,26 @@ def main():
     )
 
     model = SpatialBetaPRMCritic().to(device)
-    criterion = BetaNLLLoss(label_smoothing=args.label_smoothing)
+    criterion = PRMCriticLoss(label_smoothing=args.label_smoothing)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    scheduler = CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=args.learning_rate * 0.01
-    )
+
+    warmup_epochs = min(args.warmup_epochs, args.epochs)
+    if warmup_epochs > 0:
+        warmup_sched = LinearLR(
+            optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs
+        )
+        cosine_sched = CosineAnnealingLR(
+            optimizer,
+            T_max=max(1, args.epochs - warmup_epochs),
+            eta_min=args.learning_rate * 0.01,
+        )
+        scheduler = SequentialLR(
+            optimizer, schedulers=[warmup_sched, cosine_sched], milestones=[warmup_epochs]
+        )
+    else:
+        scheduler = CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=args.learning_rate * 0.01
+        )
 
     latent_scale = float(getattr(vae.config, "scaling_factor", VAE_LATENT_SCALE))
     best_val = float("inf")
@@ -352,6 +367,8 @@ def parse_args():
     parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
 
+    parser.add_argument("--warmup-epochs", type=int, default=3,
+                        help="Number of linear LR warmup epochs before cosine decay. 0 disables warmup.")
     parser.add_argument("--label-smoothing", type=float, default=0.01)
     parser.add_argument("--class-weight-pos", type=float, default=1.0)
     parser.add_argument("--class-weight-neg", type=float, default=1.0)

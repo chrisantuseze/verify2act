@@ -1,26 +1,20 @@
-# Few-shot example: mid-episode with partial history, spatial qualifiers
+# Few-shot example: two round nuts, mid-episode — first nut already assembled
 task: example_2
-instruction: "Assemble all nuts onto their matching pegs."
+instruction: "Assemble all round nuts onto their matching pegs."
 objects:
   - "front-left round nut"
   - "back-right round nut"
-  - "square nut"
 history:
-  - "pick front-left round nut"
-  - "insert front-left round nut"
+  - "front-left round nut"   # assembled in previous real step
 
 # Images (relative to this file)
 current_image: example_2_current.png
 goal_image: example_2_goal.png
-horizon: 10
+horizon: 4
 
 # Behaviors
 plan:
-  - "pick back-right round nut"
-  - "insert back-right round nut"
-  - "pick square nut"
-  - "insert square nut"
-  - "done"
+  - "back-right round nut"
 
 # Reflect (not used for this example)
 analysis: Null

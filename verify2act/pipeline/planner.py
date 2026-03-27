@@ -77,20 +77,26 @@ class VLMPlanner:
     def _parse_json(raw: str) -> dict:
         """Extract JSON from a response that might contain extra text/fences."""
         text = raw.strip()
+        if not text:
+            raise ValueError(f"Empty response from model, cannot parse JSON: {raw!r}")
+
         if text.startswith("```"):
-            # strip ```json ... ```
+            # strip ```json ... ``` fences
             lines = text.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines)
+            text = "\n".join(lines).strip()
 
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Fallback: extract the first JSON object substring.
-            match = re.search(r"\{[\s\S]*?\}", text)
+            # Fallback: extract the first JSON object or array substring.
+            match = re.search(r"(\{[\s\S]*?\}|\[[\s\S]*?\])", text)
             if match is None:
-                raise
-            return json.loads(match.group(0))
+                raise ValueError(f"Failed to parse JSON from model response: {text!r}")
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Extracted JSON substring is invalid: {match.group(0)!r}") from e
 
     # -- public API ---------------------------------------------------------
 
@@ -100,12 +106,13 @@ class VLMPlanner:
         goal_image_np: np.ndarray,
         history: List[str],
         obj_labels: List[str],
-        horizon: int = 5,
+        horizon: int = 4,
+        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
     ) -> List[str]:
-        """Generate an action plan from the current state toward the goal.
+        """Return the nuts in assembly order (Option A: nut-name list, not sub-skills).
 
-        Returns a list of action strings, length <= ``horizon``.
+        Returns a list of nut-name strings, length <= ``horizon``.
         """
         if horizon <= 0:
             raise ValueError(f"horizon must be > 0, got {horizon}")
@@ -116,6 +123,7 @@ class VLMPlanner:
             history=history,
             obj_labels=obj_labels,
             horizon=horizon,
+            task_instruction=task_instruction,
             use_examples=use_examples,
         )
         raw = self._call(messages)
@@ -136,6 +144,7 @@ class VLMPlanner:
         obj_labels: List[str],
         full_plan: List[str],
         ctx: Dict[str, Any],
+        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
     ) -> Dict[str, Any]:
         """Diagnose a critic failure and return a revised plan.
@@ -149,6 +158,7 @@ class VLMPlanner:
             obj_labels=obj_labels,
             full_plan=full_plan,
             ctx=ctx,
+            task_instruction=task_instruction,
             use_examples=use_examples,
         )
         raw = self._call(messages)

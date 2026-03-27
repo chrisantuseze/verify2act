@@ -12,16 +12,16 @@ Usage:
     # Expert episodes
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
-        --transition-mode keyframe \
+        --transition-mode both \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
+        --num-round 2 --num-square 2 --initial-stacking-prob 0.0 \
         --nut-type-mode random --num-episodes 1000 \
         --image-size 512 --seed 42
 
     # Expert episodes --headless
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
-        --transition-mode keyframe \
+        --transition-mode both \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
         --nut-type-mode random --num-episodes 2000 \
@@ -31,7 +31,7 @@ Usage:
     # Noisy episodes (sigma=0.05)
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
-        --transition-mode keyframe \
+        --transition-mode both \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
         --nut-type-mode random --num-episodes 1000 \
@@ -55,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # robosuite/
 sys.path.insert(0, str(Path(__file__).resolve().parent))         # data_capture_wm/
 
 from episode_recorder import EpisodeRecorder
-from prompt_utils import build_action_prompt
+from prompt_utils import build_action_prompt, build_subskill_action_prompt
 from policy_wrappers import get_policy_factory
 
 
@@ -75,7 +75,7 @@ class BatchCollector:
         image_size: int = 512,
         policy_mode: str = "expert",
         noise_sigma: float = 0.0,
-        transition_mode: str = "keyframe",
+        transition_mode: str = "both",
     ):
         self.env_factory = env_factory
         self.policy_factory = policy_factory
@@ -112,12 +112,21 @@ class BatchCollector:
         for ep_idx in range(num_episodes):
             t0 = time.time()
             try:
-                obs = env.reset()
+                # Create policy first: many heuristic policies call
+                # `env.reset()` in their constructor. Creating the policy
+                # before calling `recorder.start_episode()` avoids a
+                # double-reset that can replace the native MuJoCo sim/model
+                # object while an active renderer holds references — which
+                # may lead to native crashes (segfaults). If the policy
+                # didn't reset the env, fall back to resetting here.
+                policy = self.policy_factory(env, data_collection_mode=True)
+                obs = getattr(policy, "obs", None)
+                if obs is None:
+                    obs = env.reset()
+                    policy.obs = obs
+
                 episode_id = f"ep_{recorder.episode_counter:05d}"
                 recorder.start_episode(episode_id=episode_id)
-
-                policy = self.policy_factory(env, data_collection_mode=True)
-                policy.obs = obs
 
                 policy_type = (
                     "expert"
@@ -150,6 +159,13 @@ class BatchCollector:
                         ai.skill, ai.object_name, ai.cartesian_target
                     )
 
+                    # Build enriched sub-skill prompt (used by subskill/both modes)
+                    subskill_action_text = None
+                    if ai.sub_skill is not None:
+                        subskill_action_text = build_subskill_action_prompt(
+                            ai.sub_skill, ai.object_name, ai.cartesian_target
+                        )
+
                     recorder.record_step(
                         action=action,
                         obs=obs,
@@ -162,6 +178,9 @@ class BatchCollector:
                         stage=ai.stage,
                         event_tag=ai.event_tag,
                         policy_type=policy_type,
+                        sub_skill=ai.sub_skill,
+                        subskill_event_tag=ai.subskill_event_tag,
+                        subskill_action_text=subskill_action_text,
                     )
 
                     t += 1
@@ -329,8 +348,8 @@ def main():
     parser.add_argument("--policy-mode", type=str, default="expert",
                         choices=["expert", "noisy"])
     parser.add_argument("--noise-sigma", type=float, default=0.05)
-    parser.add_argument("--transition-mode", type=str, default="keyframe",
-                        choices=["dense", "keyframe"])
+    parser.add_argument("--transition-mode", type=str, default="both",
+                        choices=["dense", "keyframe", "subskill", "both"])
     parser.add_argument("--seed", type=int, default=42)
     # Nut assembly params
     parser.add_argument("--num-round", type=int, default=6)

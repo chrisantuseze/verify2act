@@ -30,6 +30,67 @@ def build_action_prompt(skill: str, object_name: str, cartesian_target=None) -> 
     return f"{skill} {object_name}"
 
 
+def build_subskill_action_prompt(
+    sub_skill: str,
+    object_name: str,
+    cartesian_target=None,
+) -> str:
+    """
+    Build an enriched sub-skill action prompt for finer-grained transitions.
+
+    Each sub-skill describes a specific phase of manipulation with a natural-
+    language template that gives the diffusion model more discriminative
+    conditioning signal than the coarse skill-level prompts.
+
+    Args:
+        sub_skill: One of 'approach', 'grasp', 'carry', 'align', 'lower_insert',
+                   or falls back to the coarse skill name.
+        object_name: e.g. 'left round nut', 'right square nut'.
+        cartesian_target: Optional (x, y, z). If provided, a spatial description
+                          is appended (e.g. "on the left near the back").
+
+    Returns:
+        Enriched prompt string,
+        e.g. "approach left round nut from above on the left".
+    """
+    sub_skill = sub_skill.lower().strip()
+
+    _TEMPLATES = {
+        "approach":     "approach {obj} from above",
+        "grasp":        "grasp {obj} and lift",
+        "carry":        "carry {obj} toward peg",
+        "align":        "align {obj} over peg",
+        "lower_insert": "lower {obj} onto peg",
+        # Coarse skill fallbacks
+        "pick":         "pick {obj}",
+        "insert":       "insert {obj}",
+        "place":        "place {obj}",
+    }
+
+    template = _TEMPLATES.get(sub_skill, "{skill} {obj}")
+    prompt = template.format(obj=object_name, skill=sub_skill)
+
+    # Optionally append a spatial description from coordinates
+    if cartesian_target is not None:
+        try:
+            x, y = float(cartesian_target[0]), float(cartesian_target[1])
+            parts = []
+            if x < -0.05:
+                parts.append("on the left")
+            elif x > 0.05:
+                parts.append("on the right")
+            if y < -0.05:
+                parts.append("near the front")
+            elif y > 0.05:
+                parts.append("near the back")
+            if parts:
+                prompt += " " + " ".join(parts)
+        except (IndexError, TypeError, ValueError):
+            pass
+
+    return prompt
+
+
 def spatial_qualifier(target_x: float, target_y: float, all_positions: list) -> str:
     """
     Returns a spatial label for an object at (target_x, target_y) relative to all

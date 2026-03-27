@@ -7,6 +7,9 @@ and action prompts. Outputs a JSONL transition manifest per episode.
 Transition output modes:
 - dense: every simulator step becomes one transition (t -> t+1)
 - keyframe: stage-event-aligned sparse transitions (e.g., pick_start -> pick_end)
+- subskill: finer-grained sub-skill transitions (e.g., approach_start -> approach_end)
+- both: emits keyframe transitions to transitions.jsonl AND subskill transitions
+        to transitions_subskill.jsonl simultaneously
 """
 
 import sys
@@ -98,6 +101,9 @@ class EpisodeRecorder:
         stage: str,
         event_tag: Optional[str],
         policy_type: str = "expert",
+        sub_skill: Optional[str] = None,
+        subskill_event_tag: Optional[str] = None,
+        subskill_action_text: Optional[str] = None,
     ):
         """
         Record one transition (t → t+1).
@@ -114,6 +120,9 @@ class EpisodeRecorder:
             cartesian_target: 3-element Cartesian target in world frame.
             action_text: Pre-built prompt string from prompt_utils.
             policy_type: 'expert' | 'noisy_0.02' | 'noisy_0.05' | 'noisy_0.10'.
+            sub_skill: Optional finer-grained sub-skill name (e.g. 'approach').
+            subskill_event_tag: Optional sub-skill keyframe marker.
+            subskill_action_text: Optional enriched prompt for sub-skill mode.
         """
         if not self._active:
             raise RuntimeError("Episode not started. Call start_episode() first.")
@@ -148,6 +157,9 @@ class EpisodeRecorder:
             "policy_type": policy_type,
             "policy_stage": stage,
             "event_tag": event_tag,
+            "sub_skill": sub_skill,
+            "subskill_event_tag": subskill_event_tag,
+            "subskill_action_text": subskill_action_text,
             "episode_success": None,
             "label_reachable": -1,
         }
@@ -204,21 +216,37 @@ class EpisodeRecorder:
             tr["goal_image_source"] = goal_source
             tr["episode_success"] = bool(success)
 
-        # Keep only files referenced by emitted transitions (and goal image).
-        # This keeps keyframe datasets compact even though per-step capture is
-        # used online during collection.
-        self._prune_episode_artifacts(transitions, keep_goal=success)
+        # In "both" mode, also build subskill transitions for the second file.
+        subskill_transitions = []
+        if self.transition_mode == "both":
+            subskill_transitions = self._build_subskill_transitions()
+            for tr in subskill_transitions:
+                tr["goal_image"] = goal_rel
+                tr["goal_image_source"] = goal_source
+                tr["episode_success"] = bool(success)
 
-        # Append to master JSONL
+        # Collect all referenced files for pruning so both modes keep their frames.
+        all_transitions_for_pruning = list(transitions) + list(subskill_transitions)
+        self._prune_episode_artifacts(all_transitions_for_pruning, keep_goal=success)
+
+        # Append to master JSONL (keyframe or dense or subskill)
         jsonl_path = self.output_root / "transitions.jsonl"
         with open(jsonl_path, "a") as f:
             for tr in transitions:
                 f.write(json.dumps(tr) + "\n")
 
+        # In "both" mode, also write subskill transitions to a separate file.
+        if self.transition_mode == "both" and subskill_transitions:
+            subskill_jsonl_path = self.output_root / "transitions_subskill.jsonl"
+            with open(subskill_jsonl_path, "a") as f:
+                for tr in subskill_transitions:
+                    f.write(json.dumps(tr) + "\n")
+
         # Episode-level metadata
         meta = {
             "episode_id": self.episode_id,
             "num_transitions": len(transitions),
+            "num_subskill_transitions": len(subskill_transitions),
             "num_step_records": len(self._step_records),
             "transition_mode": self.transition_mode,
             "success": bool(success),
@@ -330,6 +358,10 @@ class EpisodeRecorder:
         if self.transition_mode == "dense":
             return [dict(row) for row in self._step_records]
 
+        if self.transition_mode == "subskill":
+            return self._build_subskill_transitions()
+
+        # "keyframe" or "both" — primary file is always keyframe
         return self._build_keyframe_transitions()
 
     def _build_keyframe_transitions(self) -> List[Dict]:
@@ -390,6 +422,77 @@ class EpisodeRecorder:
             return transitions
 
         return []
+
+    def _build_subskill_transitions(self) -> List[Dict]:
+        """Build finer-grained sub-skill transitions using subskill_event_tag.
+
+        Same pairing logic as keyframe, but reads from the 'subskill_event_tag'
+        field and uses 'subskill_action_text' for the action_text column.
+        """
+        pair_rules = [
+            ("approach_start", "approach_end", "approach"),
+            ("grasp_start",    "grasp_end",    "grasp"),
+            ("carry_start",    "carry_end",    "carry"),
+            ("align_start",    "align_end",    "align"),
+            ("lower_start",    "lower_end",    "lower_insert"),
+        ]
+        end_to_rule = {end: (start, skill) for start, end, skill in pair_rules}
+        pending = {(start, skill): {} for start, _, skill in pair_rules}
+
+        transitions: List[Dict] = []
+
+        for row in self._step_records:
+            raw_event_tag = row.get("subskill_event_tag")
+            event_tags = []
+            if raw_event_tag:
+                event_tags = [tag.strip() for tag in str(raw_event_tag).split("|") if tag.strip()]
+            obj = row["action_params"]["object"]
+
+            for event_tag in event_tags:
+                for start_tag, _, rule_skill in pair_rules:
+                    if event_tag == start_tag:
+                        pending[(start_tag, rule_skill)][obj] = row
+
+                if event_tag in end_to_rule:
+                    start_tag, rule_skill = end_to_rule[event_tag]
+
+                    start_row = pending[(start_tag, rule_skill)].pop(obj, None)
+                    if start_row is None:
+                        continue
+
+                    # Use enriched subskill action text if available,
+                    # fall back to the standard action_text.
+                    action_text = (
+                        start_row.get("subskill_action_text")
+                        or start_row["action_text"]
+                    )
+
+                    transitions.append(
+                        {
+                            "episode_id": row["episode_id"],
+                            "timestep": start_row["timestep"],
+                            "image_t": start_row["image_t"],
+                            "image_t1": row["image_t1"],
+                            "goal_image": None,
+                            "goal_image_source": None,
+                            "action_text": action_text,
+                            "action_params": start_row["action_params"],
+                            "sub_skill": start_row.get("sub_skill", rule_skill),
+                            "state_t": start_row["state_t"],
+                            "state_t1": row["state_t1"],
+                            "policy_type": start_row["policy_type"],
+                            "policy_stage_t": start_row.get("policy_stage"),
+                            "policy_stage_t1": row.get("policy_stage"),
+                            "event_tag_t": start_row.get("subskill_event_tag"),
+                            "event_tag_t1": row.get("subskill_event_tag"),
+                            "source_timestep_t": start_row["timestep"],
+                            "source_timestep_t1": row["timestep"],
+                            "episode_success": None,
+                            "label_reachable": -1,
+                        }
+                    )
+
+        return transitions
 
     def _prune_episode_artifacts(self, transitions: List[Dict], keep_goal: bool):
         """Delete per-step frame/state files that are not referenced by transitions."""

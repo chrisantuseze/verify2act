@@ -1,18 +1,15 @@
-# Few-shot example: reflect behavior — critic rejects a plan, VLM revises
+# Few-shot example: reflect — critic rejects carry step; VLM reorders two nuts
 task: example_3
-instruction: "Assemble all nuts onto their matching pegs."
+instruction: "Assemble all round nuts onto their matching pegs."
 objects:
-  - "round nut"
-  - "square nut"
-history:
-  - "pick round nut"
+  - "front round nut"
+  - "back round nut"
+history: []
 
-# Original plan that the critic rejected
+# Original nut ordering that the critic rejected
 plan:
-  - "insert round nut"
-  - "pick square nut"
-  - "reorient square nut"
-  - "insert square nut"
+  - "front round nut"
+  - "back round nut"
 
 # Images (relative to this file)
 current_image: example_3_current.png
@@ -21,24 +18,25 @@ imagined_image: example_3_imagined.png
 gradcam_image: example_3_gradcam.png
 
 # Critic diagnosis (used to populate the reflect user message)
+# failed_step indexes into the EXPANDED sub-skill sequence (5 per nut).
+# Step 2 = "carry front round nut toward peg" (nut 0, sub-skill index 2).
 failed_step: 2
-failed_action: "reorient square nut"
-mean_feasibility: 0.18
-uncertainty: 0.05
+failed_nut: "front round nut"
+failed_action: "carry front round nut toward peg"
+mean_feasibility: 0.21
+uncertainty: 0.04
 score_trajectory:
-  - [0.82, 0.04]
-  - [0.71, 0.06]
-  - [0.18, 0.05]
+  - [0.82, 0.06]
+  - [0.75, 0.05]
+  - [0.21, 0.04]
 failure_pattern: "sudden_drop"
 worst_region: "center"
 
 # Reflect expected response
-analysis: "The reorient action is unnecessary — the square nut can be inserted directly after picking."
+analysis: "The front round nut is obstructed by the back round nut during carrying; assembling the back round nut first should clear the path."
 revised_plan:
-  - "insert round nut"
-  - "pick square nut"
-  - "insert square nut"
-  - "done"
+  - "back round nut"
+  - "front round nut"
 
 # OpenAI
 role: system

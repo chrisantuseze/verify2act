@@ -48,10 +48,15 @@ from verify2act.critic.inference import CriticDecision, decide_replan
 from verify2act.critic.model import SpatialBetaPRMCritic
 from verify2act.pipeline.env_wrapper import NutAssemblyEnvWrapper
 from verify2act.pipeline.planner import VLMPlanner
+from verify2act.pipeline.decompose import expand_nut_plan
 from verify2act.pipeline.reflection import build_reflection_context
 from verify2act.pipeline.world_model import DiffusionWorldModel, OracleWorldModel
 from verify2act.utils.vae import load_vae_encoder
 from verify2act.utils.vae import VAE_LATENT_SCALE
+
+import os
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +158,13 @@ def run_episode(
     planner,
     *,
     requery_world_model=None,
-    horizon: int = 5,
-    max_steps: int = 50,
+    horizon: int = 4,
+    max_steps: int = 10,
     theta_f: float = 0.4,
     theta_u: float = 0.15,
     max_retries: int = 2,
     max_replans: int = 3,
+    task_instruction: Optional[str] = None,
     device: str = "cuda",
     output_dir: Optional[str] = None,
 ) -> EpisodeTrace:
@@ -180,9 +186,11 @@ def run_episode(
     planner : VLMPlanner
         GPT-4o VLM planner with propose/reflect methods.
     horizon : int
-        Number of steps per VLM planning call.
+        Maximum number of nuts per VLM planning call (typically equals the
+        total number of active nuts in the episode).
     max_steps : int
-        Maximum number of real-environment timesteps per episode.
+        Maximum number of nut-assembly attempts per episode (one outer loop
+        iteration = one full nut pick-and-insert).
     theta_f : float
         Feasibility threshold (below ⇒ potential failure).
     theta_u : float
@@ -209,6 +217,7 @@ def run_episode(
     obs, goal_image_np = env_wrapper.reset()
     z_goal = encode_image(vae, goal_image_np, device=torch_device)
     obj_labels = env_wrapper.get_obj_labels()
+    task_instruction = task_instruction or env_wrapper.get_task_instruction()
     history: List[str] = []
 
     trace = EpisodeTrace()
@@ -226,7 +235,8 @@ def run_episode(
 
         # ── Stage 1: Plan generation (VLM call) ───────────────────────
         plan = planner.propose(
-            current_image_np, goal_image_np, history, obj_labels, horizon
+            current_image_np, goal_image_np, history, obj_labels, horizon,
+            task_instruction=task_instruction,
         )
         step_record.plan = list(plan)
         logger.info("t=%d  Proposed plan: %s", t, plan)
@@ -239,14 +249,19 @@ def run_episode(
             imagined_img = current_image_np
             step_failed = False
 
-            for k, action in enumerate(plan):
+            # Expand nut names to (nut_name, sub_skill_prompt) pairs.
+            # The world model imagines at sub-skill granularity; real execution
+            # and VLM reflection always operate at nut-name granularity.
+            imagination_steps = expand_nut_plan(plan)
+
+            for k, (hl_action, imagine_action) in enumerate(imagination_steps):
                 # ── 'done' terminates the imagination loop cleanly ──────
-                if action.strip().lower() == "done":
+                if imagine_action.strip().lower() == "done":
                     plan_accepted = True
                     break
 
                 # ── Imagination ────────────────────────────────────────
-                imagined_img_next = world_model.imagine(imagined_img, action)
+                imagined_img_next = world_model.imagine(imagined_img, imagine_action)
 
                 if out_path:
                     step_dir = out_path / "steps"
@@ -265,18 +280,18 @@ def run_episode(
 
                 decision = decide_replan(mean_f, uncert, theta_f, theta_u)
                 step_record.critic_decisions.append(
-                    f"k={k} action='{action}' μ={mean_f:.3f} σ²={uncert:.4f} → {decision.action}"
+                    f"k={k} action='{imagine_action}' μ={mean_f:.3f} σ²={uncert:.4f} → {decision.action}"
                 )
                 logger.info(
                     "  k=%d  action='%s'  feasibility=%.3f  uncertainty=%.4f  → %s",
-                    k, action, mean_f, uncert, decision.action,
+                    k, imagine_action, mean_f, uncert, decision.action,
                 )
 
                 # ── Requery: re-sample world model on high uncertainty ─
                 if decision.action == "requery":
                     retry_wm = requery_world_model or world_model
                     for retry_i in range(max_retries):
-                        imagined_img_next = retry_wm.imagine(imagined_img, action)
+                        imagined_img_next = retry_wm.imagine(imagined_img, imagine_action)
                         z_t1 = encode_image(vae, imagined_img_next, device=torch_device)
                         with torch.no_grad():
                             critic_out = critic(z_t1, z_goal)
@@ -302,7 +317,8 @@ def run_episode(
                     step_record.failed_step = k
                     step_record.replan_attempts = replan_attempt + 1
 
-                    diff_map = z_t1 - z_goal
+                    # Sub-skill list for the critic context (length = k+1 scores).
+                    reflect_plan = [s for _, s in imagination_steps]
                     ctx = build_reflection_context(
                         imagined_state=imagined_img_next,
                         z_t1=z_t1,
@@ -311,19 +327,22 @@ def run_episode(
                         critic=critic,
                         all_scores=all_scores,
                         failed_step=k,
-                        full_plan=plan,
+                        full_plan=reflect_plan,
                     )
+                    # Expose the nut name for the reflect message.
+                    ctx["failed_highlevel_action"] = hl_action
                     result = planner.reflect(
                         current_image_np, goal_image_np,
                         history, obj_labels, plan, ctx,
+                        task_instruction=task_instruction,
                     )
                     revised_plan = result["revised_plan"]
                     analysis = result.get("analysis", "")
 
                     step_record.reflection_analyses.append(analysis)
                     logger.info(
-                        "  REFLECT at step %d: %s → revised: %s",
-                        k, analysis, revised_plan,
+                        "  REFLECT at step %d (sub-skill '%s' / nut '%s'): %s → revised: %s",
+                        k, imagine_action, hl_action, analysis, revised_plan,
                     )
 
                     plan = revised_plan
@@ -362,8 +381,8 @@ def run_episode(
             trace.steps.append(step_record)
             break
 
-        logger.info("t=%d  EXECUTE: '%s'", t, action_to_execute)
-        obs, skill_ok = env_wrapper.execute_action(action_to_execute)
+        logger.info("t=%d  EXECUTE nut: '%s'", t, action_to_execute)
+        obs, skill_ok = env_wrapper.execute_nut_assembly(action_to_execute)
         step_record.action_executed = action_to_execute
         history.append(action_to_execute)
 
@@ -547,8 +566,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-text-guidance", type=float, default=7.5)
     parser.add_argument("--wm-seed", type=int, default=None)
 
-    parser.add_argument("--horizon", type=int, default=5)
-    parser.add_argument("--max-steps", type=int, default=50)
+    parser.add_argument("--horizon", type=int, default=4)
+    parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument("--theta-f", type=float, default=0.4)
     parser.add_argument("--theta-u", type=float, default=0.15)
     parser.add_argument("--max-retries", type=int, default=2)

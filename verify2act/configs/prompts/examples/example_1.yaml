@@ -1,23 +1,20 @@
-# Few-shot example: simple two-nut assembly from near-initial state
+# Few-shot example: two round nuts, fresh start — VLM outputs nut ordering
 task: example_1
-instruction: "Assemble all nuts onto their matching pegs."
+instruction: "Assemble all round nuts onto their matching pegs."
 objects:
-  - "round nut"
-  - "square nut"
+  - "left round nut"
+  - "right round nut"
 history: []
 
 # Images (relative to this file)
 current_image: example_1_current.png
 goal_image: example_1_goal.png
-horizon: 10
+horizon: 4
 
 # Behaviors — query is auto-generated; these are the expected responses
 plan:
-  - "pick round nut"
-  - "insert round nut"
-  - "pick square nut"
-  - "insert square nut"
-  - "done"
+  - "left round nut"
+  - "right round nut"
 
 # Reflect (not used for this example)
 analysis: Null

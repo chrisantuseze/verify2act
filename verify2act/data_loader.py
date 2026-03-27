@@ -34,12 +34,13 @@ class WMTransitionDataset(Dataset):
         split: str = "train",
         val_frac: float = 0.1,
         seed: int = 42,
+        transitions_file: str = "transitions.jsonl",
     ):
         self.root = Path(dataset_dir)
         self.image_size = image_size
 
         # Load transitions
-        jsonl = self.root / "transitions.jsonl"
+        jsonl = self.root / transitions_file
         with open(jsonl) as f:
             self.rows = [json.loads(line) for line in f]
 

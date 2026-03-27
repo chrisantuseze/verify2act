@@ -190,9 +190,13 @@ class NutAssemblyEnvWrapper:
         return self._render_rgb()
 
     def get_obj_labels(self) -> List[str]:
-        """Return human-readable object labels (e.g. ``["round nut", "square nut"]``)."""
+        """Return human-readable labels for the *active* (target) nuts this episode.
+
+        Uses ``_active_nuts()`` so only the relevant nut type for this episode
+        is returned (e.g. only round nuts when ``nut_type_mode='roundnut'``).
+        """
         labels = []
-        for name in self._nut_names():
+        for name in self._active_nuts():
             nl = name.lower()
             if "round" in nl:
                 labels.append("round nut")
@@ -201,6 +205,15 @@ class NutAssemblyEnvWrapper:
             else:
                 labels.append(nl.replace("_", " "))
         return sorted(set(labels))
+
+    def get_task_instruction(self) -> str:
+        """Return a concise task instruction matching the active nut type this episode."""
+        current_type = getattr(self.env, "current_nut_type", None)
+        if current_type == "roundnut":
+            return "Assemble all round nuts onto their matching pegs."
+        if current_type == "squarenut":
+            return "Assemble all square nuts onto their matching pegs."
+        return "Assemble all nuts onto their matching pegs."
 
     def is_done(self) -> bool:
         """Return ``True`` if the episode's target nut(s) are on their correct pegs."""
@@ -302,6 +315,32 @@ class NutAssemblyEnvWrapper:
 
         return self._obs, skill_completed
 
+    def execute_nut_assembly(
+        self, nut_name: str, max_steps_per_skill: int = 400
+    ) -> Tuple[Dict, bool]:
+        """Execute a full pick-then-insert assembly for one nut.
+
+        This is the primary execution primitive for Option A inference, where
+        the VLM outputs nut names rather than pick/insert actions.
+
+        Parameters
+        ----------
+        nut_name : str
+            The nut label exactly as provided by the VLM / ``get_obj_labels()``,
+            e.g. ``"left round nut"``.
+        max_steps_per_skill : int
+            Maximum environment steps allowed per skill (pick and insert each).
+
+        Returns
+        -------
+        (obs, success)
+            *success* is ``True`` only when both pick **and** insert complete
+            their terminal stages within the step budget.
+        """
+        _, pick_ok = self.execute_action(f"pick {nut_name}", max_steps=max_steps_per_skill)
+        obs, insert_ok = self.execute_action(f"insert {nut_name}", max_steps=max_steps_per_skill)
+        return obs, pick_ok and insert_ok
+
     # ── internal helpers ───────────────────────────────────────────────
 
     def _peg_id_for_nut(self, nut_name: str) -> int:
@@ -356,12 +395,25 @@ class NutAssemblyEnvWrapper:
     def _initial_stage(skill: str) -> str:
         """Map a skill name to the heuristic policy's starting stage."""
         skill = skill.lower()
+        # High-level skills
         if skill == "pick":
             return "move_to_nut"
         if skill == "insert":
             return "move_to_peg"
         if skill in ("place", "put_down"):
             return "move_to_table"
+        # Sub-skill primitives (maps mirror the subskill event-tag boundaries
+        # defined in policy_wrappers._SUBSKILL_EVENT_TAG_BY_STAGE)
+        if skill == "approach":
+            return "move_to_nut"
+        if skill == "grasp":
+            return "lower_to_nut"
+        if skill == "carry":
+            return "lift_nut"
+        if skill == "align":
+            return "align_over_peg"
+        if skill in ("lower", "lower_insert"):
+            return "lower_to_peg"
         # Default: start from the beginning of the pick-place cycle.
         return "move_to_nut"
 
@@ -369,6 +421,7 @@ class NutAssemblyEnvWrapper:
     def _terminal_stages(skill: str) -> frozenset:
         """Stages whose entry signals that *skill* has completed."""
         skill = skill.lower()
+        # High-level skills
         if skill == "pick":
             # Pick completes when the policy transitions to "move_to_peg"
             # (nut is lifted and heading toward the peg).
@@ -377,6 +430,22 @@ class NutAssemblyEnvWrapper:
             # Insert completes at release or retract.
             return frozenset({"release", "retract", "reset_orientation"})
         if skill in ("place", "put_down"):
+            return frozenset({"release", "retract", "reset_orientation"})
+        # Sub-skill primitives
+        if skill == "approach":
+            # Approach ends when the gripper has descended to grasping height.
+            return frozenset({"lower_to_nut"})
+        if skill == "grasp":
+            # Grasp ends when the nut is lifted clear of the table.
+            return frozenset({"lift_nut"})
+        if skill == "carry":
+            # Carry ends when the arm is over the peg, ready to align.
+            return frozenset({"align_over_peg"})
+        if skill == "align":
+            # Align ends when the arm begins the final downward insertion.
+            return frozenset({"lower_to_peg"})
+        if skill in ("lower", "lower_insert"):
+            # Lower ends at nut release.
             return frozenset({"release", "retract", "reset_orientation"})
         return frozenset({"done"})
 
