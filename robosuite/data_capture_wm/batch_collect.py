@@ -15,7 +15,7 @@ Usage:
         --transition-mode both \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.0 \
-        --nut-type-mode random --num-episodes 1000 \
+        --nut-type-mode random --num-episodes 3000 \
         --image-size 512 --seed 42
 
     # Expert episodes --headless
@@ -24,7 +24,7 @@ Usage:
         --transition-mode both \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
-        --nut-type-mode random --num-episodes 2000 \
+        --nut-type-mode random --num-episodes 3000 \
         --image-size 512 --seed 12 \
         --headless 
 
@@ -34,7 +34,7 @@ Usage:
         --transition-mode both \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
-        --nut-type-mode random --num-episodes 1000 \
+        --nut-type-mode random --num-episodes 3000 \
         --image-size 512 --seed 0
 """
 
