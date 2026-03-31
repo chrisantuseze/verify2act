@@ -3,12 +3,13 @@
 # in the local dataset/ directory into a single consolidated dataset.
 #
 # Usage:
-#   bash merge_all.sh [--output-dir PATH] [--overwrite] [--skip-labels]
+#   bash merge_all.sh [--output-dir PATH] [--overwrite] [--skip-labels] [--skip-subskill]
 #
 # Defaults:
 #   --output-dir  dataset/nut_assembly_merged
 #   (no --overwrite)
 #   (labels are merged)
+#   (transitions_subskill.jsonl is merged)
 
 set -euo pipefail
 
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
         --overwrite)    EXTRA_ARGS+=("--overwrite"); shift ;;
         --skip-labels)  EXTRA_ARGS+=("--skip-labels"); shift ;;
+        --skip-subskill) EXTRA_ARGS+=("--skip-subskill"); shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done

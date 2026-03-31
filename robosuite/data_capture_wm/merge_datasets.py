@@ -56,6 +56,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not merge labels.jsonl even if present",
     )
+    parser.add_argument(
+        "--skip-subskill",
+        action="store_true",
+        help="Do not merge transitions_subskill.jsonl even if present",
+    )
     return parser.parse_args()
 
 
@@ -131,10 +136,12 @@ def main() -> None:
 
     output_episodes_dir.mkdir(parents=True, exist_ok=True)
     output_transitions = output_dir / "transitions.jsonl"
+    output_subskill = output_dir / "transitions_subskill.jsonl"
     output_labels = output_dir / "labels.jsonl"
 
     next_episode_idx = 0
     total_transitions_written = 0
+    total_subskill_written = 0
     total_labels_written = 0
     total_episodes_written = 0
     successful_episodes = 0
@@ -146,6 +153,9 @@ def main() -> None:
         labels_out = None
         if not args.skip_labels:
             labels_out = open(output_labels, "w")
+        subskill_out = None
+        if not args.skip_subskill:
+            subskill_out = open(output_subskill, "w")
 
         try:
             for src_dir in source_dirs:
@@ -217,6 +227,25 @@ def main() -> None:
                             transitions_out.write(json.dumps(row) + "\n")
                             transitions_written_this_source += 1
 
+                subskill_written_this_source = 0
+                src_subskill_path = src_dir / "transitions_subskill.jsonl"
+                if subskill_out is not None and src_subskill_path.exists():
+                    with open(src_subskill_path, "r") as src_sf:
+                        for line in src_sf:
+                            if not line.strip():
+                                continue
+                            row = json.loads(line)
+                            old_episode_id = row.get("episode_id")
+                            if old_episode_id not in id_map:
+                                continue
+                            row["episode_id"] = id_map[old_episode_id]
+                            for key in EPISODE_PATH_KEYS:
+                                value = row.get(key)
+                                if isinstance(value, str) and value:
+                                    row[key] = rewrite_episode_relpath(value, id_map)
+                            subskill_out.write(json.dumps(row) + "\n")
+                            subskill_written_this_source += 1
+
                 labels_written_this_source = 0
                 src_labels_path = src_dir / "labels.jsonl"
                 if labels_out is not None and src_labels_path.exists():
@@ -233,6 +262,7 @@ def main() -> None:
                             labels_written_this_source += 1
 
                 total_transitions_written += transitions_written_this_source
+                total_subskill_written += subskill_written_this_source
                 total_labels_written += labels_written_this_source
 
                 source_reports.append(
@@ -240,6 +270,7 @@ def main() -> None:
                         "source_dir": str(src_dir),
                         "episodes_copied": len(src_episode_dirs),
                         "transitions_copied": transitions_written_this_source,
+                        "subskill_transitions_copied": subskill_written_this_source,
                         "labels_copied": labels_written_this_source,
                     }
                 )
@@ -248,11 +279,18 @@ def main() -> None:
                     f"Merged {src_dir}: "
                     f"episodes={len(src_episode_dirs)}, "
                     f"transitions={transitions_written_this_source}, "
+                    f"subskill={subskill_written_this_source}, "
                     f"labels={labels_written_this_source}"
                 )
         finally:
+            if subskill_out is not None:
+                subskill_out.close()
             if labels_out is not None:
                 labels_out.close()
+
+    # If subskill merging was enabled but nothing was written, remove empty file.
+    if not args.skip_subskill and output_subskill.exists() and total_subskill_written == 0:
+        output_subskill.unlink()
 
     # If labels merging was enabled but no labels were written, remove empty file.
     if not args.skip_labels and output_labels.exists() and total_labels_written == 0:
@@ -271,6 +309,7 @@ def main() -> None:
             "success": successful_episodes,
             "failed": total_episodes_written - successful_episodes,
             "transitions": total_transitions_written,
+            "subskill_transitions": total_subskill_written,
         },
         "timestamp": datetime.now().isoformat(),
         "merged_from": [str(path) for path in source_dirs],
@@ -284,6 +323,8 @@ def main() -> None:
     print(f"  Output:      {output_dir}")
     print(f"  Episodes:    {total_episodes_written}")
     print(f"  Transitions: {count_jsonl_lines(output_transitions)}")
+    if not args.skip_subskill and output_subskill.exists():
+        print(f"  Subskill:    {count_jsonl_lines(output_subskill)}")
     if not args.skip_labels and output_labels.exists():
         print(f"  Labels:      {count_jsonl_lines(output_labels)}")
 

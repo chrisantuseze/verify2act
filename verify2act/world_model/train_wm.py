@@ -569,7 +569,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly")
-    parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
+    parser.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl",
                         help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
                              "'transitions_subskill.jsonl').")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/wm")

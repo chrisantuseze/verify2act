@@ -9,16 +9,16 @@ For each transition in transitions.jsonl:
 
 Usage:
     xvfb-run -a python compute_labels.py \
-        --dataset-dir dataset/nut_assembly_seed_13 \
+        --dataset-dir dataset/nut_assembly_seed_42 \
         --env ClutteredNutAssembly \
-        --seed 13 \
+        --seed 42 \
         --initial-stacking-prob 0.0 \
         --output labels.jsonl
 """
 
-#import os
-#if 'MUJOCO_GL' not in os.environ:
-#    os.environ['MUJOCO_GL'] = 'glx'
+import os
+if 'MUJOCO_GL' not in os.environ:
+   os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import json
