@@ -185,10 +185,13 @@ def main():
     parser.add_argument("--auto-detect-cluttered-config", action="store_true")
     parser.add_argument("--max-round-search", type=int, default=8)
     parser.add_argument("--max-square-search", type=int, default=4)
+    parser.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl",
+                        help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
+                             "'transitions_subskill.jsonl').")
     args = parser.parse_args()
 
     dataset_dir = Path(args.dataset_dir)
-    transitions_path = dataset_dir / "transitions.jsonl"
+    transitions_path = dataset_dir / args.transitions_file
     if not transitions_path.exists():
         print(f"Error: {transitions_path} not found.")
         sys.exit(1)

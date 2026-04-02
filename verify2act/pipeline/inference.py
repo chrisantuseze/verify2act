@@ -39,13 +39,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))         # project root (contains verify2act/)
 
-from verify2act.critic.inference import CriticDecision, decide_replan
-from verify2act.critic.model import SpatialBetaPRMCritic
+from verify2act.critic.inference import (
+    CriticDecision,
+    check_rollout_consistency,
+    decide_from_proximity,
+)
+from verify2act.critic.model import DINOv2DualHeadCritic
 from verify2act.pipeline.env_wrapper import NutAssemblyEnvWrapper
 from verify2act.pipeline.planner import VLMPlanner
 from verify2act.pipeline.decompose import expand_nut_plan
@@ -75,6 +78,20 @@ def preprocess_image(img_np: np.ndarray) -> torch.Tensor:
     tensor = torch.from_numpy(arr).permute(2, 0, 1)     # [3, 512, 512]
     tensor = tensor * 2.0 - 1.0                          # [-1, 1]
     return tensor.unsqueeze(0)                            # [1, 3, 512, 512]
+
+
+def preprocess_image_for_critic(img_np: np.ndarray) -> torch.Tensor:
+    """Convert a ``[H, W, 3]`` uint8 image to ``[1, 3, 224, 224]`` in ``[-1, 1]``.
+
+    DINOv2 expects 224×224 input (patch size 14 → 16×16 patches).
+    The range [-1, 1] matches how training images were stored and what
+    ``DINOv2DualHeadCritic.encode()`` normalises internally.
+    """
+    img = Image.fromarray(img_np).resize((224, 224))
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    tensor = torch.from_numpy(arr).permute(2, 0, 1)
+    tensor = tensor * 2.0 - 1.0
+    return tensor.unsqueeze(0)                            # [1, 3, 224, 224]
 
 
 @torch.no_grad()
@@ -160,47 +177,45 @@ def run_episode(
     requery_world_model=None,
     horizon: int = 4,
     max_steps: int = 10,
-    theta_f: float = 0.4,
-    theta_u: float = 0.15,
+    theta_c: float = 0.5,
+    theta_p: float = 0.6,
     max_retries: int = 2,
     max_replans: int = 3,
     task_instruction: Optional[str] = None,
     device: str = "cuda",
     output_dir: Optional[str] = None,
 ) -> EpisodeTrace:
-    """Run a full Verify2Act inference episode.
+    """Run a full Verify2Act inference episode (DINOv2DualHeadCritic).
 
     Parameters
     ----------
     env_wrapper : NutAssemblyEnvWrapper
         The wrapped robosuite environment.
     vae : AutoencoderKL
-        Frozen VAE encoder used by both world model and critic.
+        Frozen VAE encoder — used only by the diffusion world model.
     world_model : WorldModelBase
         Primary world model for imagined rollouts.
     requery_world_model : WorldModelBase or None
-        Optional alternate world model used only during ``requery`` retries.
+        Optional alternate world model used during ``requery`` retries.
         If ``None``, retries reuse ``world_model``.
-    critic : SpatialBetaPRMCritic
-        Trained feasibility critic.
+    critic : DINOv2DualHeadCritic
+        Trained dual-head contrastive critic.
     planner : VLMPlanner
         GPT-4o VLM planner with propose/reflect methods.
     horizon : int
-        Maximum number of nuts per VLM planning call (typically equals the
-        total number of active nuts in the episode).
+        Maximum number of nuts per VLM planning call.
     max_steps : int
-        Maximum number of nut-assembly attempts per episode (one outer loop
-        iteration = one full nut pick-and-insert).
-    theta_f : float
-        Feasibility threshold (below ⇒ potential failure).
-    theta_u : float
-        Uncertainty threshold (below ⇒ critic is confident).
+        Maximum nut-assembly attempts per episode.
+    theta_c : float
+        Temporal consistency threshold (Head 2). Frames below → requery.
+    theta_p : float
+        Goal proximity threshold (Head 1). Final frame below → reflect.
     max_retries : int
-        World-model re-samples on uncertain (requery) decisions.
+        World-model re-samples on ``requery`` decisions.
     max_replans : int
         Maximum reflect-replan cycles per timestep.
     device : str
-        Torch device.
+        Torch device string.
     output_dir : str or None
         If set, save episode traces and images here.
 
@@ -213,9 +228,14 @@ def run_episode(
     out_path = Path(output_dir) if output_dir else None
     critic.eval()
 
+    if not isinstance(critic, DINOv2DualHeadCritic):
+        raise TypeError("run_episode expects DINOv2DualHeadCritic")
+
     # ── Reset environment ──────────────────────────────────────────────
     obs, goal_image_np = env_wrapper.reset()
-    z_goal = encode_image(vae, goal_image_np, device=torch_device)
+    goal_img_224 = preprocess_image_for_critic(goal_image_np).to(torch_device)
+    with torch.no_grad():
+        e_goal = critic.encode(goal_img_224)
     obj_labels = env_wrapper.get_obj_labels()
     task_instruction = task_instruction or env_wrapper.get_task_instruction()
     history: List[str] = []
@@ -250,9 +270,12 @@ def run_episode(
             step_failed = False
 
             # Expand nut names to (nut_name, sub_skill_prompt) pairs.
-            # The world model imagines at sub-skill granularity; real execution
-            # and VLM reflection always operate at nut-name granularity.
             imagination_steps = expand_nut_plan(plan)
+
+            # Track previous frame embedding for Head 2 (temporal consistency)
+            cur_img_224 = preprocess_image_for_critic(current_image_np).to(torch_device)
+            with torch.no_grad():
+                e_prev = critic.encode(cur_img_224)
 
             for k, (hl_action, imagine_action) in enumerate(imagination_steps):
                 # ── 'done' terminates the imagination loop cleanly ──────
@@ -271,87 +294,105 @@ def run_episode(
                     )
 
                 # ── Critic evaluation ──────────────────────────────────
-                z_t1 = encode_image(vae, imagined_img_next, device=torch_device)
+                img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
                 with torch.no_grad():
-                    critic_out = critic(z_t1, z_goal)
-                mean_f = critic_out["mean_feasibility"].item()
-                uncert = critic_out["uncertainty"].item()
-                all_scores.append((mean_f, uncert))
+                    e_next = critic.encode(img_224)
+                    tc_score = critic.temporal_sim(e_prev, e_next).item()
+                all_scores.append((tc_score, 0.0))
 
-                decision = decide_replan(mean_f, uncert, theta_f, theta_u)
+                decision = check_rollout_consistency(tc_score, theta_c)
                 step_record.critic_decisions.append(
-                    f"k={k} action='{imagine_action}' μ={mean_f:.3f} σ²={uncert:.4f} → {decision.action}"
+                    f"k={k} action='{imagine_action}' tc={tc_score:.3f} → {decision.action}"
                 )
                 logger.info(
-                    "  k=%d  action='%s'  feasibility=%.3f  uncertainty=%.4f  → %s",
-                    k, imagine_action, mean_f, uncert, decision.action,
+                    "  k=%d  action='%s'  temporal_sim=%.3f  → %s",
+                    k, imagine_action, tc_score, decision.action,
                 )
 
-                # ── Requery: re-sample world model on high uncertainty ─
                 if decision.action == "requery":
                     retry_wm = requery_world_model or world_model
                     for retry_i in range(max_retries):
                         imagined_img_next = retry_wm.imagine(imagined_img, imagine_action)
-                        z_t1 = encode_image(vae, imagined_img_next, device=torch_device)
+                        img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
                         with torch.no_grad():
-                            critic_out = critic(z_t1, z_goal)
-                        mean_f = critic_out["mean_feasibility"].item()
-                        uncert = critic_out["uncertainty"].item()
-                        all_scores[-1] = (mean_f, uncert)
-
-                        decision = decide_replan(mean_f, uncert, theta_f, theta_u)
+                            e_next = critic.encode(img_224)
+                            tc_score = critic.temporal_sim(e_prev, e_next).item()
+                        all_scores[-1] = (tc_score, 0.0)
+                        decision = check_rollout_consistency(tc_score, theta_c)
                         logger.info(
-                            "    requery %d/%d  feasibility=%.3f  uncertainty=%.4f  → %s",
-                            retry_i + 1, max_retries, mean_f, uncert, decision.action,
+                            "    requery %d/%d  tc=%.3f  → %s",
+                            retry_i + 1, max_retries, tc_score, decision.action,
                         )
                         if decision.action != "requery":
                             break
                     else:
-                        # Exhausted retries — escalate to reflection.
-                        decision = CriticDecision(
-                            action="reflect", reason="requery_exhausted"
-                        )
+                        decision = CriticDecision(action="reflect", reason="requery_exhausted")
 
-                # ── Reflect: confident failure ─────────────────────────
                 if decision.action == "reflect":
                     step_record.failed_step = k
                     step_record.replan_attempts = replan_attempt + 1
-
-                    # Sub-skill list for the critic context (length = k+1 scores).
                     reflect_plan = [s for _, s in imagination_steps]
                     ctx = build_reflection_context(
                         imagined_state=imagined_img_next,
-                        z_t1=z_t1,
-                        z_goal=z_goal,
-                        diff_map=diff_map,
-                        critic=critic,
                         all_scores=all_scores,
+                        consistency_scores=[s for s, _ in all_scores],
+                        proximity_score=None,
                         failed_step=k,
                         full_plan=reflect_plan,
                     )
-                    # Expose the nut name for the reflect message.
                     ctx["failed_highlevel_action"] = hl_action
                     result = planner.reflect(
                         current_image_np, goal_image_np,
                         history, obj_labels, plan, ctx,
                         task_instruction=task_instruction,
                     )
-                    revised_plan = result["revised_plan"]
-                    analysis = result.get("analysis", "")
-
-                    step_record.reflection_analyses.append(analysis)
-                    logger.info(
-                        "  REFLECT at step %d (sub-skill '%s' / nut '%s'): %s → revised: %s",
-                        k, imagine_action, hl_action, analysis, revised_plan,
-                    )
-
-                    plan = revised_plan
+                    plan = result["revised_plan"]
+                    step_record.reflection_analyses.append(result.get("analysis", ""))
                     step_record.plan = list(plan)
                     step_failed = True
                     break
 
-                # ── Continue: step passed — chain forward ──────────────
+                e_prev = e_next
                 imagined_img = imagined_img_next
+
+            # ── Head 1 gate: final proximity check (DINOv2 only) ──────────
+            if not step_failed and not plan_accepted:
+                # e_prev is now the final imagined frame embedding
+                with torch.no_grad():
+                    prox_score = critic.goal_sim(e_prev, e_goal).item()
+
+                # Update last score tuple with the proximity score
+                if all_scores:
+                    last_tc = all_scores[-1][0]
+                    all_scores[-1] = (last_tc, prox_score)
+
+                prox_decision = decide_from_proximity(prox_score, theta_p)
+                logger.info(
+                    "  HEAD1 proximity=%.3f  → %s", prox_score, prox_decision.action
+                )
+
+                if prox_decision.action == "reflect":
+                    step_record.failed_step = len(imagination_steps) - 1
+                    step_record.replan_attempts = replan_attempt + 1
+                    reflect_plan = [s for _, s in imagination_steps]
+                    ctx = build_reflection_context(
+                        imagined_state=imagined_img,
+                        all_scores=all_scores,
+                        consistency_scores=[s for s, _ in all_scores],
+                        proximity_score=prox_score,
+                        failed_step=step_record.failed_step,
+                        full_plan=reflect_plan,
+                    )
+                    ctx["failed_highlevel_action"] = imagination_steps[-1][0]
+                    result = planner.reflect(
+                        current_image_np, goal_image_np,
+                        history, obj_labels, plan, ctx,
+                        task_instruction=task_instruction,
+                    )
+                    plan = result["revised_plan"]
+                    step_record.reflection_analyses.append(result.get("analysis", ""))
+                    step_record.plan = list(plan)
+                    step_failed = True
 
             if not step_failed:
                 plan_accepted = True
@@ -468,9 +509,10 @@ def _build_env(args: argparse.Namespace):
     return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
 
 
-def _build_critic(args: argparse.Namespace, device: torch.device) -> SpatialBetaPRMCritic:
-    torch_dtype = _dtype_from_name(args.dtype)
-    critic = SpatialBetaPRMCritic().to(device=device, dtype=torch_dtype)
+def _build_critic(
+    args: argparse.Namespace, device: torch.device
+) -> DINOv2DualHeadCritic:
+    """Load DINOv2 critic checkpoint."""
     ckpt = torch.load(args.critic_ckpt, map_location=device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         state_dict = ckpt["model_state_dict"]
@@ -478,8 +520,9 @@ def _build_critic(args: argparse.Namespace, device: torch.device) -> SpatialBeta
         state_dict = ckpt["state_dict"]
     else:
         state_dict = ckpt
-    critic.load_state_dict(state_dict)
-    critic.to(dtype=torch_dtype)
+
+    critic = DINOv2DualHeadCritic(pretrained=False).to(device)
+    critic.load_state_dict(state_dict, strict=True)
     critic.eval()
     return critic
 
@@ -550,7 +593,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
     parser.add_argument("--vae-subfolder", default="vae")
 
-    parser.add_argument("--critic-ckpt", default="verify2act/output/prm/best_prm_critic.pt")
+    parser.add_argument("--critic-ckpt", default="verify2act/output/contrastive/best_contrastive_critic.pt")
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gpt-4o")
@@ -568,8 +611,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--horizon", type=int, default=4)
     parser.add_argument("--max-steps", type=int, default=10)
-    parser.add_argument("--theta-f", type=float, default=0.4)
-    parser.add_argument("--theta-u", type=float, default=0.15)
+    parser.add_argument("--theta-c", type=float, default=0.5)
+    parser.add_argument("--theta-p", type=float, default=0.6)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--max-replans", type=int, default=3)
     parser.add_argument("--seed", type=int, default=None)
@@ -633,8 +676,8 @@ def main() -> int:
         planner=planner,
         horizon=args.horizon,
         max_steps=args.max_steps,
-        theta_f=args.theta_f,
-        theta_u=args.theta_u,
+        theta_c=args.theta_c,
+        theta_p=args.theta_p,
         max_retries=args.max_retries,
         max_replans=args.max_replans,
         device=args.device,

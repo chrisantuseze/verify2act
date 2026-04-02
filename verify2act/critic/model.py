@@ -1,212 +1,190 @@
-from dataclasses import dataclass
-from typing import Dict
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# ── ImageNet normalisation constants (shared) ──────────────────────────────────
 
-# ── Beta distribution helpers ──────────────────────────────────────────────────
-
-@dataclass
-class BetaOutputs:
-    alpha: torch.Tensor
-    beta: torch.Tensor
-    mean_feasibility: torch.Tensor
-    uncertainty: torch.Tensor
+_IMAGENET_MEAN = [0.485, 0.456, 0.406]
+_IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 
-def beta_mean(alpha: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
-    return alpha / (alpha + beta)
+# ══════════════════════════════════════════════════════════════════════════════
+# DINOv2 Dual-Head Contrastive Critic (primary model)
+# ══════════════════════════════════════════════════════════════════════════════
 
-
-def beta_variance(alpha: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
-    denom = (alpha + beta) ** 2 * (alpha + beta + 1.0)
-    return (alpha * beta) / denom
-
-
-# ── CNN tokenizer ──────────────────────────────────────────────────────────────
-
-class CNNTokenizer(nn.Module):
+class DINOv2DualHeadCritic(nn.Module):
     """
-    Maps a VAE latent [B, 4, 64, 64] to a spatial token sequence [B, N, token_dim]
-    using two strided convolutions: 64 -> 32 -> 16, so N = 16*16 = 256.
+    Contrastive goal-proximity and temporal-consistency critic.
+
+    Architecture
+    ────────────
+        Image [B, 3, H, W]  (any size; resized to 224×224 internally)
+            │
+        DINOv2-B/14 backbone  (frozen initially; fully fine-tuned in phase 2)
+            → patch tokens [B, 256, 768]  (256 = 16×16 patches for 224px)
+            │
+        Mean pool over patch dim → [B, 768]
+            │
+        ┌───┴───┐
+        Head 1  Head 2
+        Goal    Temporal
+        Prox.   Consist.
+        768→256 768→256
+        (outputs L2-normalised for cosine similarity)
+
+    Inference
+    ─────────
+        # Cache goal embedding once per episode
+        e_goal = critic.encode(goal_img)                       # [1, 768]
+
+        # For each imagined step:
+        e_t  = critic.encode(img_t)                            # [1, 768]
+        e_t1 = critic.encode(img_t1)                           # [1, 768]
+        consistency = critic.temporal_sim(e_t, e_t1)           # scalar  ← abort if low
+        proximity   = critic.goal_sim(e_H, e_goal)             # scalar  ← check at end
+
+    ~86M backbone + ~400k head parameters.
     """
 
-    def __init__(self, in_channels: int = 4, token_dim: int = 128):
+    EMBED_DIM = 768   # DINOv2-B/14 patch embedding dimension
+    HEAD_DIM  = 256   # projection head output dimension
+
+    def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None):
         super().__init__()
-        mid = token_dim // 2
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid, kernel_size=3, stride=2, padding=1),  # 64->32
-            nn.GroupNorm(8, mid),
-            nn.GELU(),
-            nn.Conv2d(mid, token_dim, kernel_size=3, stride=2, padding=1),   # 32->16
-            nn.GroupNorm(8, token_dim),
-            nn.GELU(),
+
+        # ── Backbone ──────────────────────────────────────────────────────────
+        self.backbone = torch.hub.load(
+            "facebookresearch/dinov2",
+            "dinov2_vitb14",
+            pretrained=pretrained,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, C, 64, 64] -> [B, token_dim, 16, 16] -> [B, 256, token_dim]
-        feat = self.conv(x)
-        B, C, H, W = feat.shape
-        return feat.flatten(2).transpose(1, 2)  # [B, H*W, C]
-
-
-# ── Transformer building blocks ────────────────────────────────────────────────
-
-class SelfAttentionBlock(nn.Module):
-    """Multi-head self-attention + residual + LayerNorm + FFN."""
-
-    def __init__(self, token_dim: int, n_heads: int, ffn_mult: int = 4, dropout: float = 0.1):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(token_dim)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=token_dim, num_heads=n_heads, dropout=dropout, batch_first=True
+        # DINOv2 expects ImageNet-normalised input; we receive [-1, 1] images
+        self.register_buffer(
+            "img_mean",
+            torch.tensor(_IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1),
         )
-        self.norm2 = nn.LayerNorm(token_dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(token_dim, token_dim * ffn_mult),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(token_dim * ffn_mult, token_dim),
-            nn.Dropout(dropout),
+        self.register_buffer(
+            "img_std",
+            torch.tensor(_IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Self-attention with pre-norm and residual
-        h = self.norm1(x)
-        attn_out, _ = self.attn(h, h, h)
-        x = x + attn_out
-        # FFN with pre-norm and residual
-        x = x + self.ffn(self.norm2(x))
-        return x
+        # ── Projection heads ──────────────────────────────────────────────────
+        def _make_head(hidden: Optional[int]) -> nn.Module:
+            if hidden is None:
+                return nn.Linear(self.EMBED_DIM, self.HEAD_DIM, bias=False)
+            return nn.Sequential(
+                nn.Linear(self.EMBED_DIM, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, self.HEAD_DIM, bias=False),
+            )
 
+        self.head1 = _make_head(head_hidden)   # goal proximity (Head 1)
+        self.head2 = _make_head(head_hidden)   # temporal consistency (Head 2)
 
-class CrossAttentionBlock(nn.Module):
-    """Multi-head cross-attention + residual + LayerNorm + FFN.
+        self.freeze_backbone()
 
-    Queries come from z_t1 tokens; keys/values from z_goal tokens.
-    Each z_t1 spatial location attends to all z_goal spatial locations,
-    which is exactly the relational reasoning needed for nut-peg alignment.
-    """
+    # ── Backbone freeze / unfreeze ─────────────────────────────────────────────
 
-    def __init__(self, token_dim: int, n_heads: int, ffn_mult: int = 4, dropout: float = 0.1):
-        super().__init__()
-        self.norm_q = nn.LayerNorm(token_dim)
-        self.norm_kv = nn.LayerNorm(token_dim)
-        self.attn = nn.MultiheadAttention(
-            embed_dim=token_dim, num_heads=n_heads, dropout=dropout, batch_first=True
-        )
-        self.norm2 = nn.LayerNorm(token_dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(token_dim, token_dim * ffn_mult),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(token_dim * ffn_mult, token_dim),
-            nn.Dropout(dropout),
-        )
+    def freeze_backbone(self) -> None:
+        """Freeze all backbone parameters (heads remain trainable)."""
+        for p in self.backbone.parameters():
+            p.requires_grad_(False)
 
-    def forward(self, x_t1: torch.Tensor, x_goal: torch.Tensor) -> torch.Tensor:
-        q = self.norm_q(x_t1)
-        kv = self.norm_kv(x_goal)
-        attn_out, _ = self.attn(q, kv, kv)
-        x = x_t1 + attn_out
-        x = x + self.ffn(self.norm2(x))
-        return x
+    def unfreeze_backbone(self) -> None:
+        """Unfreeze entire backbone for full fine-tuning."""
+        for p in self.backbone.parameters():
+            p.requires_grad_(True)
 
+    # ── Internal helpers ───────────────────────────────────────────────────────
 
-# ── Main critic model ──────────────────────────────────────────────────────────
+    def _normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """Convert [-1, 1] image to DINOv2 ImageNet normalisation, resize to 224."""
+        x = (x * 0.5 + 0.5).clamp(0.0, 1.0)               # [0, 1]
+        if x.shape[-2:] != (224, 224):
+            x = F.interpolate(x, size=(224, 224), mode="bilinear", align_corners=False)
+        return (x - self.img_mean) / self.img_std
 
-class SpatialBetaPRMCritic(nn.Module):
-    """
-    PRM critic with 2-layer transformer encoder operating on VAE latents.
+    # ── Public API ─────────────────────────────────────────────────────────────
 
-    Pipeline:
-        z_t1, z_goal  [B, 4, 64, 64]
-            │
-        Shared CNN tokenizer  →  z_t1_tokens, z_goal_tokens  [B, 256, token_dim]
-            │
-        diff_tokens = z_t1_tokens - z_goal_tokens  (spatial difference in token space)
-        x_t1 = z_t1_tokens + diff_tokens           (residual: where does z_t1 deviate from goal?)
-            │
-        Layer 1: SelfAttentionBlock(x_t1)           (z_t1 tokens reason about themselves)
-            │
-        Layer 2: CrossAttentionBlock(x_t1, z_goal_tokens)  (z_t1 queries against goal)
-            │
-        Mean-pool over tokens  →  [B, token_dim]
-            │
-        Dual Beta head  →  alpha, beta, mean_feasibility, uncertainty
+    def encode(self, img: torch.Tensor) -> torch.Tensor:
+        """Encode a [-1, 1] image to a mean-pooled DINOv2 patch embedding.
 
-    VAE latent shapes:  z_t1 / z_goal  [B, 4, 64, 64]
-    N tokens after CNN: 16 * 16 = 256
-    """
+        Parameters
+        ----------
+        img : [B, 3, H, W]
 
-    def __init__(
+        Returns
+        -------
+        embed : [B, 768]  (NOT L2-normalised — normalise after projection)
+        """
+        x = self._normalize(img.float())
+        feats = self.backbone.forward_features(x)
+        patch_tokens = feats["x_norm_patchtokens"]   # [B, N, 768]
+        return patch_tokens.mean(dim=1)               # [B, 768]
+
+    def project(self, embed: torch.Tensor, head: int) -> torch.Tensor:
+        """Apply projection head and L2-normalise.
+
+        Parameters
+        ----------
+        embed : [B, 768]  raw patch-mean embedding from encode()
+        head  : 1 (goal proximity) or 2 (temporal consistency)
+
+        Returns
+        -------
+        proj : [B, 256]  L2-normalised projection embedding
+        """
+        h = self.head1 if head == 1 else self.head2
+        return F.normalize(h(embed), dim=-1)
+
+    def goal_sim(self, embed_frame: torch.Tensor, embed_goal: torch.Tensor) -> torch.Tensor:
+        """Cosine similarity via Head 1 (goal proximity).
+
+        Parameters
+        ----------
+        embed_frame, embed_goal : [B, 768]  outputs of encode()
+
+        Returns
+        -------
+        sim : [B]  cosine similarity in [-1, 1]
+        """
+        return (self.project(embed_frame, 1) * self.project(embed_goal, 1)).sum(dim=-1)
+
+    def temporal_sim(self, embed_t: torch.Tensor, embed_t1: torch.Tensor) -> torch.Tensor:
+        """Cosine similarity via Head 2 (temporal consistency).
+
+        Parameters
+        ----------
+        embed_t, embed_t1 : [B, 768]  outputs of encode()
+
+        Returns
+        -------
+        sim : [B]  cosine similarity in [-1, 1]
+        """
+        return (self.project(embed_t, 2) * self.project(embed_t1, 2)).sum(dim=-1)
+
+    def forward(
         self,
-        latent_channels: int = 4,
-        token_dim: int = 128,
-        n_heads: int = 4,
-        ffn_mult: int = 4,
-        head_dim: int = 64,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-        assert token_dim % n_heads == 0, "token_dim must be divisible by n_heads"
+        img_query: torch.Tensor,
+        img_key: torch.Tensor,
+        head: int = 1,
+    ) -> torch.Tensor:
+        """Convenience: encode two images and return cosine similarity.
 
-        # Shared tokenizer used for both z_t1 and z_goal
-        self.tokenizer = CNNTokenizer(in_channels=latent_channels, token_dim=token_dim)
+        Parameters
+        ----------
+        img_query, img_key : [B, 3, H, W]  in [-1, 1]
+        head : 1 (goal proximity) or 2 (temporal consistency)
 
-        # Layer 1: self-attention within z_t1 token sequence
-        self.self_attn = SelfAttentionBlock(
-            token_dim=token_dim, n_heads=n_heads, ffn_mult=ffn_mult, dropout=dropout
-        )
+        Returns
+        -------
+        sim : [B]
+        """
+        e_q = self.encode(img_query)
+        e_k = self.encode(img_key)
+        fn = self.goal_sim if head == 1 else self.temporal_sim
+        return fn(e_q, e_k)
 
-        # Layer 2: cross-attention, z_t1 tokens attend to z_goal tokens
-        self.cross_attn = CrossAttentionBlock(
-            token_dim=token_dim, n_heads=n_heads, ffn_mult=ffn_mult, dropout=dropout
-        )
-
-        self.norm_out = nn.LayerNorm(token_dim)
-
-        self.alpha_head = nn.Sequential(
-            nn.Linear(token_dim, head_dim),
-            nn.GELU(),
-            nn.Linear(head_dim, 1),
-        )
-        self.beta_head = nn.Sequential(
-            nn.Linear(token_dim, head_dim),
-            nn.GELU(),
-            nn.Linear(head_dim, 1),
-        )
-
-        self.softplus = nn.Softplus()
-        self.eps = 1e-6
-
-    def forward(self, z_t1: torch.Tensor, z_goal: torch.Tensor) -> Dict[str, torch.Tensor]:
-        # Tokenise both latents with the shared CNN
-        t1_tokens = self.tokenizer(z_t1)       # [B, 256, token_dim]
-        goal_tokens = self.tokenizer(z_goal)   # [B, 256, token_dim]
-
-        # Use t1 tokens directly; cross-attention will handle the goal relationship.
-        # (Avoid the 2*t1 - goal collapse from adding diff back onto t1.)
-        x = t1_tokens                          # [B, 256, token_dim]
-
-        # Layer 1: z_t1 tokens reason about themselves
-        x = self.self_attn(x)
-
-        # Layer 2: z_t1 tokens attend to goal tokens
-        x = self.cross_attn(x, goal_tokens)
-
-        # Pool over spatial tokens → single feature vector
-        x = self.norm_out(x)
-        x = x.mean(dim=1)                      # [B, token_dim]
-
-        alpha = self.softplus(self.alpha_head(x)) + self.eps   # [B, 1]
-        beta  = self.softplus(self.beta_head(x))  + self.eps   # [B, 1]
-
-        return {
-            "alpha": alpha,
-            "beta": beta,
-            "mean_feasibility": beta_mean(alpha, beta),
-            "uncertainty": beta_variance(alpha, beta),
-        }

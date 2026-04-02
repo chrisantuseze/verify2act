@@ -1,175 +1,75 @@
 """Reflection mechanism — builds enriched critic failure context.
 
-Three layers of analysis when the critic rejects an imagined trajectory:
+After the DINOv2DualHeadCritic rejects an imagined trajectory, this module
+assembles the failure context that is passed to the VLM planner's reflect():
   1. Trajectory trend analysis  (``classify_failure_pattern``)
-  2. Spatial attribution         (``get_worst_region``)
-  3. Grad-CAM overlay            (``compute_gradcam``, ``make_gradcam_overlay``)
+  2. Context assembly           (``build_reflection_context``)
 
-The top-level ``build_reflection_context()`` assembles all three into a
-dict that is consumed by ``PromptManager.build_reflect_messages()``.
+Note: the diff-map spatial attribution and Grad-CAM overlay from the
+legacy ResNetBetaPRMCritic are intentionally removed — DINOv2 is a ViT
+without Conv2d layers, so Grad-CAM does not apply; the diffusion world
+model does not expose a latent diff map in pixel space.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
-import torch.nn.functional as F
-from PIL import Image
 
 
 # ---------------------------------------------------------------------------
 # Layer 1 — Trajectory trend analysis
 # ---------------------------------------------------------------------------
 
-def classify_failure_pattern(all_scores: List[Tuple[float, float]]) -> str:
-    """Return a human-readable summary of how feasibility evolved.
+def classify_failure_pattern(
+    consistency_scores: List[float],
+    proximity_score: Optional[float],
+) -> str:
+    """Return a human-readable summary of how the rollout quality evolved.
 
     Parameters
     ----------
-    all_scores : list of (mean_feasibility, uncertainty) for steps 0..k
+    consistency_scores : list of Head-2 cosine similarities for each imagined step
+    proximity_score : Head-1 cosine similarity between final frame and goal,
+                      or ``None`` if the rollout was aborted early (consistency failure).
     """
-    scores = [s for s, _ in all_scores]
-    k = len(scores) - 1
+    if not consistency_scores:
+        return "no imagined frames were evaluated"
 
-    if all(s < 0.4 for s in scores):
+    k = len(consistency_scores)
+
+    if proximity_score is None:
+        # Early abort path (temporal consistency failure)
+        worst_idx = int(np.argmin(consistency_scores))
+        worst_val = consistency_scores[worst_idx]
         return (
-            "the initial planned action is fundamentally misaligned with the goal "
-            "(feasibility was low from step 0)"
+            f"the world model produced an incoherent transition at step {worst_idx} "
+            f"(temporal consistency dropped to {worst_val:.3f}); "
+            "this suggests a diffusion artifact rather than a plan error"
         )
 
-    delta = scores[k] - scores[k - 1] if k > 0 else 0
-    kind = "sudden" if delta < -0.3 else "gradual"
+    if all(s < 0.3 for s in consistency_scores):
+        return (
+            f"all {k} imagined frames had low temporal consistency; "
+            "the world model may be sampling implausible trajectories"
+        )
 
+    if proximity_score < 0.3:
+        return (
+            f"the plan was physically plausible (mean tc={np.mean(consistency_scores):.3f}) "
+            f"but the final imagined state is far from the goal (proximity={proximity_score:.3f}); "
+            "the sequence of actions will not reach the target configuration"
+        )
+
+    # Intermediate proximity case
+    delta = consistency_scores[-1] - consistency_scores[0] if k > 1 else 0.0
+    kind = "improving" if delta > 0.05 else ("degrading" if delta < -0.05 else "stable")
     return (
-        f"the plan was progressing until step {k}, where a {kind} failure occurred "
-        f"(scores: {[f'{s:.2f}' for s in scores]})"
+        f"the plan is partially aligned (proximity={proximity_score:.3f}) but insufficient; "
+        f"temporal consistency was {kind} across {k} steps "
+        f"(scores: {[f'{s:.2f}' for s in consistency_scores]})"
     )
-
-
-# ---------------------------------------------------------------------------
-# Layer 2 — Spatial attribution from latent diff map
-# ---------------------------------------------------------------------------
-
-def get_worst_region(diff_map: torch.Tensor) -> Tuple[str, Dict[str, float]]:
-    """Identify the 3×3 grid cell with highest goal mismatch.
-
-    Parameters
-    ----------
-    diff_map : [1, 4, 64, 64] tensor  (z_t1 − z_goal)
-
-    Returns
-    -------
-    worst_label : str    e.g. "center", "top-left"
-    grid_scores : dict   mapping region name → mean L2 norm in that cell
-    """
-    pixel_diff = diff_map.norm(dim=1).squeeze(0)  # [64, 64]
-
-    region_labels = [
-        ["top-left",    "top-center",    "top-right"],
-        ["middle-left", "center",        "middle-right"],
-        ["bottom-left", "bottom-center", "bottom-right"],
-    ]
-
-    H, W = pixel_diff.shape
-    grid_scores: Dict[str, float] = {}
-    for row in range(3):
-        for col in range(3):
-            r0, r1 = row * H // 3, (row + 1) * H // 3
-            c0, c1 = col * W // 3, (col + 1) * W // 3
-            label = region_labels[row][col]
-            grid_scores[label] = pixel_diff[r0:r1, c0:c1].mean().item()
-
-    worst = max(grid_scores, key=grid_scores.get)
-    return worst, grid_scores
-
-
-# ---------------------------------------------------------------------------
-# Layer 3 — Grad-CAM overlay
-# ---------------------------------------------------------------------------
-
-def _find_last_conv_module(model: torch.nn.Module) -> torch.nn.Module:
-    """Return the last Conv2d module in a model for Grad-CAM hooks."""
-    last_conv = None
-    for mod in model.modules():
-        if isinstance(mod, torch.nn.Conv2d):
-            last_conv = mod
-    if last_conv is None:
-        raise ValueError("No Conv2d module found in critic; cannot compute Grad-CAM.")
-    return last_conv
-
-def compute_gradcam(
-    critic: torch.nn.Module,
-    z_t1: torch.Tensor,
-    z_goal: torch.Tensor,
-) -> np.ndarray:
-    """Compute a Grad-CAM heatmap from the critic's last conv layer.
-
-    Parameters
-    ----------
-    critic : SpatialBetaPRMCritic (or any critic with Conv2d layers)
-    z_t1 : [1, 4, 64, 64]  current/imagined state latent
-    z_goal : [1, 4, 64, 64]  goal state latent
-
-    Returns
-    -------
-    cam : [512, 512] float32 array in [0, 1]
-    """
-    critic.eval()
-    activations: Dict[str, torch.Tensor] = {}
-    gradients: Dict[str, torch.Tensor] = {}
-
-    def _save_act(m, inp, out):
-        activations["feat"] = out.detach()
-
-    def _save_grad(m, grad_in, grad_out):
-        gradients["feat"] = grad_out[0].detach()
-
-    target_layer = _find_last_conv_module(critic)
-    hook_a = target_layer.register_forward_hook(_save_act)
-    hook_g = target_layer.register_full_backward_hook(_save_grad)
-
-    try:
-        critic.zero_grad(set_to_none=True)
-        z_t1 = z_t1.detach().requires_grad_(True)
-        z_goal = z_goal.detach().requires_grad_(True)
-        out = critic(z_t1, z_goal)
-        mean_f = out["mean_feasibility"]
-        mean_f.sum().backward()
-    finally:
-        hook_a.remove()
-        hook_g.remove()
-
-    if "feat" not in activations or "feat" not in gradients:
-        raise RuntimeError("Grad-CAM hooks did not capture activations/gradients.")
-
-    weights = gradients["feat"].mean(dim=(-2, -1), keepdim=True)  # [1, C, 1, 1]
-    cam = (weights * activations["feat"]).sum(dim=1, keepdim=True).relu()  # [1, 1, h, w]
-    cam = F.interpolate(cam, size=(512, 512), mode="bilinear", align_corners=False)
-    cam = cam.squeeze().cpu().numpy()
-    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    return cam
-
-
-def make_gradcam_overlay(imagined_img_np: np.ndarray, cam: np.ndarray) -> Image.Image:
-    """Blend a Grad-CAM heatmap onto the imagined scene.
-
-    Parameters
-    ----------
-    imagined_img_np : [512, 512, 3] uint8
-    cam : [512, 512] float32 in [0, 1]
-
-    Returns
-    -------
-    PIL Image with red-hot heatmap overlaid at 50% opacity.
-    """
-    import matplotlib.cm as cm
-
-    heatmap = cm.hot(cam)[:, :, :3]  # [512, 512, 3] float
-    heatmap_uint8 = (heatmap * 255).astype(np.uint8)
-    overlay = (0.5 * imagined_img_np + 0.5 * heatmap_uint8).astype(np.uint8)
-    return Image.fromarray(overlay)
 
 
 # ---------------------------------------------------------------------------
@@ -178,42 +78,39 @@ def make_gradcam_overlay(imagined_img_np: np.ndarray, cam: np.ndarray) -> Image.
 
 def build_reflection_context(
     imagined_state: np.ndarray,
-    z_t1: torch.Tensor,
-    z_goal: torch.Tensor,
-    diff_map: torch.Tensor,
-    critic: torch.nn.Module,
     all_scores: List[Tuple[float, float]],
+    consistency_scores: List[float],
+    proximity_score: Optional[float],
     failed_step: int,
     full_plan: List[str],
 ) -> Dict[str, Any]:
-    """Assemble the full reflection context dict.
+    """Assemble the reflection context dict consumed by VLMPlanner.reflect().
 
-    This is passed as ``ctx`` to ``PromptManager.build_reflect_messages()``
-    and to ``VLMPlanner.reflect()``.
+    Parameters
+    ----------
+    imagined_state : [H, W, 3] uint8 numpy array of the last imagined frame.
+    all_scores : raw per-step score tuples for backward compatibility logging.
+    consistency_scores : list of Head-2 temporal consistency scores (one per step).
+    proximity_score : Head-1 goal proximity score for the final frame, or ``None``
+                      if the rollout was aborted early.
+    failed_step : index into ``full_plan`` where failure was detected.
+    full_plan : full list of sub-skill strings generated for this rollout.
     """
     if failed_step < 0 or failed_step >= len(full_plan):
-        raise IndexError(f"failed_step={failed_step} out of range for plan length {len(full_plan)}")
-    if failed_step >= len(all_scores):
-        raise IndexError(f"failed_step={failed_step} out of range for all_scores length {len(all_scores)}")
+        raise IndexError(
+            f"failed_step={failed_step} out of range for plan length {len(full_plan)}"
+        )
 
-    mean_f = all_scores[failed_step][0]
-    uncert = all_scores[failed_step][1]
-
-    failure_pattern = classify_failure_pattern(all_scores)
-    worst_region, grid_scores = get_worst_region(diff_map)
-    cam = compute_gradcam(critic, z_t1, z_goal)
-    gradcam_overlay = make_gradcam_overlay(imagined_state, cam)
+    failure_pattern = classify_failure_pattern(consistency_scores, proximity_score)
 
     return {
-        "imagined_state":   imagined_state,
-        "gradcam_overlay":  gradcam_overlay,
-        "mean_feasibility": mean_f,
-        "uncertainty":      uncert,
-        "all_scores":       all_scores,
-        "failure_pattern":  failure_pattern,
-        "worst_region":     worst_region,
-        "grid_scores":      grid_scores,
-        "failed_step":      failed_step,
-        "failed_action":    full_plan[failed_step],
-        "full_plan":        full_plan,
+        "imagined_state":     imagined_state,
+        "all_scores":         all_scores,
+        "consistency_scores": consistency_scores,
+        "proximity_score":    proximity_score,
+        "failure_pattern":    failure_pattern,
+        "failed_step":        failed_step,
+        "failed_action":      full_plan[failed_step],
+        "full_plan":          full_plan,
     }
+
