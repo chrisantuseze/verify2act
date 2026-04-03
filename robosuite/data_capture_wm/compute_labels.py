@@ -155,7 +155,7 @@ def check_reachability(
         action, policy_done = policy.step()
         obs, reward, env_done, info = env.step(action)
         policy.obs = obs
-        if env_done:
+        if info.get("success", False):
             return True
         if policy_done:
             break

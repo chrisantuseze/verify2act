@@ -13,6 +13,7 @@ Transition output modes:
 """
 
 import sys
+import io
 import json
 import numpy as np
 from pathlib import Path
@@ -83,9 +84,9 @@ class EpisodeRecorder:
         self.episode_dir = self.output_root / "episodes" / self.episode_id
         self.episode_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save frame 0 and initial sim state
-        self._save_frame(0)
-        self._save_sim_state(0)
+        # Buffer frame 0 and initial sim state in memory
+        self._buffer_frame(0)
+        self._buffer_sim_state(0)
         self._active = True
 
     def record_step(
@@ -131,9 +132,9 @@ class EpisodeRecorder:
         t1 = t + 1
         self._step_count = t1
 
-        # Save frame t+1 and sim state t+1
-        self._save_frame(t1)
-        self._save_sim_state(t1)
+        # Buffer frame t+1 and sim state t+1 in memory
+        self._buffer_frame(t1)
+        self._buffer_sim_state(t1)
 
         step_record = {
             "episode_id": self.episode_id,
@@ -194,40 +195,47 @@ class EpisodeRecorder:
 
         self._active = False
 
-        # Goal image
+        # Build transitions first so we know which timesteps are actually needed.
+        transitions = self._build_transitions()
+
+        # In "both" mode, also build subskill transitions for the second file.
+        subskill_transitions = []
+        if self.transition_mode == "both":
+            subskill_transitions = self._build_subskill_transitions()
+
+        # Determine which timesteps to write to disk.
+        all_transitions = list(transitions) + list(subskill_transitions)
+        needed = self._needed_timesteps(all_transitions)
+        needed.add(0)  # always keep the initial snapshot
+
+        # Goal image: write directly from the in-memory buffer.
         if success:
-            # Copy last frame as goal.png
-            src = self.episode_dir / f"frame_{self._step_count:05d}.png"
-            dst = self.episode_dir / "goal.png"
-            if src.exists():
-                import shutil
-                shutil.copy2(src, dst)
+            last_t = self._step_count
+            needed.add(last_t)
+            last_frame_bytes = self._frame_buffer.get(last_t)
+            if last_frame_bytes:
+                (self.episode_dir / "goal.png").write_bytes(last_frame_bytes)
             goal_rel = str(Path("episodes") / self.episode_id / "goal.png")
             goal_source = "self"
         else:
             goal_rel = fallback_goal or ""
             goal_source = "fallback"
 
-        transitions = self._build_transitions()
+        # Write only the needed frames and sim states to disk.
+        self._write_needed_frames_and_states(needed)
 
-        # Resolve goal and success in buffered transitions
+        print(f"Episode {self.episode_id} ended. Success: {success}. ")
+
+        # Resolve goal and success in all transitions.
         for tr in transitions:
             tr["goal_image"] = goal_rel
             tr["goal_image_source"] = goal_source
             tr["episode_success"] = bool(success)
 
-        # In "both" mode, also build subskill transitions for the second file.
-        subskill_transitions = []
-        if self.transition_mode == "both":
-            subskill_transitions = self._build_subskill_transitions()
-            for tr in subskill_transitions:
-                tr["goal_image"] = goal_rel
-                tr["goal_image_source"] = goal_source
-                tr["episode_success"] = bool(success)
-
-        # Collect all referenced files for pruning so both modes keep their frames.
-        all_transitions_for_pruning = list(transitions) + list(subskill_transitions)
-        self._prune_episode_artifacts(all_transitions_for_pruning, keep_goal=success)
+        for tr in subskill_transitions:
+            tr["goal_image"] = goal_rel
+            tr["goal_image_source"] = goal_source
+            tr["episode_success"] = bool(success)
 
         # Append to master JSONL (keyframe or dense or subskill)
         jsonl_path = self.output_root / "transitions.jsonl"
@@ -242,6 +250,16 @@ class EpisodeRecorder:
                 for tr in subskill_transitions:
                     f.write(json.dumps(tr) + "\n")
 
+        # Detect which nut types were present in this episode from step records.
+        _seen_nut_types: set = set()
+        for r in self._step_records:
+            obj = r.get("action_params", {}).get("object", "").lower()
+            if "round" in obj:
+                _seen_nut_types.add("round")
+            if "square" in obj:
+                _seen_nut_types.add("square")
+        nut_types = sorted(_seen_nut_types)  # deterministic order
+
         # Episode-level metadata
         meta = {
             "episode_id": self.episode_id,
@@ -251,6 +269,7 @@ class EpisodeRecorder:
             "transition_mode": self.transition_mode,
             "success": bool(success),
             "goal_image": goal_rel,
+            "nut_types": nut_types,
         }
         with open(self.episode_dir / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -258,7 +277,7 @@ class EpisodeRecorder:
         self.episode_counter += 1
         result = list(transitions)
         self._reset_buffers()
-        return result
+        return result, nut_types
 
     # ------------------------------------------------------------------
     # Internals
@@ -289,6 +308,8 @@ class EpisodeRecorder:
         self._info: Dict = {}
         self.episode_id = ""
         self.episode_dir: Optional[Path] = None
+        self._frame_buffer: Dict[int, bytes] = {}
+        self._state_buffer: Dict[int, tuple] = {}
 
     def _render_rgb(self) -> np.ndarray:
         """Render agentview camera at self.image_size × self.image_size.
@@ -312,15 +333,45 @@ class EpisodeRecorder:
         cam_obs, self._camera_renderers = result
         return cam_obs.rgb
 
-    def _save_frame(self, t: int):
-        path = self.episode_dir / f"frame_{t:05d}.png"
+    def _buffer_frame(self, t: int):
+        """Render and store a frame as compressed PNG bytes in memory."""
         rgb = self._render_rgb()
-        Image.fromarray(rgb).save(path)
+        buf = io.BytesIO()
+        Image.fromarray(rgb).save(buf, format='PNG')
+        self._frame_buffer[t] = buf.getvalue()
 
-    def _save_sim_state(self, t: int):
+    def _buffer_sim_state(self, t: int):
+        """Capture and store the sim state in memory."""
         state = self.env.sim.get_state()  # always use live sim reference
-        path = self.episode_dir / f"state_{t:05d}.npz"
-        np.savez_compressed(str(path), qpos=state.qpos, qvel=state.qvel)
+        self._state_buffer[t] = (state.qpos.copy(), state.qvel.copy())
+
+    def _needed_timesteps(self, transitions: List[Dict]) -> set:
+        """Return the set of integer timesteps referenced by any transition."""
+        needed: set = set()
+        for tr in transitions:
+            for key in ("image_t", "image_t1", "state_t", "state_t1"):
+                path_str = tr.get(key, "")
+                if path_str:
+                    stem = Path(path_str).stem  # e.g. "frame_00042" or "state_00042"
+                    try:
+                        needed.add(int(stem.split("_")[-1]))
+                    except ValueError:
+                        pass
+        return needed
+
+    def _write_needed_frames_and_states(self, needed: set):
+        """Write only the buffered frames and states whose timestep is in `needed`."""
+        for t in needed:
+            frame_bytes = self._frame_buffer.get(t)
+            if frame_bytes is not None:
+                (self.episode_dir / f"frame_{t:05d}.png").write_bytes(frame_bytes)
+            state_entry = self._state_buffer.get(t)
+            if state_entry is not None:
+                qpos, qvel = state_entry
+                np.savez_compressed(
+                    str(self.episode_dir / f"state_{t:05d}.npz"),
+                    qpos=qpos, qvel=qvel,
+                )
 
     def _frame_relpath(self, t: int) -> Path:
         return Path("episodes") / self.episode_id / f"frame_{t:05d}.png"

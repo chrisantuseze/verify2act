@@ -434,7 +434,7 @@ def run_heuristic_policy(env_name: str = "Stack4"):
             policy.obs = obs  # Update observations
             env.render()
             
-            if env_done:
+            if info.get("success", False):
                 print("--- STACKING TASK SUCCESSFUL! ---")
                 break
     

@@ -543,6 +543,15 @@ class HeuristicNutAssemblyPolicy:
         """Wrap angle to [-pi, pi]."""
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
+    def _snap_to_axis_aligned(self, yaw: float) -> float:
+        """
+        Snap a yaw angle to the nearest multiple of 90° (π/2).
+        This keeps the gripper parallel to the table edges regardless of
+        small nut perturbations.
+        """
+        quarter = np.pi / 2
+        return round(yaw / quarter) * quarter
+
     def compute_yaw_action(self, nut_name: Optional[str] = None) -> np.ndarray:
         """
         Compute an axis-angle vector [0,0,yaw_delta] that rotates the EEF yaw
@@ -583,7 +592,49 @@ class HeuristicNutAssemblyPolicy:
         yaw_err = self._wrap_angle(desired_yaw - cur_yaw)
         yaw_delta = np.clip(self.R_GAIN * yaw_err, -0.6, 0.6)
         return np.array([0.0, 0.0, yaw_delta])
-    
+
+    def compute_axis_aligned_yaw_action(self, nut_name: Optional[str] = None) -> np.ndarray:
+        """
+        Like compute_yaw_action but snaps the desired yaw to the nearest 90°
+        multiple before computing the error.  This keeps the gripper parallel
+        to the table edges for both nut types, even if a nut was nudged during
+        approach.
+        """
+        if nut_name is None:
+            nut_name = self.current_nut
+
+        nut_center = self.get_nut_center(nut_name)
+        sid = self.nut_handle_site_ids.get(nut_name, None)
+        if sid is None:
+            try:
+                candidate = f"{nut_name}_handle_site"
+                sid = self.env.sim.model.site_name2id(candidate)
+                self.nut_handle_site_ids[nut_name] = sid
+            except Exception:
+                sid = None
+
+        if sid is None:
+            return np.zeros(3)
+
+        handle_pos = np.array(self.env.sim.data.site_xpos[sid])
+        handle_vec = handle_pos - nut_center
+        raw_yaw = np.arctan2(handle_vec[1], handle_vec[0])
+        desired_yaw = self._snap_to_axis_aligned(raw_yaw)  # nearest 0/90/180/270°
+
+        current_quat = self.get_current_eef_quat()
+        if current_quat is None:
+            return np.zeros(3)
+
+        try:
+            cur_mat = T.quat2mat(current_quat)
+            _, _, cur_yaw = T.mat2euler(cur_mat)
+        except Exception:
+            return np.zeros(3)
+
+        yaw_err = self._wrap_angle(desired_yaw - cur_yaw)
+        yaw_delta = np.clip(self.R_GAIN * yaw_err, -0.6, 0.6)
+        return np.array([0.0, 0.0, yaw_delta])
+
     def compute_square_alignment_action(self, nut_name: str, peg_id: int) -> np.ndarray:
         """
         Compute orientation action to align square nut hole with square peg.
@@ -679,8 +730,8 @@ class HeuristicNutAssemblyPolicy:
         
         action[:3] = self.compute_position_action(target_pos, eef_pos)
         
-        # Pre-align gripper orientation to face nut handle before lowering
-        # This reduces collision risk and improves grasp stability
+        # Pre-align gripper orientation to face the nut handle before lowering.
+        # This ensures the fingers close around the handle for a reliable grasp.
         if self.env.action_dim >= 6:
             action[3:6] = self.compute_yaw_action(self.current_nut)
 
@@ -705,7 +756,7 @@ class HeuristicNutAssemblyPolicy:
                         handle_pos = np.array(self.env.sim.data.site_xpos[sid])
                         handle_vec = handle_pos - nut_center
                         desired_yaw = np.arctan2(handle_vec[1], handle_vec[0])
-                        
+
                         cur_mat = T.quat2mat(current_quat)
                         _, _, cur_yaw = T.mat2euler(cur_mat)
                         yaw_err = abs(self._wrap_angle(desired_yaw - cur_yaw))
@@ -733,7 +784,7 @@ class HeuristicNutAssemblyPolicy:
         target_pos = nut_pos + np.array([0, 0, self.NUT_Z_OFFSET])
         
         action[:3] = self.compute_position_action(target_pos, eef_pos)
-        # Keep gripper oriented toward handle while lowering
+        # Keep gripper facing the handle while lowering for a reliable grasp.
         if self.env.action_dim >= 6:
             action[3:6] = self.compute_yaw_action(self.current_nut)
 
@@ -886,7 +937,14 @@ class HeuristicNutAssemblyPolicy:
         
         action[:3] = self.compute_position_action(target_pos, eef_pos)
         action[6] = 1  # Keep gripper closed
-        
+        # Begin rotating to axis-aligned yaw early so less correction is needed
+        # in align_over_peg. Square nuts use peg alignment; round nuts snap to 90°.
+        if self.env.action_dim >= 6:
+            if "square" in self.current_nut.lower():
+                action[3:6] = self.compute_square_alignment_action(self.current_nut, self.current_peg_id)
+            else:
+                action[3:6] = self.compute_axis_aligned_yaw_action(self.current_nut)
+
         error_xy = np.linalg.norm((target_pos - eef_pos)[:2])
         next_stage = None
         
@@ -926,8 +984,9 @@ class HeuristicNutAssemblyPolicy:
                 print(f"  Square alignment: peg_yaw={np.degrees(peg_yaw):.1f}°, "
                         f"nut_yaw={np.degrees(nut_yaw):.1f}°, error={np.degrees(alignment_err):.1f}°")
         else:
-            # For round nuts: just face the handle (less critical)
-            action[3:6] = self.compute_yaw_action(self.current_nut)
+            # For round nuts: snap to nearest 90° so the gripper is axis-aligned
+            # with the table/peg axis before insertion.
+            action[3:6] = self.compute_axis_aligned_yaw_action(self.current_nut)
         
         self.align_counter += 1
         next_stage = None
@@ -970,13 +1029,12 @@ class HeuristicNutAssemblyPolicy:
         action[:3] = self.compute_position_action(target_pos, eef_pos)
         action[6] = 1  # Keep gripper closed
         
-        # Maintain orientation alignment during lowering
-        # if "square" in self.current_nut.lower():
-        #     # Continue aligning square nut with peg during descent
-        #     action[3:6] = self.compute_square_alignment_action(self.current_nut, self.current_peg_id)
-        # else:
-        #     # For round nuts, maintain handle orientation
-        #     action[3:6] = self.compute_yaw_action(self.current_nut)
+        # Maintain orientation alignment during lowering.
+        if self.env.action_dim >= 6:
+            if "square" in self.current_nut.lower():
+                action[3:6] = self.compute_square_alignment_action(self.current_nut, self.current_peg_id)
+            else:
+                action[3:6] = self.compute_axis_aligned_yaw_action(self.current_nut)
         
         error = np.linalg.norm(target_pos - eef_pos)
         next_stage = None
@@ -1340,9 +1398,9 @@ class HeuristicNutAssemblyPolicy:
 
 def create_environment(env_name: str = "NutAssembly", 
                       num_round_nuts: int = 2,
-                      num_square_nuts: int = 1,
-                      initial_stacking_prob: float = 0.6,
-                      nut_type_mode: str = "roundnut",
+                      num_square_nuts: int = 2,
+                      initial_stacking_prob: float = 0.0,
+                      nut_type_mode: str = "random",
                       has_renderer: bool = True,
                       has_offscreen_renderer: bool = False,
                       use_camera_obs: bool = False,
@@ -1417,13 +1475,13 @@ def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000, nut
                 obs, reward, env_done, info = env.step(action)
                 policy.obs = obs  # Update observations
                 env.render()
-                
-                if env_done:
+
+                if info.get("success", False):
                     print("--- ENVIRONMENT REPORTED TASK SUCCESS! ---")
                     break
 
-                if done:
-                    print("--- POLICY REPORTED EPISODE COMPLETE! ---")
+                if done or env_done:
+                    print("--- POLICY REPORTED EPISODE COMPLETE, BUT WITH A FAILURE :( ---")
                     break
 
                 step += 1
@@ -1463,7 +1521,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--nut-type-mode',
         type=str,
-        default='roundnut',
+        default='squarenut',
         choices=['roundnut', 'squarenut', 'random', 'alternate'],
         help='Nut type mode for ClutteredNutAssembly'
     )

@@ -94,6 +94,10 @@ class BatchCollector:
             "success": 0,
             "failed": 0,
             "transitions": 0,
+            "round_episodes": 0,
+            "round_success": 0,
+            "square_episodes": 0,
+            "square_success": 0,
         }
         self.last_success_goal: Optional[str] = None
 
@@ -151,7 +155,10 @@ class BatchCollector:
                     policy.obs = obs
 
                     done = env_done or policy_done
-                    task_success = env_done  # robosuite returns done=True on success
+                    task_success = info.get("success", info.get("task_success", False))
+
+                    if done:
+                        print(f"Step {t}: action={action}, reward={reward}, done={env_done}, info={info}")
 
                     # Skill / target from the adapter (task-agnostic)
                     ai = policy.get_action_info()
@@ -187,7 +194,7 @@ class BatchCollector:
 
                 # End episode
                 fallback_goal = self.last_success_goal
-                transitions = recorder.end_episode(
+                transitions, nut_types = recorder.end_episode(
                     success=task_success, fallback_goal=fallback_goal
                 )
 
@@ -196,6 +203,16 @@ class BatchCollector:
                     self.stats["success"] += 1
                 else:
                     self.stats["failed"] += 1
+
+                # Track per-nut-type episode counts (an episode may contain both types).
+                if "round" in nut_types:
+                    self.stats["round_episodes"] += 1
+                    if task_success:
+                        self.stats["round_success"] += 1
+                if "square" in nut_types:
+                    self.stats["square_episodes"] += 1
+                    if task_success:
+                        self.stats["square_success"] += 1
 
                 self.stats["total"] += 1
                 self.stats["transitions"] += len(transitions)
@@ -254,6 +271,11 @@ class BatchCollector:
         if skipped:
             print(f"  Skipped (render error): {skipped}")
         print(f"  Total transitions: {s['transitions']}")
+        if s.get("round_episodes", 0) or s.get("square_episodes", 0):
+            r_rate = s["round_success"] / max(1, s["round_episodes"]) * 100
+            sq_rate = s["square_success"] / max(1, s["square_episodes"]) * 100
+            print(f"  Round  episodes: {s['round_episodes']}  (success: {s['round_success']}, {r_rate:.1f}%)")
+            print(f"  Square episodes: {s['square_episodes']}  (success: {s['square_success']}, {sq_rate:.1f}%)")
         print(f"{'='*50}\n")
 
 

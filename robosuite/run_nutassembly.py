@@ -891,7 +891,7 @@ def run_heuristic_policy(env_name: str = "NutAssembly"):
             policy.obs = obs  # Update observations
             env.render()
             
-            if env_done:
+            if info.get("success", False):
                 print("--- ENVIRONMENT REPORTED TASK SUCCESS! ---")
     
     except KeyboardInterrupt:

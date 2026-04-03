@@ -84,6 +84,7 @@ class ClutteredNutAssembly(ManipulationEnv):
         # Placement constraints to keep nuts away from pegs at initialization
         # (prevents spawning over pegs / intersecting peg geometry)
         self.peg_clearance_xy = 0.1 #0.07  # meters, min XY distance from peg center
+        self.min_nut_distance = 0.08  # meters, min XY distance between any two nuts
         self.placement_max_x = 0.15  # Max x-coordinate (keep nuts on robot side of pegs at x=0.23)
         self.placement_y_range = 0.20  # Max absolute y-coordinate (keep nuts within reach)
         self.placement_max_attempts = 50
@@ -393,12 +394,26 @@ class ClutteredNutAssembly(ManipulationEnv):
         for obj_pos, obj_quat, obj in object_placements.values():
             self.sim.data.set_joint_qpos(obj.joints[0], np.concatenate([np.array(obj_pos), np.array(obj_quat)]))
 
+        # Snap square nuts to a random multiple of 90° so their sides are always
+        # axis-aligned with the table/peg. A random yaw causes the gripper to grasp
+        # at an arbitrary angle, making square-peg insertion unreliable.
+        _axis_aligned_angles = [0.0, np.pi / 2, np.pi, 3 * np.pi / 2]
+        for nut_name in self.square_nut_names:
+            current_qpos = self.sim.data.get_joint_qpos(f"{nut_name}_joint0")
+            pos = current_qpos[:3]
+            angle = self.rng.choice(_axis_aligned_angles)
+            # MuJoCo free-joint quat layout: [w, x, y, z]; z-axis rotation = [cos(θ/2), 0, 0, sin(θ/2)]
+            axis_aligned_quat = np.array([np.cos(angle / 2), 0.0, 0.0, np.sin(angle / 2)])
+            self.sim.data.set_joint_qpos(f"{nut_name}_joint0", np.concatenate([pos, axis_aligned_quat]))
+
         # Reset success tracking
         self.round_nuts_on_pegs = np.zeros(self.num_round_nuts)
         self.square_nuts_on_pegs = np.zeros(self.num_square_nuts)
 
-        # Apply initial stacking after placement
-        if self.round_nut_names and self.square_nut_names:
+        # Apply initial stacking after placement only when requested.
+        # Skipping when prob=0 avoids the physics settling steps that can
+        # accidentally cause closely-placed nuts to stack.
+        if self.round_nut_names and self.square_nut_names and self.initial_stacking_prob > 0:
             self._apply_initial_stacking()
 
     def _placements_valid(self, placements):
@@ -414,6 +429,7 @@ class ClutteredNutAssembly(ManipulationEnv):
             # If peg positions aren't available, accept placements
             return True
 
+        positions = []
         for obj_pos, _, _ in placements.values():
             obj_xy = np.array(obj_pos[:2])
             
@@ -432,26 +448,45 @@ class ClutteredNutAssembly(ManipulationEnv):
             if abs(obj_pos[1]) > self.placement_y_range:
                 return False
 
+            positions.append(obj_xy)
+
+        # Check 4: Minimum distance between any two nuts to prevent overlap/stacking
+        for i in range(len(positions)):
+            for j in range(i + 1, len(positions)):
+                if np.linalg.norm(positions[i] - positions[j]) < self.min_nut_distance:
+                    return False
+
         return True
 
     def _apply_initial_stacking(self):
         """
-        Randomly stack some square nuts on top of round nuts.
+        Randomly stack obstacle nuts on top of target nuts.
+        The obstacle type is always the opposite of current_nut_type:
+          - target=roundnut  → stack square nuts on round nuts
+          - target=squarenut → stack round nuts on square nuts
         """
         # Let physics settle first
         for _ in range(10):
             self.sim.step()
 
-        # Decide which round nuts get square nuts stacked on them
-        for round_nut in self.round_nut_names:
-            if np.random.random() < self.initial_stacking_prob and self.square_nut_names:
-                # Pick a random square nut that hasn't been used
-                available_square = [s for s in self.square_nut_names 
-                                  if not self._is_nut_stacked(s)]
-                if available_square:
-                    square_nut = np.random.choice(available_square)
-                    self._stack_nut_on_nut(square_nut, round_nut)
-        
+        # Determine target (bottom) and obstacle (top) nut lists based on episode type
+        if self.current_nut_type == "roundnut":
+            target_nuts = self.round_nut_names
+            obstacle_nuts = self.square_nut_names
+        else:
+            target_nuts = self.square_nut_names
+            obstacle_nuts = self.round_nut_names
+
+        # Decide which target nuts get an obstacle nut stacked on them
+        for target_nut in target_nuts:
+            if np.random.random() < self.initial_stacking_prob and obstacle_nuts:
+                # Pick a random obstacle nut that hasn't been stacked yet
+                available_obstacles = [s for s in obstacle_nuts
+                                       if not self._is_nut_stacked(s)]
+                if available_obstacles:
+                    obstacle_nut = np.random.choice(available_obstacles)
+                    self._stack_nut_on_nut(obstacle_nut, target_nut)
+
         # Let stacked objects settle
         for _ in range(10):
             self.sim.step()
@@ -486,15 +521,12 @@ class ClutteredNutAssembly(ManipulationEnv):
     
     def on_peg(self, obj_pos, peg_id):
         peg_pos = np.array(self.sim.data.body_xpos[self.peg_body_ids[peg_id]])
-        res = False
-        if (
-            abs(obj_pos[0] - peg_pos[0]) < 0.03
-            and abs(obj_pos[1] - peg_pos[1]) < 0.03
-            and obj_pos[2] < self.table_offset[2] + 0.05
-        ):
-            res = True
-
-        return res
+        # XY: radial distance from peg axis. 0.07m gives enough room for the nut
+        # body to be slightly off-center while still clearly on the peg shaft.
+        # Z: nut center must be below the peg body origin (mid-height), which only
+        # holds when the nut is threaded down to the base — not resting on the tip.
+        xy_dist = np.linalg.norm(obj_pos[:2] - peg_pos[:2])
+        return xy_dist < 0.07 and obj_pos[2] < peg_pos[2]
 
     def _post_action(self, action):
         """
@@ -511,17 +543,17 @@ class ClutteredNutAssembly(ManipulationEnv):
         """
         reward = self.reward(action)
 
-        # Check if task is complete (all target nuts placed)
-        success = self._check_success()
-        
-        # Check if all target nuts have been processed (placed or removed from table)
+        # Episode ends when no target nuts remain graspable on the table —
+        # whether they were properly inserted, resting on the peg tip, or fell off.
         all_processed = self._all_target_nuts_processed()
-        
-        # Episode is done if successful OR all target nuts processed OR horizon reached (respecting ignore_done)
-        self.done = success or all_processed or ((self.timestep >= self.horizon) and not self.ignore_done)
+
+        # Success requires every target nut to be properly inserted (strict on_peg check).
+        success = self._check_success() if all_processed else False
+
+        self.done = all_processed or ((self.timestep >= self.horizon) and not self.ignore_done)
 
         info = {"success": success, "all_target_nuts_processed": all_processed}
-        
+
         return reward, self.done, info
 
     def _check_success(self):
