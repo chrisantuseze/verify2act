@@ -124,9 +124,17 @@ class NutAssemblyEnvWrapper:
     def reset(self, seed: Optional[int] = None) -> Tuple[Dict, np.ndarray]:
         """Reset the environment and return ``(obs, goal_image_np)``.
 
-        Goal image is rendered by programmatically placing every nut on its
-        matching peg, capturing the camera frame, then restoring the original
-        (randomised) nut positions.
+        Sequence
+        --------
+        1. Hard-reset the env (places objects at sampled positions).
+        2. Run ``settle_steps`` raw physics steps so stacked/touching objects
+           reach a fully stable configuration — this is the true T=0 state.
+        3. Force the on-screen viewer to refresh to T=0 *before* any
+           matplotlib blocking, so the viewer and our offscreen renders
+           agree from the very first frame.
+        4. Render the goal image from T=0: teleport only the *active* nuts
+           to their pegs; the non-active nuts remain at their settled T=0
+           positions, then the state is restored to T=0.
         """
         if seed is not None:
             self.env.seed(seed)
@@ -135,8 +143,37 @@ class NutAssemblyEnvWrapper:
         # Invalidate renderers if MuJoCo rebuilt the model (hard_reset=True).
         self._maybe_flush_renderers()
 
+        # Let physics fully settle after random placement / stacking.
+        self._settle_and_sync_viewer()
+
+        # Re-read observations so self._obs reflects the settled T=0 state
+        # (env.reset() returns obs from before settling sim steps).
+        self._obs = self.env._get_observations(force_update=True)
+
         goal_img = self.render_goal_image()
         return self._obs, goal_img
+
+    def _settle_and_sync_viewer(self, n_steps: int = 100) -> None:
+        """Run raw physics steps until objects are stable, then sync the viewer.
+
+        Uses ``sim.step()`` (dynamics integration) rather than
+        ``sim.forward()`` (geometry propagation only) so that stacked nuts
+        actually fall into their resting positions under gravity.
+
+        After settling, forces ``viewer.update()`` so the on-screen passive
+        viewer window is created / refreshed to the settled state *before* we
+        render the goal image or block on matplotlib.  This ensures the viewer
+        and our offscreen renders (goal + current) are always in sync.
+        """
+        sim = self.env.sim
+        for _ in range(n_steps):
+            sim.step()
+        sim.forward()   # propagate final geometry
+
+        # Refresh on-screen viewer — launches it if not yet open, or syncs it.
+        viewer = getattr(self.env, "viewer", None)
+        if viewer is not None and hasattr(viewer, "update"):
+            viewer.update()
 
     # ── goal image ─────────────────────────────────────────────────────
 
@@ -145,8 +182,11 @@ class NutAssemblyEnvWrapper:
 
         Algorithm:
           1. Save the full simulator state.
-          2. For each *active* nut this episode, teleport its body to its matching peg.
-          3. Forward-step physics so the rendered scene is consistent.
+          2. For each *active* nut this episode, teleport it to its matching peg via the
+             named free joint (``{nut_name}_joint0``).  Nuts are stacked with a small
+             z-offset so they remain visually distinct in the render rather than
+             perfectly overlapping at the same pixel.
+          3. Forward physics so the rendered scene is geometrically consistent.
           4. Render the camera frame.
           5. Restore the saved simulator state and re-forward.
         """
@@ -154,26 +194,33 @@ class NutAssemblyEnvWrapper:
         saved_state = deepcopy(sim.get_state())
 
         try:
-            for nut_name in self._active_nuts():
+            for i, nut_name in enumerate(self._active_nuts()):
                 peg_id = self._peg_id_for_nut(nut_name)
                 peg_body_id = self._peg_body_id(peg_id)
                 peg_pos = np.array(sim.data.body_xpos[peg_body_id])
 
-                nut_body_id = self.env.obj_body_id[nut_name]
-                nut_jnt_addr = sim.model.body_jntadr[nut_body_id]
-
-                if nut_jnt_addr < 0:
-                    logger.warning("Nut %s has no joint; skipping goal placement.", nut_name)
-                    continue
-
-                # Free joints store 7 DoF in qpos: [x, y, z, qw, qx, qy, qz]
-                # Place nut directly above the peg top.
+                # Place nut at the peg's XY, stacked vertically so multiple nuts on
+                # the same peg are visually distinguishable (3 cm spacing per nut).
                 target_pos = peg_pos.copy()
-                target_pos[2] = self.env.table_offset[2] + 0.02  # just above table
+                target_pos[2] = self.env.table_offset[2] + 0.02 + i * 0.03
 
-                sim.data.qpos[nut_jnt_addr: nut_jnt_addr + 3] = target_pos
-                # Upright orientation (identity quaternion: w=1, x=y=z=0)
-                sim.data.qpos[nut_jnt_addr + 3: nut_jnt_addr + 7] = [1, 0, 0, 0]
+                # [x, y, z, qw, qx, qy, qz] — upright orientation
+                target_qpos = np.array([*target_pos, 1.0, 0.0, 0.0, 0.0])
+
+                # Use the named-joint API (consistent with the rest of the codebase).
+                # ClutteredNutAssembly joints are named "{nut_name}_joint0".
+                # Standard NutAssembly may use "_jnt0"; try both.
+                placed = False
+                for jname in (f"{nut_name}_joint0", f"{nut_name}_jnt0"):
+                    try:
+                        sim.data.set_joint_qpos(jname, target_qpos)
+                        placed = True
+                        break
+                    except Exception:
+                        continue
+
+                if not placed:
+                    logger.warning("Nut %s: could not find a free joint; skipping goal placement.", nut_name)
 
             sim.forward()
             goal_img = self._render_rgb()
@@ -466,6 +513,28 @@ class NutAssemblyEnvWrapper:
     def _render_rgb(self) -> np.ndarray:
         """Render via ``render_camera`` — same path as ``EpisodeRecorder``."""
         render_camera = _get_render_camera()
+        result = render_camera(
+            self.env.sim,
+            self._camera_renderers,
+            self.camera,
+            self.image_size,
+            self.image_size,
+            rgb_only=True,
+        )
+        if result is None:
+            raise RuntimeError(
+                f"render_camera returned None for camera '{self.camera}'"
+            )
+        cam_obs, self._camera_renderers = result
+        return cam_obs.rgb
+    
+    def _render_rgb_(self) -> np.ndarray:
+        """Render agentview camera at self.image_size × self.image_size.
+
+        Delegates to camera_utils.render_camera() — same function P2P uses.
+        Always accesses self.env.sim fresh so that hard_reset sim replacements
+        are picked up automatically.
+        """
         result = render_camera(
             self.env.sim,
             self._camera_renderers,

@@ -53,7 +53,8 @@ from verify2act.pipeline.env_wrapper import NutAssemblyEnvWrapper
 from verify2act.pipeline.planner import VLMPlanner
 from verify2act.pipeline.decompose import expand_nut_plan
 from verify2act.pipeline.reflection import build_reflection_context
-from verify2act.pipeline.world_model import DiffusionWorldModel, OracleWorldModel
+from verify2act.pipeline.world_model import DiffusionWorldModel, OracleWorldModel, WorldModelBase
+from contextlib import contextmanager, nullcontext
 from verify2act.utils.vae import load_vae_encoder
 from verify2act.utils.vae import VAE_LATENT_SCALE
 
@@ -166,13 +167,12 @@ def _save_image(img_np: np.ndarray, output_dir: Path, name: str) -> None:
 # Main inference loop
 # ═══════════════════════════════════════════════════════════════════════
 
-
-def run_episode(
+def run_inference_episode(   
     env_wrapper,
     vae: torch.nn.Module,
-    world_model,
+    world_model: WorldModelBase,
     critic: torch.nn.Module,
-    planner,
+    planner: VLMPlanner,
     *,
     requery_world_model=None,
     horizon: int = 4,
@@ -181,7 +181,33 @@ def run_episode(
     theta_p: float = 0.6,
     max_retries: int = 2,
     max_replans: int = 3,
-    task_instruction: Optional[str] = None,
+    device: str = "cuda",
+    output_dir: Optional[str] = None,
+) -> EpisodeTrace:
+
+    torch_device = torch.device(device)
+    out_path = Path(output_dir) if output_dir else None
+    critic.eval()
+
+    env_wrapper._obs = env_wrapper.env.reset()
+    goal_image_np = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
+    import matplotlib.pyplot as plt
+
+
+def run_episode(
+    env_wrapper,
+    vae: torch.nn.Module,
+    world_model: WorldModelBase,
+    critic: torch.nn.Module,
+    planner: VLMPlanner,
+    *,
+    requery_world_model=None,
+    horizon: int = 4,
+    max_steps: int = 10,
+    theta_c: float = 0.5,
+    theta_p: float = 0.6,
+    max_retries: int = 2,
+    max_replans: int = 3,
     device: str = "cuda",
     output_dir: Optional[str] = None,
 ) -> EpisodeTrace:
@@ -232,12 +258,24 @@ def run_episode(
         raise TypeError("run_episode expects DINOv2DualHeadCritic")
 
     # ── Reset environment ──────────────────────────────────────────────
-    obs, goal_image_np = env_wrapper.reset()
+    # obs, goal_image_np = env_wrapper.reset()
+    env_wrapper._obs = env_wrapper.env.reset()
+    goal_image_np = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
+    import matplotlib.pyplot as plt
+
+    # plt.figure(figsize=(6, 6))
+    # plt.imshow(goal_image_np)
+    # plt.title("Goal Image")
+    # plt.axis("off")
+    # plt.tight_layout()
+    # plt.show()
+         
     goal_img_224 = preprocess_image_for_critic(goal_image_np).to(torch_device)
     with torch.no_grad():
-        e_goal = critic.encode(goal_img_224)
+        emb_goal = critic.encode(goal_img_224)  # ProbEmbedding
     obj_labels = env_wrapper.get_obj_labels()
-    task_instruction = task_instruction or env_wrapper.get_task_instruction()
+    task_instruction = env_wrapper.get_task_instruction()
+    print(f"Task instruction: {task_instruction}")
     history: List[str] = []
 
     trace = EpisodeTrace()
@@ -254,10 +292,12 @@ def run_episode(
             _save_image(current_image_np, out_path / "steps", f"step_{t:03d}_current.png")
 
         # ── Stage 1: Plan generation (VLM call) ───────────────────────
-        plan = planner.propose(
-            current_image_np, goal_image_np, history, obj_labels, horizon,
-            task_instruction=task_instruction,
-        )
+        print(f"t={t}  Generating plan with VLM...")
+        # plan = planner.propose(
+        #     current_image_np, goal_image_np, history, obj_labels, horizon,
+        #     task_instruction=task_instruction,
+        # ) 
+        plan = ['round nut']
         step_record.plan = list(plan)
         logger.info("t=%d  Proposed plan: %s", t, plan)
 
@@ -275,14 +315,17 @@ def run_episode(
             # Track previous frame embedding for Head 2 (temporal consistency)
             cur_img_224 = preprocess_image_for_critic(current_image_np).to(torch_device)
             with torch.no_grad():
-                e_prev = critic.encode(cur_img_224)
+                emb_prev = critic.encode(cur_img_224)  # ProbEmbedding
 
-            for k, (hl_action, imagine_action) in enumerate(imagination_steps):
-                # ── 'done' terminates the imagination loop cleanly ──────
-                if imagine_action.strip().lower() == "done":
-                    plan_accepted = True
-                    break
-
+            # Wrap the k-loop in rollout_context so the oracle WM chains states:
+            # S0 → S1 → S2 … instead of always branching from S0.
+            _wm_ctx = (
+                world_model.rollout_context()
+                if isinstance(world_model, OracleWorldModel)
+                else nullcontext()
+            )
+            with _wm_ctx:
+              for k, (hl_action, imagine_action) in enumerate(imagination_steps):
                 # ── Imagination ────────────────────────────────────────
                 imagined_img_next = world_model.imagine(imagined_img, imagine_action)
 
@@ -293,35 +336,60 @@ def run_episode(
                         f"step_{t:03d}_imagine_r{replan_attempt}_k{k}.png",
                     )
 
+                fig, ax = plt.subplots(1, 2)
+                fig.suptitle(f"Step {k + 1}/{len(imagination_steps)}: '{imagine_action}'")
+                ax[0].imshow(imagined_img)
+                ax[0].set_title(f"Before '{imagine_action}'")
+                ax[1].imshow(imagined_img_next)
+                ax[1].set_title(f"After '{imagine_action}'")
+                plt.show()
+
                 # ── Critic evaluation ──────────────────────────────────
                 img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
                 with torch.no_grad():
-                    e_next = critic.encode(img_224)
-                    tc_score = critic.temporal_sim(e_prev, e_next).item()
+                    emb_next = critic.encode(img_224)  # ProbEmbedding
+                    mean_tc, std_tc = critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
+                    tc_score = mean_tc.item()
+                    tc_uncertainty = std_tc.item()
                 all_scores.append((tc_score, 0.0))
 
-                decision = check_rollout_consistency(tc_score, theta_c)
+                decision = check_rollout_consistency(tc_score, theta_c, uncertainty=tc_uncertainty)
                 step_record.critic_decisions.append(
-                    f"k={k} action='{imagine_action}' tc={tc_score:.3f} → {decision.action}"
+                    f"k={k} action='{imagine_action}' tc={tc_score:.3f}(unc={tc_uncertainty:.3f}) → {decision.action}"
                 )
                 logger.info(
-                    "  k=%d  action='%s'  temporal_sim=%.3f  → %s",
-                    k, imagine_action, tc_score, decision.action,
+                    "  k=%d  action='%s'  temporal_sim=%.3f(unc=%.3f)  → %s",
+                    k, imagine_action, tc_score, tc_uncertainty, decision.action,
                 )
 
                 if decision.action == "requery":
                     retry_wm = requery_world_model or world_model
                     for retry_i in range(max_retries):
+                        # If retrying with the oracle WM inside a chain, roll the sim
+                        # back to the pre-action state before each attempt.
+                        if isinstance(retry_wm, OracleWorldModel) and retry_wm._rollout_state is not None:
+                            retry_wm.rollback_step()
                         imagined_img_next = retry_wm.imagine(imagined_img, imagine_action)
+                        
+                        fig, ax = plt.subplots(1, 2)
+                        fig.suptitle(f"Retry {retry_i + 1}/{max_retries} for action '{imagine_action}'")
+                        ax[0].imshow(imagined_img)
+                        ax[0].set_title(f"Before '{imagine_action}'")
+                        ax[1].imshow(imagined_img_next)
+                        ax[1].set_title(f"After '{imagine_action}'")
+                        plt.show()
+
                         img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
                         with torch.no_grad():
-                            e_next = critic.encode(img_224)
-                            tc_score = critic.temporal_sim(e_prev, e_next).item()
+                            emb_next = critic.encode(img_224)
+                            mean_tc, std_tc = critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
+                            tc_score = mean_tc.item()
+                            tc_uncertainty = std_tc.item()
                         all_scores[-1] = (tc_score, 0.0)
-                        decision = check_rollout_consistency(tc_score, theta_c)
+                        decision = check_rollout_consistency(tc_score, theta_c, uncertainty=tc_uncertainty)
                         logger.info(
-                            "    requery %d/%d  tc=%.3f  → %s",
-                            retry_i + 1, max_retries, tc_score, decision.action,
+                            "    requery %d/%d  tc=%.3f(unc=%.3f)  → %s",
+                            retry_i + 1, max_retries, tc_score, tc_uncertainty, decision.action,
                         )
                         if decision.action != "requery":
                             break
@@ -352,24 +420,34 @@ def run_episode(
                     step_failed = True
                     break
 
-                e_prev = e_next
+                emb_prev = emb_next
                 imagined_img = imagined_img_next
 
             # ── Head 1 gate: final proximity check (DINOv2 only) ──────────
-            if not step_failed and not plan_accepted:
-                # e_prev is now the final imagined frame embedding
+            if not step_failed:
+                # emb_prev is now the final imagined frame embedding
                 with torch.no_grad():
-                    prox_score = critic.goal_sim(e_prev, e_goal).item()
+                    mean_prox, std_prox = critic.goal_sim_with_uncertainty(emb_prev, emb_goal)
+                    prox_score = mean_prox.item()
+                    prox_uncertainty = std_prox.item()
 
                 # Update last score tuple with the proximity score
                 if all_scores:
                     last_tc = all_scores[-1][0]
                     all_scores[-1] = (last_tc, prox_score)
 
-                prox_decision = decide_from_proximity(prox_score, theta_p)
+                prox_decision = decide_from_proximity(prox_score, theta_p, uncertainty=prox_uncertainty)
                 logger.info(
-                    "  HEAD1 proximity=%.3f  → %s", prox_score, prox_decision.action
+                    "  HEAD1 proximity=%.3f(unc=%.3f)  → %s",
+                    prox_score, prox_uncertainty, prox_decision.action
                 )
+                step_record.critic_decisions.append(
+                    f"HEAD1 proximity={prox_score:.3f}(unc={prox_uncertainty:.3f}) → {prox_decision.action}"
+                )
+
+                if prox_decision.action == "requery":
+                    logger.info("  HEAD1 uncertain failure; rerolling imagination with same plan")
+                    continue
 
                 if prox_decision.action == "reflect":
                     step_record.failed_step = len(imagination_steps) - 1
@@ -471,25 +549,6 @@ def _dtype_from_name(name: str) -> torch.dtype:
 
 
 def _build_env(args: argparse.Namespace):
-    # _ensure_workspace_robosuite_on_path()
-    # import robosuite
-    # from robosuite.controllers import load_composite_controller_config
-
-    # controller_cfg = load_composite_controller_config(controller="BASIC")
-    # env = robosuite.make(
-    #     env_name=args.env_name,
-    #     robots=args.robot,
-    #     controller_configs=controller_cfg,
-    #     has_renderer=args.has_renderer,
-    #     has_offscreen_renderer=True,
-    #     use_camera_obs=False,
-    #     use_object_obs=True,
-    #     control_freq=args.control_freq,
-    #     horizon=args.env_horizon,
-    #     ignore_done=True,
-    # )
-    # return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
-
     _robosuite_root = Path(__file__).resolve().parents[2] / "robosuite"
     if str(_robosuite_root) not in sys.path:
         sys.path.insert(0, str(_robosuite_root))
@@ -502,7 +561,7 @@ def _build_env(args: argparse.Namespace):
         initial_stacking_prob=args.initial_stacking_prob,
         nut_type_mode=args.nut_type_mode,
         has_offscreen_renderer=True,
-        has_renderer=False,
+        # render_camera=args.camera,
         use_camera_obs=False,
         horizon=args.env_horizon,
     )
@@ -512,7 +571,7 @@ def _build_env(args: argparse.Namespace):
 def _build_critic(
     args: argparse.Namespace, device: torch.device
 ) -> DINOv2DualHeadCritic:
-    """Load DINOv2 critic checkpoint."""
+    """Load DINOv2DualHeadCritic checkpoint."""
     ckpt = torch.load(args.critic_ckpt, map_location=device)
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         state_dict = ckpt["model_state_dict"]
@@ -522,7 +581,14 @@ def _build_critic(
         state_dict = ckpt
 
     critic = DINOv2DualHeadCritic(pretrained=False).to(device)
-    critic.load_state_dict(state_dict, strict=True)
+    missing, unexpected = critic.load_state_dict(state_dict, strict=False)
+    if missing:
+        logger.warning(
+            "Checkpoint missing keys (log_var heads will be randomly initialised): %s",
+            missing,
+        )
+    if unexpected:
+        logger.warning("Checkpoint had unexpected keys: %s", unexpected)
     critic.eval()
     return critic
 
@@ -602,7 +668,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "hybrid"], default="hybrid")
     parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
-    parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/final/unet_lora")
+    parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/best/unet_lora")
     parser.add_argument("--wm-decoder-dir", default="verify2act/output/decoder")
     parser.add_argument("--wm-steps", type=int, default=30)
     parser.add_argument("--wm-image-guidance", type=float, default=1.5)

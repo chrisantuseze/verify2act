@@ -362,7 +362,7 @@ def main():
                         choices=["Stack", "Stack3", "Stack4",
                                  "ClutteredNutAssembly", "PickPlace"])
     parser.add_argument("--num-episodes", type=int, default=10)
-    parser.add_argument("--max-timesteps", type=int, default=1000)
+    parser.add_argument("--max-timesteps", type=int, default=1500)
     parser.add_argument("--output-dir", type=str,
                         default="dataset/nut_assembly")
     parser.add_argument("--camera", type=str, default="agentview")

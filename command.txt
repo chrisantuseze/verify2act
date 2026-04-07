@@ -18,11 +18,12 @@ python verify2act/world_model/train_wm.py \
 python verify2act/critic/train_contrastive.py \
   --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
   --output-dir verify2act/output/contrastive \
-  --epochs 50 \
-  --batch-size 32 \
+  --epochs 30 \
+  --batch-size 16 \
   --learning-rate 1e-3 \
   --lambda1 0.4 \
   --lambda2 0.8 \
+  --kl-weight 5e-4 \
   --device cuda
 
 python verify2act/world_model/train_decoder.py \
@@ -44,7 +45,12 @@ python verify2act/critic/calibrate_thresholds.py \
 
 
 xvfb-run -a python verify2act/pipeline/inference.py \
-  --critic-ckpt verify2act/output/prm/best_prm_critic.pt \
+  --critic-ckpt verify2act/output/contrastive/best_contrastive_critic.pt \
+  --wm-adapter-dir verify2act/output/wm/best/unet_lora \
+  --wm-decoder-dir verify2act/output/decoder \
+  --num-round 2 \
+  --num-square 1 \
+  --initial-stacking-prob 0.0 \
   --device cuda \
   --dtype fp16 \
   --wm-mode hybrid \

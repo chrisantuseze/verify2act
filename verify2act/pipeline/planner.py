@@ -63,6 +63,7 @@ class VLMPlanner:
     # -- internal -----------------------------------------------------------
 
     def _call(self, messages: List[Dict[str, Any]]) -> str:
+        print("Calling GPT-4o with messages:", messages[0])
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=messages,

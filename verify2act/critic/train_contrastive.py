@@ -87,10 +87,16 @@ def _train_step(
     device: torch.device,
     lambda1: float,
     lambda2: float,
+    kl_weight: float,
     use_inbatch: bool,
     amp_enabled: bool,
 ) -> Tuple[torch.Tensor, float, float, int, int]:
-    """Forward + loss for one mixed batch. Returns (loss, loss_gp, loss_tc, n_gp, n_tc)."""
+    """Forward + loss for one mixed batch. Returns (loss, loss_gp, loss_tc, n_gp, n_tc).
+
+    For probabilistic embeddings, each triplet is projected from a *sampled*
+    embedding z = μ + ε·exp(0.5·log_var) via the reparameterization trick.
+    A KL regulariser pulls each head's log-variance toward 0 (σ→ 1).
+    """
     anchor   = batch["anchor"].to(device)    # [B, 3, H, W]
     positive = batch["positive"].to(device)
     negative = batch["negative"].to(device)
@@ -102,12 +108,20 @@ def _train_step(
     # Encode all images in one fused batch for efficiency
     all_imgs = torch.cat([anchor, positive, negative], dim=0)   # [3B, 3, H, W]
     with torch.amp.autocast('cuda', enabled=amp_enabled):
-        all_embeds = model.encode(all_imgs)                     # [3B, 768]
+        all_pe = model.encode(all_imgs)   # ProbEmbedding: .mu/.log_var1/.log_var2 each [3B, 768]
 
     B = anchor.size(0)
-    e_anchor   = all_embeds[:B]
-    e_positive = all_embeds[B:2*B]
-    e_negative = all_embeds[2*B:]
+    # Split mean embeddings
+    mu_anchor   = all_pe.mu[:B]
+    mu_positive = all_pe.mu[B:2*B]
+    mu_negative = all_pe.mu[2*B:]
+    # Split log-variances per head
+    lv1_anchor   = all_pe.log_var1[:B]
+    lv1_positive = all_pe.log_var1[B:2*B]
+    lv1_negative = all_pe.log_var1[2*B:]
+    lv2_anchor   = all_pe.log_var2[:B]
+    lv2_positive = all_pe.log_var2[B:2*B]
+    lv2_negative = all_pe.log_var2[2*B:]
 
     total_loss = torch.tensor(0.0, device=device)
     loss_gp_val = 0.0
@@ -117,20 +131,38 @@ def _train_step(
 
     # ── Head 1: goal proximity ────────────────────────────────────────────────
     if n_gp > 1:   # InfoNCE needs > 1 sample for in-batch negatives
-        a0 = model.project(e_anchor[mask0],   head=1)
-        p0 = model.project(e_positive[mask0], head=1)
-        n0 = model.project(e_negative[mask0], head=1)
+        # Sample embeddings via reparameterization trick
+        z_a0 = model.sample_embed(mu_anchor[mask0],   lv1_anchor[mask0])
+        z_p0 = model.sample_embed(mu_positive[mask0], lv1_positive[mask0])
+        z_n0 = model.sample_embed(mu_negative[mask0], lv1_negative[mask0])
+        a0 = model.project(z_a0, head=1)
+        p0 = model.project(z_p0, head=1)
+        n0 = model.project(z_n0, head=1)
         loss_gp = criterion(a0, p0, n0, use_inbatch_negatives=use_inbatch)
-        total_loss = total_loss + lambda1 * loss_gp
+        # KL regulariser: pull log_var1 toward 0 for GP samples
+        kl_gp = (
+            model.kl_loss(lv1_anchor[mask0])
+            + model.kl_loss(lv1_positive[mask0])
+            + model.kl_loss(lv1_negative[mask0])
+        ) / 3.0
+        total_loss = total_loss + lambda1 * loss_gp + kl_weight * kl_gp
         loss_gp_val = loss_gp.item()
 
     # ── Head 2: temporal consistency ──────────────────────────────────────────
     if n_tc > 1:
-        a1 = model.project(e_anchor[mask1],   head=2)
-        p1 = model.project(e_positive[mask1], head=2)
-        n1 = model.project(e_negative[mask1], head=2)
+        z_a1 = model.sample_embed(mu_anchor[mask1],   lv2_anchor[mask1])
+        z_p1 = model.sample_embed(mu_positive[mask1], lv2_positive[mask1])
+        z_n1 = model.sample_embed(mu_negative[mask1], lv2_negative[mask1])
+        a1 = model.project(z_a1, head=2)
+        p1 = model.project(z_p1, head=2)
+        n1 = model.project(z_n1, head=2)
         loss_tc = criterion(a1, p1, n1, use_inbatch_negatives=use_inbatch)
-        total_loss = total_loss + lambda2 * loss_tc
+        kl_tc = (
+            model.kl_loss(lv2_anchor[mask1])
+            + model.kl_loss(lv2_positive[mask1])
+            + model.kl_loss(lv2_negative[mask1])
+        ) / 3.0
+        total_loss = total_loss + lambda2 * loss_tc + kl_weight * kl_tc
         loss_tc_val = loss_tc.item()
 
     return total_loss, loss_gp_val, loss_tc_val, int(n_gp), int(n_tc)
@@ -144,12 +176,17 @@ def evaluate(
     val_ds: ContrastivePairDataset,
     device: torch.device,
     n_samples: int = 500,
+    uncertainty_mc_samples: int = 10,
 ) -> Dict[str, float]:
-    """Compute AUROC for goal proximity and temporal consistency.
+    """Compute AUROC and uncertainty metrics for goal proximity and temporal consistency.
 
     Samples n_samples triplets from val_ds and measures:
       auroc_gp : cos_sim(head1(late), head1(goal)) > cos_sim(head1(early), head1(goal))
       auroc_tc : cos_sim(head2(I_t), head2(I_{t+1})) > cos_sim(head2(I_t), head2(I_cross))
+
+    Deterministic similarities use mu only (no MC sampling) for fast AUROC.
+    Uncertainty metrics (mean_unc_gp, mean_unc_tc) use uncertainty_mc_samples
+    MC draws from the probabilistic embedding.
     """
     model.eval()
 
@@ -157,6 +194,8 @@ def evaluate(
     gp_neg_sims: List[float] = []
     tc_pos_sims: List[float] = []
     tc_neg_sims: List[float] = []
+    gp_uncertainties: List[float] = []
+    tc_uncertainties: List[float] = []
 
     # Force evaluation over a fixed random sample of each mode
     mode0_indices = [i for i in range(min(n_samples * 4, len(val_ds)))]
@@ -173,21 +212,27 @@ def evaluate(
         positive = item["positive"].unsqueeze(0).to(device)
         negative = item["negative"].unsqueeze(0).to(device)
 
-        e_a = model.encode(anchor)
-        e_p = model.encode(positive)
-        e_n = model.encode(negative)
+        emb_a = model.encode(anchor)
+        emb_p = model.encode(positive)
+        emb_n = model.encode(negative)
 
         if mode == 0 and collected["gp"] < target_per_mode:
-            pos_sim = model.goal_sim(e_a, e_p).item()
-            neg_sim = model.goal_sim(e_a, e_n).item()
+            # Deterministic similarity for AUROC
+            pos_sim = model.goal_sim(emb_a, emb_p).item()
+            neg_sim = model.goal_sim(emb_a, emb_n).item()
             gp_pos_sims.append(pos_sim)
             gp_neg_sims.append(neg_sim)
+            # MC uncertainty: std of positive similarity
+            _, std_pos = model.goal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+            gp_uncertainties.append(std_pos.item())
             collected["gp"] += 1
         elif mode == 1 and collected["tc"] < target_per_mode:
-            pos_sim = model.temporal_sim(e_a, e_p).item()
-            neg_sim = model.temporal_sim(e_a, e_n).item()
+            pos_sim = model.temporal_sim(emb_a, emb_p).item()
+            neg_sim = model.temporal_sim(emb_a, emb_n).item()
             tc_pos_sims.append(pos_sim)
             tc_neg_sims.append(neg_sim)
+            _, std_pos = model.temporal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+            tc_uncertainties.append(std_pos.item())
             collected["tc"] += 1
 
     def _auroc(pos: List[float], neg: List[float]) -> float:
@@ -204,6 +249,8 @@ def evaluate(
     mean_neg_gp = float(np.mean(gp_neg_sims)) if gp_neg_sims else float("nan")
     mean_pos_tc = float(np.mean(tc_pos_sims)) if tc_pos_sims else float("nan")
     mean_neg_tc = float(np.mean(tc_neg_sims)) if tc_neg_sims else float("nan")
+    mean_unc_gp = float(np.mean(gp_uncertainties)) if gp_uncertainties else float("nan")
+    mean_unc_tc = float(np.mean(tc_uncertainties)) if tc_uncertainties else float("nan")
 
     return {
         "auroc_gp": auroc_gp,
@@ -214,6 +261,8 @@ def evaluate(
         "gp_neg_sim": mean_neg_gp,
         "tc_pos_sim": mean_pos_tc,
         "tc_neg_sim": mean_neg_tc,
+        "mean_unc_gp": mean_unc_gp,   # mean predictive std for Head 1
+        "mean_unc_tc": mean_unc_tc,   # mean predictive std for Head 2
     }
 
 
@@ -264,7 +313,8 @@ def main():
     model = DINOv2DualHeadCritic(pretrained=True).to(device)
     n_total     = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model: {n_total:,} total params | {n_trainable:,} trainable (heads only, backbone frozen)")
+    print(f"Model: {n_total:,} total params | {n_trainable:,} trainable "
+          f"(projection + log-var heads; backbone frozen in phase 1)")
 
     criterion = InfoNCELoss(temperature=args.temperature)
 
@@ -332,7 +382,9 @@ def main():
             with torch.amp.autocast('cuda', enabled=(device.type == "cuda" and args.mixed_precision != "no")):
                 loss, lgp, ltc, n0, n1 = _train_step(
                     model, batch, criterion, device,
-                    args.lambda1, args.lambda2, use_inbatch=True, amp_enabled=amp_enabled,
+                    args.lambda1, args.lambda2,
+                    kl_weight=args.kl_weight,
+                    use_inbatch=True, amp_enabled=amp_enabled,
                 )
 
             if loss.requires_grad is False or loss.item() == 0.0:
@@ -384,6 +436,8 @@ def main():
                 "val/auroc_gp": val_metrics["auroc_gp"],
                 "val/auroc_tc": val_metrics["auroc_tc"],
                 "val/mean":     val_metrics["mean_val"],
+                "val/unc_gp":   val_metrics["mean_unc_gp"],
+                "val/unc_tc":   val_metrics["mean_unc_tc"],
                 "lr":           optimizer.param_groups[0]["lr"],
             },
             step=epoch,
@@ -460,6 +514,10 @@ def parse_args():
                    help="Weight for goal proximity InfoNCE loss (Head 1)")
     p.add_argument("--lambda2", type=float, default=1.0,
                    help="Weight for temporal consistency InfoNCE loss (Head 2)")
+    p.add_argument("--kl-weight", type=float, default=1e-3,
+                   help="Weight for KL regulariser on log-variance heads. "
+                        "Pulls σ toward 1 without pulling μ toward 0. "
+                        "Start with 1e-3; increase to 1e-2 if uncertainty collapses.")
 
     # Output
     p.add_argument("--output-dir", type=str, default="verify2act/output/contrastive")

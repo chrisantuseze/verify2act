@@ -441,13 +441,13 @@ class PromptManager:
         required_ctx = [
             "all_scores",
             "imagined_state",
-            "gradcam_overlay",
+            # "gradcam_overlay",
             "failed_step",
             "failed_action",
-            "mean_feasibility",
-            "uncertainty",
+            # "mean_feasibility",
+            # "uncertainty",
             "failure_pattern",
-            "worst_region",
+            # "worst_region",
         ]
         missing_ctx = [k for k in required_ctx if k not in ctx]
         if missing_ctx:
@@ -473,7 +473,7 @@ class PromptManager:
         obj_str = ", ".join(obj_labels)
 
         imagined_np = np.array(ctx["imagined_state"])
-        gradcam_np = np.array(ctx["gradcam_overlay"])
+        # gradcam_np = np.array(ctx["gradcam_overlay"])
 
         user_content = [
             # 1. Task images
@@ -495,10 +495,10 @@ class PromptManager:
                 "### 4. Critic diagnosis\n"
                 + (f"- Failed nut: {ctx['failed_highlevel_action']}\n" if ctx.get('failed_highlevel_action') else "")
                 + f"- Failed sub-skill: {ctx['failed_action']}\n"
-                + f"- Feasibility at failure: {ctx['mean_feasibility']:.1%} "
-                + f"  (critic confidence: {1 - ctx['uncertainty']:.1%})\n"
+                # + f"- Feasibility at failure: {ctx['mean_feasibility']:.1%} "
+                # + f"  (critic confidence: {1 - ctx['uncertainty']:.1%})\n"
                 + f"- Failure pattern: {ctx['failure_pattern']}\n"
-                + f"- Region of highest goal mismatch: {ctx['worst_region']}"
+                # + f"- Region of highest goal mismatch: {ctx['worst_region']}"
             ),
             # 5. Imagined state + attention map
             _text_block(
@@ -506,8 +506,8 @@ class PromptManager:
                 f"Imagined scene (what the world model predicted after the failed action):"
             ),
             _img_block(imagined_np),
-            _text_block("Critic attention map (red = region with highest goal mismatch):"),
-            _img_block(gradcam_np),
+            # _text_block("Critic attention map (red = region with highest goal mismatch):"),
+            # _img_block(gradcam_np),
             # 6. Replanning instruction
             _text_block(
                 f"### 6. Replanning instruction\n"

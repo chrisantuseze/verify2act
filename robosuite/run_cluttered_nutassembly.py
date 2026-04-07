@@ -197,7 +197,7 @@ class HeuristicNutAssemblyPolicy:
     # End-effector stagnation detection (if EEF stays within `EEF_STAGNATION_THRESH`
     # meters for `EEF_STAGNATION_MAX_STEPS` steps, reset the episode)
     EEF_STAGNATION_THRESH = 0.002  # meters (2 mm)
-    EEF_STAGNATION_MAX_STEPS = 300 #50
+    EEF_STAGNATION_MAX_STEPS = 350 #50
     
     def __init__(self, env, data_collection_mode: bool = True):
         """
@@ -1403,6 +1403,7 @@ def create_environment(env_name: str = "NutAssembly",
                       nut_type_mode: str = "random",
                       has_renderer: bool = True,
                       has_offscreen_renderer: bool = False,
+                    #   render_camera: str = "agentview",
                       use_camera_obs: bool = False,
                       horizon: int = 2000):
     """
@@ -1416,6 +1417,7 @@ def create_environment(env_name: str = "NutAssembly",
         nut_type_mode: Which nut type mode to use ("roundnut", "squarenut", "random", or "alternate")
         has_renderer: Enable on-screen rendering
         has_offscreen_renderer: Enable offscreen rendering for cameras
+        render_camera: Camera used by on-screen renderer (e.g., agentview)
         use_camera_obs: Enable camera observations
         horizon: Episode horizon
         
@@ -1430,6 +1432,7 @@ def create_environment(env_name: str = "NutAssembly",
         controller_configs=controller_config,
         has_renderer=has_renderer,
         has_offscreen_renderer=has_offscreen_renderer,
+        # render_camera=render_camera,
         use_camera_obs=use_camera_obs,
         use_object_obs=True,
         control_freq=20,

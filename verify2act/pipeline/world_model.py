@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import abc
 import logging
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional
@@ -81,25 +82,118 @@ class OracleWorldModel(WorldModelBase):
 
     def __init__(self, env_wrapper) -> None:
         self.env_wrapper = env_wrapper
+        # Rollout-chain state (set by rollout_context; None when not in a chain).
+        self._rollout_state: object = None
+        self._rollout_obs: object = None
+        # Per-step pre-action state for requery retries within a chain.
+        self._step_state: object = None
+        self._step_obs: object = None
+
+    @contextmanager
+    def rollout_context(self):
+        """Context manager for chained imagination rollouts.
+
+        On entry the current simulator state is saved.  While inside,
+        ``imagine()`` does **not** restore the sim after each action so that
+        the rollout chain accumulates: S0 → S1 → S2 → …
+        On exit the simulator is always restored to the entry state.
+        """
+        self._rollout_state = self.env_wrapper.save_state()
+        self._rollout_obs = deepcopy(getattr(self.env_wrapper, "_obs", None))
+        try:
+            yield self
+        finally:
+            self.env_wrapper.restore_state(self._rollout_state)
+            if self._rollout_obs is not None:
+                self.env_wrapper._obs = self._rollout_obs
+            self._rollout_state = None
+            self._rollout_obs = None
+            self._step_state = None
+            self._step_obs = None
+
+    def rollback_step(self) -> None:
+        """Restore the sim to the state *before* the last ``imagine()`` call.
+
+        Used by the requery loop to retry the same action from the same
+        pre-action state inside a ``rollout_context``.
+        """
+        if self._step_state is not None:
+            self.env_wrapper.restore_state(self._step_state)
+        if self._step_obs is not None:
+            self.env_wrapper._obs = self._step_obs
+
+    def _suppress_viewer(self):
+        """Prevent ``env.step()`` from changing the on-screen viewer during
+        imagination rollouts.
+
+        We keep ``env.viewer`` intact and temporarily replace
+        ``env.viewer.update`` with a no-op. This avoids:
+        - re-launching extra windows (when ``viewer`` is set to None), and
+        - freezing all future updates (when renderer flags get stuck).
+        """
+        env = self.env_wrapper.env
+        viewer = getattr(env, "viewer", None)
+        env._saved_viewer_obj = viewer
+        env._saved_has_renderer = env.has_renderer
+
+        if viewer is not None and hasattr(viewer, "update"):
+            env._saved_viewer_update = viewer.update
+
+            def _noop_update():
+                return None
+
+            viewer.update = _noop_update
+        else:
+            env._saved_viewer_update = None
+            # Defensive fallback: if no viewer object is present, disable
+            # renderer so env.step() doesn't auto-launch a new window.
+            env.has_renderer = False
+
+    def _restore_viewer(self):
+        """Restore viewer update behavior after imagination."""
+        env = self.env_wrapper.env
+        viewer = getattr(env, "_saved_viewer_obj", None)
+        saved_update = getattr(env, "_saved_viewer_update", None)
+        if viewer is not None and saved_update is not None:
+            viewer.update = saved_update
+        if hasattr(env, "_saved_viewer_obj"):
+            del env._saved_viewer_obj
+        if hasattr(env, "_saved_viewer_update"):
+            del env._saved_viewer_update
+        if hasattr(env, "_saved_has_renderer"):
+            env.has_renderer = env._saved_has_renderer
+            del env._saved_has_renderer
 
     def imagine(
         self,
         current_image_np: np.ndarray,
         action_text: str,
     ) -> np.ndarray:
-        # Save full sim state.
+        in_chain = self._rollout_state is not None
+
+        if in_chain:
+            # Save the pre-action state so requery retries can restart here.
+            self._step_state = self.env_wrapper.save_state()
+            self._step_obs = deepcopy(getattr(self.env_wrapper, "_obs", None))
+            # Suppress viewer so env.step() doesn't update the on-screen window.
+            self._suppress_viewer()
+            try:
+                self.env_wrapper.execute_action(action_text)
+                return self.env_wrapper.read_image()
+            finally:
+                self._restore_viewer()
+
+        # Standalone call (no active rollout_context): safe save/restore.
         saved_state = self.env_wrapper.save_state()
         saved_obs = deepcopy(getattr(self.env_wrapper, "_obs", None))
-
+        self._suppress_viewer()
         try:
-            # Execute the action inside the sim.
             self.env_wrapper.execute_action(action_text)
             imagined_img = self.env_wrapper.read_image()
         finally:
-            # Restore state regardless of success/failure.
+            self._restore_viewer()
             self.env_wrapper.restore_state(saved_state)
             self.env_wrapper._obs = saved_obs
-
         return imagined_img
 
 

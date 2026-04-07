@@ -7,13 +7,13 @@ Usage patterns:
    python verify2act/world_model/demo_wm.py \
      --image-path path/to/frame.png \
      --prompt "pick round nut. position: (0.1, -0.05, 0.83)." \
-     --adapter-dir verify2act/output/wm/final/unet_lora
+     --adapter-dir verify2act/output/wm/best/unet_lora
 
 2) Pull sample from dataset transitions.jsonl:
    python verify2act/world_model/demo_wm.py \
      --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
      --transition-index 0 \
-     --adapter-dir verify2act/output/wm/final/unet_lora
+     --adapter-dir verify2act/output/wm/best/unet_lora
 """
 
 import argparse
