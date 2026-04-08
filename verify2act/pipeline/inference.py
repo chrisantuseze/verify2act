@@ -716,6 +716,11 @@ def main() -> int:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device cuda requested but CUDA is unavailable")
 
+    # fp16 LayerNorm is only supported on CUDA; fall back to fp32 on CPU/MPS
+    if device.type != "cuda" and args.dtype == "fp16":
+        logger.warning("fp16 is not supported on %s; falling back to fp32", device.type)
+        args.dtype = "fp32"
+
     args.env_wrapper = _build_env(args)
     vae, _resolved = load_vae_encoder(
         model_name_or_path=args.vae_model,

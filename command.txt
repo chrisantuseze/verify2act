@@ -53,6 +53,6 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --initial-stacking-prob 0.0 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode hybrid \
+  --wm-mode diffusion \
   --vae-model runwayml/stable-diffusion-v1-5 \
   --output-dir verify2act/output/inference_run
