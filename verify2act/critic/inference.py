@@ -13,6 +13,7 @@ def check_rollout_consistency(
     consistency_score: float,
     threshold: float,
     uncertainty: float = 0.0,
+    confidence_threshold: float = 0.02,
 ) -> CriticDecision:
     """Head 2 gate — called *per imagined frame*.
 
@@ -20,9 +21,16 @@ def check_rollout_consistency(
     model hallucinated an implausible transition).  Abort the rollout early and
     request a new sample from the world model.
 
-    Uncertainty (predictive std from MC sampling) is logged in the reason string
-    but does not change the requery decision for temporal consistency — even an
-    uncertain low-consistency score warrants a fresh world-model sample.
+    Uncertainty is checked *first*: if the critic cannot confidently estimate
+    the consistency score, the score itself is untrustworthy regardless of
+    whether it clears the threshold, so we requery immediately.
+
+    Decision logic
+    --------------
+    * uncertainty     >= confidence_threshold                  → requery  (unreliable estimate)
+    * uncertainty     <  confidence_threshold AND
+      consistency     <  threshold                            → requery  (confident incoherence)
+    * otherwise                                               → continue
 
     Parameters
     ----------
@@ -32,16 +40,25 @@ def check_rollout_consistency(
         theta_c — frames below this are considered incoherent.
     uncertainty : float
         Predictive std of the MC similarity estimate (from
-        ``temporal_sim_with_uncertainty()``).  Reported in reason string.
+        ``temporal_sim_with_uncertainty()``).
+    confidence_threshold : float
+        Maximum allowed uncertainty to trust the consistency score.
+        Default 0.02 — calibrate from validation uncertainty histograms.
 
     Returns
     -------
     CriticDecision  with action ``"requery"`` or ``"continue"``
     """
+    if uncertainty >= confidence_threshold:
+        return CriticDecision(
+            action="requery",
+            reason=f"uncertain_consistency_estimate unc={uncertainty:.3f}",
+        )
     if consistency_score < threshold:
-        unc_tag = f"unc={uncertainty:.3f}" if uncertainty > 0 else ""
-        reason = f"low_temporal_consistency {unc_tag}".strip()
-        return CriticDecision(action="requery", reason=reason)
+        return CriticDecision(
+            action="requery",
+            reason=f"low_temporal_consistency score={consistency_score:.3f}",
+        )
     return CriticDecision(action="continue", reason="consistent")
 
 
@@ -49,7 +66,7 @@ def decide_from_proximity(
     proximity_score: float,
     threshold: float,
     uncertainty: float = 0.0,
-    confidence_threshold: float = 0.15,
+    confidence_threshold: float = 0.02,
 ) -> CriticDecision:
     """Head 1 gate — called once after a *complete* imagined rollout passes.
 
@@ -61,11 +78,11 @@ def decide_from_proximity(
 
     Decision logic
     --------------
-    * proximity_score >= threshold                       → continue
-    * proximity_score <  threshold AND
-      uncertainty     <  confidence_threshold            → reflect  (confident failure)
-    * proximity_score <  threshold AND
-      uncertainty     >= confidence_threshold            → requery  (uncertain; get new sample)
+    * uncertainty     >= confidence_threshold            → requery  (unreliable estimate)
+    * uncertainty     <  confidence_threshold AND
+      proximity_score >= threshold                       → continue
+    * uncertainty     <  confidence_threshold AND
+      proximity_score <  threshold                       → reflect  (confident failure)
 
     Parameters
     ----------
@@ -77,20 +94,19 @@ def decide_from_proximity(
         Predictive std from ``goal_sim_with_uncertainty()``.
     confidence_threshold : float
         Maximum allowed uncertainty to trigger a reflect decision.
-        Default 0.15 — calibrate from validation uncertainty histograms.
+        Default 0.02 — calibrate from validation uncertainty histograms.
 
     Returns
     -------
     CriticDecision  with action ``"reflect"``, ``"requery"``, or ``"continue"``
     """
-    if proximity_score >= threshold:
-        return CriticDecision(action="continue", reason="high_goal_proximity")
-    # Below threshold: check whether the critic is confident
     if uncertainty >= confidence_threshold:
         return CriticDecision(
             action="requery",
-            reason=f"low_proximity_but_uncertain prox={proximity_score:.3f} unc={uncertainty:.3f}",
+            reason=f"uncertain_proximity_estimate unc={uncertainty:.3f} prox={proximity_score:.3f}",
         )
+    if proximity_score >= threshold:
+        return CriticDecision(action="continue", reason="high_goal_proximity")
     return CriticDecision(
         action="reflect",
         reason=f"low_goal_proximity prox={proximity_score:.3f} unc={uncertainty:.3f}",

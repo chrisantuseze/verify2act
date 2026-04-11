@@ -167,33 +167,6 @@ def _save_image(img_np: np.ndarray, output_dir: Path, name: str) -> None:
 # Main inference loop
 # ═══════════════════════════════════════════════════════════════════════
 
-def run_inference_episode(   
-    env_wrapper,
-    vae: torch.nn.Module,
-    world_model: WorldModelBase,
-    critic: torch.nn.Module,
-    planner: VLMPlanner,
-    *,
-    requery_world_model=None,
-    horizon: int = 4,
-    max_steps: int = 10,
-    theta_c: float = 0.5,
-    theta_p: float = 0.6,
-    max_retries: int = 2,
-    max_replans: int = 3,
-    device: str = "cuda",
-    output_dir: Optional[str] = None,
-) -> EpisodeTrace:
-
-    torch_device = torch.device(device)
-    out_path = Path(output_dir) if output_dir else None
-    critic.eval()
-
-    env_wrapper._obs = env_wrapper.env.reset()
-    goal_image_np = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
-    import matplotlib.pyplot as plt
-
-
 def run_episode(
     env_wrapper,
     vae: torch.nn.Module,
@@ -263,6 +236,12 @@ def run_episode(
     goal_image_np = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
     import matplotlib.pyplot as plt
 
+    # Ensure the MuJoCo viewer window is created and shows the reset state.
+    # env.reset() alone does not call env.render(), so with diffusion WM mode
+    # (where env.step() is never called during imagination) the viewer would
+    # otherwise never appear.
+    env_wrapper._settle_and_sync_viewer(n_steps=0)
+
     # plt.figure(figsize=(6, 6))
     # plt.imshow(goal_image_np)
     # plt.title("Goal Image")
@@ -286,6 +265,10 @@ def run_episode(
     # ── Main loop: one iteration per real timestep ─────────────────────
     for t in range(max_steps):
         current_image_np = env_wrapper.read_image()
+        # Keep the MuJoCo viewer in sync with the real sim state at every
+        # timestep.  In diffusion WM mode env.step() is never called during
+        # imagination, so without this the viewer freezes after reset.
+        env_wrapper._settle_and_sync_viewer(n_steps=0)
         step_record = StepRecord(timestep=t)
 
         if out_path:
@@ -336,13 +319,19 @@ def run_episode(
                         f"step_{t:03d}_imagine_r{replan_attempt}_k{k}.png",
                     )
 
-                fig, ax = plt.subplots(1, 2)
-                fig.suptitle(f"Step {k + 1}/{len(imagination_steps)}: '{imagine_action}'")
-                ax[0].imshow(imagined_img)
-                ax[0].set_title(f"Before '{imagine_action}'")
-                ax[1].imshow(imagined_img_next)
-                ax[1].set_title(f"After '{imagine_action}'")
-                plt.show()
+                # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+                # fig.suptitle(f"Step {k + 1}/{len(imagination_steps)}: '{imagine_action}'")
+                # ax[0].imshow(current_image_np)
+                # ax[0].set_title("Sim (current)")
+                # ax[0].axis("off")
+                # ax[1].imshow(imagined_img)
+                # ax[1].set_title(f"Before '{imagine_action}'")
+                # ax[1].axis("off")
+                # ax[2].imshow(imagined_img_next)
+                # ax[2].set_title(f"After '{imagine_action}'")
+                # ax[2].axis("off")
+                # plt.tight_layout()
+                # plt.show()
 
                 # ── Critic evaluation ──────────────────────────────────
                 img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
@@ -371,13 +360,19 @@ def run_episode(
                             retry_wm.rollback_step()
                         imagined_img_next = retry_wm.imagine(imagined_img, imagine_action)
                         
-                        fig, ax = plt.subplots(1, 2)
-                        fig.suptitle(f"Retry {retry_i + 1}/{max_retries} for action '{imagine_action}'")
-                        ax[0].imshow(imagined_img)
-                        ax[0].set_title(f"Before '{imagine_action}'")
-                        ax[1].imshow(imagined_img_next)
-                        ax[1].set_title(f"After '{imagine_action}'")
-                        plt.show()
+                        # fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+                        # fig.suptitle(f"Retry {retry_i + 1}/{max_retries} for action '{imagine_action}'")
+                        # ax[0].imshow(current_image_np)
+                        # ax[0].set_title("Sim (current)")
+                        # ax[0].axis("off")
+                        # ax[1].imshow(imagined_img)
+                        # ax[1].set_title(f"Before '{imagine_action}'")
+                        # ax[1].axis("off")
+                        # ax[2].imshow(imagined_img_next)
+                        # ax[2].set_title(f"After '{imagine_action}'")
+                        # ax[2].axis("off")
+                        # plt.tight_layout()
+                        # plt.show()
 
                         img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
                         with torch.no_grad():
@@ -560,7 +555,7 @@ def _build_env(args: argparse.Namespace):
         num_square_nuts=args.num_square,
         initial_stacking_prob=args.initial_stacking_prob,
         nut_type_mode=args.nut_type_mode,
-        has_offscreen_renderer=True,
+        # has_offscreen_renderer=True,
         # render_camera=args.camera,
         use_camera_obs=False,
         horizon=args.env_horizon,
@@ -677,10 +672,10 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--horizon", type=int, default=4)
     parser.add_argument("--max-steps", type=int, default=10)
-    parser.add_argument("--theta-c", type=float, default=0.5)
-    parser.add_argument("--theta-p", type=float, default=0.6)
+    parser.add_argument("--theta-c", type=float, default=0.7)
+    parser.add_argument("--theta-p", type=float, default=0.7)
     parser.add_argument("--max-retries", type=int, default=2)
-    parser.add_argument("--max-replans", type=int, default=3)
+    parser.add_argument("--max-replans", type=int, default=2)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output-dir", default="verify2act/output/inference_run")
 
