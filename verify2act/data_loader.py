@@ -28,7 +28,7 @@ class WMTransitionDataset(Dataset):
         split: str = "train",
         val_frac: float = 0.1,
         seed: int = 42,
-        transitions_file: str = "transitions.jsonl",
+        transitions_file: str = "transitions_subskill.jsonl",
     ):
         self.root = Path(dataset_dir)
 
@@ -199,7 +199,7 @@ def _resolve_goal_image(trans: Dict, dataset_root: Path) -> str:
 
 def build_contrastive_datasets(
     dataset_dir: str,
-    transitions_file: str = "transitions.jsonl",
+    transitions_file: str = "transitions_subskill.jsonl",
     labels_file: str = "labels.jsonl",
     val_frac: float = 0.1,
     seed: int = 42,

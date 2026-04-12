@@ -58,8 +58,9 @@ def _build_pairs(
     generated_manifest: Path,
     real_field: str,
     generated_field: str,
+    transitions_file: str = "transitions_subskill.jsonl",
 ) -> List[Tuple[str, int, Path, Path]]:
-    transitions_path = dataset_dir / "transitions.jsonl"
+    transitions_path = dataset_dir / transitions_file
     if not transitions_path.exists():
         raise FileNotFoundError(f"Missing transitions file: {transitions_path}")
     if not generated_manifest.exists():
@@ -152,6 +153,7 @@ def main():
         generated_manifest=generated_manifest,
         real_field=args.real_field,
         generated_field=args.generated_field,
+        transitions_file=args.transitions_file,
     )
     if args.max_pairs > 0 and len(pairs) > args.max_pairs:
         random.shuffle(pairs)
@@ -274,6 +276,12 @@ def main():
 def parse_args():
     parser = argparse.ArgumentParser(description="Validate embedding shift (rendered vs generated)")
     parser.add_argument("--dataset-dir", type=str, required=True)
+    parser.add_argument(
+        "--transitions-file",
+        type=str,
+        default="transitions_subskill.jsonl",
+        help="JSONL filename inside dataset-dir for real rendered transitions.",
+    )
     parser.add_argument(
         "--generated-manifest",
         type=str,
