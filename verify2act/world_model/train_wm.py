@@ -6,7 +6,7 @@ Trains LoRA adapters on InstructPix2Pix UNet to predict noise in z_{t+1},
 conditioned on current-frame latent z_t and action text.
 
 Expected dataset format:
-- <dataset_dir>/transitions.jsonl
+- <dataset_dir>/transitions_subskill.jsonl
 - image paths stored in each row under keys `image_t` and `image_t1`
   as paths relative to dataset_dir.
 """
@@ -495,6 +495,7 @@ def main():
                     "best_val_loss": float(best_val_loss) if np.isfinite(best_val_loss) else None,
                 })
 
+                _saved_best_this_step = False
                 if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
                     best_val_loss = val_loss
                     save_checkpoint(
@@ -507,9 +508,28 @@ def main():
                             "is_best": True,
                         },
                     )
-                    accelerator.print(f"Saved best checkpoint at step {global_step}")
+                    # Always keep a fixed-path "best/" directory so demo_wm.py
+                    # can reliably point to the best-val-loss adapter.
+                    best_dir = output_dir / "best"
+                    best_dir.mkdir(parents=True, exist_ok=True)
+                    accelerator.unwrap_model(unet).save_pretrained(best_dir / "unet_lora")
+                    with open(best_dir / "best_state.json", "w") as _bfh:
+                        json.dump(
+                            {"step": global_step, "best_val_loss": best_val_loss},
+                            _bfh,
+                            indent=2,
+                        )
+                    accelerator.print(f"Saved best checkpoint at step {global_step} (val_loss={best_val_loss:.6f}) → {best_dir}")
+                    _saved_best_this_step = True
 
-            if global_step > 0 and global_step % args.save_every == 0 and accelerator.is_main_process:
+            # Skip periodic save if we already wrote a best checkpoint at this
+            # step — they share the same directory and would overwrite is_best.
+            if (
+                global_step > 0
+                and global_step % args.save_every == 0
+                and accelerator.is_main_process
+                and not _saved_best_this_step
+            ):
                 save_checkpoint(
                     accelerator.unwrap_model(unet),
                     output_dir,
@@ -533,11 +553,18 @@ def main():
     if accelerator.is_main_process:
         final_dir.mkdir(parents=True, exist_ok=True)
         accelerator.unwrap_model(unet).save_pretrained(final_dir / "unet_lora")
+        # Read best_state to include the best step in the summary
+        best_step = None
+        best_state_path = output_dir / "best" / "best_state.json"
+        if best_state_path.exists():
+            with open(best_state_path) as _bsfh:
+                best_step = json.load(_bsfh).get("step")
         with open(final_dir / "train_summary.json", "w") as handle:
             json.dump(
                 {
                     "max_steps": args.max_steps,
                     "best_val_loss": best_val_loss,
+                    "best_step": best_step,
                     "seed": args.seed,
                     "pretrained_model": args.pretrained_model,
                 },
@@ -604,8 +631,8 @@ def parse_args():
     parser.add_argument("--warmup-steps", type=int, default=500)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
 
-    parser.add_argument("--lora-rank", type=int, default=8)
-    parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-rank", type=int, default=32) #16
+    parser.add_argument("--lora-alpha", type=int, default=32) #32
     parser.add_argument("--lora-dropout", type=float, default=0.05)
 
     parser.add_argument("--seed", type=int, default=42)

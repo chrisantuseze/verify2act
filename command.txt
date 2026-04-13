@@ -6,11 +6,14 @@ clear
 conda activate verify2act
 python verify2act/world_model/train_wm.py \
   --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/wm \
-  --max-steps 20000 \
+  --output-dir verify2act/output/wm_v2 \
+  --max-steps 15000 \
   --eval-every 1000 \
   --train-batch-size 8 \
-  --gradient-accumulation-steps 1 \
+  --gradient-accumulation-steps 2 \
+  --learning-rate 5e-5 \
+  --lora-rank 32 \
+  --lora-alpha 32 \
   --val-frac 0.2 \
   --mixed-precision fp16 \
   --device cuda

@@ -11,7 +11,7 @@ Usage patterns:
 
 2) Pull sample from dataset transitions_subskill.jsonl:
    python verify2act/world_model/demo_wm.py \
-     --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
+     --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
      --transition-index 0 \
      --adapter-dir verify2act/output/wm/best/unet_lora
 """
