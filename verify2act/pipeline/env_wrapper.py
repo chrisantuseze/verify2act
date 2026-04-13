@@ -121,20 +121,18 @@ class NutAssemblyEnvWrapper:
 
     # ── reset ──────────────────────────────────────────────────────────
 
-    def reset(self, seed: Optional[int] = None) -> Tuple[Dict, np.ndarray]:
-        """Reset the environment and return ``(obs, goal_image_np)``.
+    def reset(self, seed: Optional[int] = None) -> Dict:
+        """Reset the environment and return the settled T=0 obs.
+
+        Goal image rendering is the caller's responsibility — use
+        ``NutAssemblyGoalRenderer.render_goal()`` after this returns.
 
         Sequence
         --------
         1. Hard-reset the env (places objects at sampled positions).
         2. Run ``settle_steps`` raw physics steps so stacked/touching objects
            reach a fully stable configuration — this is the true T=0 state.
-        3. Force the on-screen viewer to refresh to T=0 *before* any
-           matplotlib blocking, so the viewer and our offscreen renders
-           agree from the very first frame.
-        4. Render the goal image from T=0: teleport only the *active* nuts
-           to their pegs; the non-active nuts remain at their settled T=0
-           positions, then the state is restored to T=0.
+        3. Force the on-screen viewer to refresh to T=0.
         """
         if seed is not None:
             self.env.seed(seed)
@@ -149,9 +147,7 @@ class NutAssemblyEnvWrapper:
         # Re-read observations so self._obs reflects the settled T=0 state
         # (env.reset() returns obs from before settling sim steps).
         self._obs = self.env._get_observations(force_update=True)
-
-        goal_img = self.render_goal_image()
-        return self._obs, goal_img
+        return self._obs
 
     def _settle_and_sync_viewer(self, n_steps: int = 100) -> None:
         """Run raw physics steps until objects are stable, then sync the viewer.
@@ -174,61 +170,6 @@ class NutAssemblyEnvWrapper:
         viewer = getattr(self.env, "viewer", None)
         if viewer is not None and hasattr(viewer, "update"):
             viewer.update()
-
-    # ── goal image ─────────────────────────────────────────────────────
-
-    def render_goal_image(self) -> np.ndarray:
-        """Render the goal state (only active nuts on their pegs) and return ``[H, W, 3]`` uint8.
-
-        Algorithm:
-          1. Save the full simulator state.
-          2. For each *active* nut this episode, teleport it to its matching peg via the
-             named free joint (``{nut_name}_joint0``).  Nuts are stacked with a small
-             z-offset so they remain visually distinct in the render rather than
-             perfectly overlapping at the same pixel.
-          3. Forward physics so the rendered scene is geometrically consistent.
-          4. Render the camera frame.
-          5. Restore the saved simulator state and re-forward.
-        """
-        sim = self.env.sim
-        saved_state = deepcopy(sim.get_state())
-
-        try:
-            for i, nut_name in enumerate(self._active_nuts()):
-                peg_id = self._peg_id_for_nut(nut_name)
-                peg_body_id = self._peg_body_id(peg_id)
-                peg_pos = np.array(sim.data.body_xpos[peg_body_id])
-
-                # Place nut at the peg's XY, stacked vertically so multiple nuts on
-                # the same peg are visually distinguishable (3 cm spacing per nut).
-                target_pos = peg_pos.copy()
-                target_pos[2] = self.env.table_offset[2] + 0.02 + i * 0.03
-
-                # [x, y, z, qw, qx, qy, qz] — upright orientation
-                target_qpos = np.array([*target_pos, 1.0, 0.0, 0.0, 0.0])
-
-                # Use the named-joint API (consistent with the rest of the codebase).
-                # ClutteredNutAssembly joints are named "{nut_name}_joint0".
-                # Standard NutAssembly may use "_jnt0"; try both.
-                placed = False
-                for jname in (f"{nut_name}_joint0", f"{nut_name}_jnt0"):
-                    try:
-                        sim.data.set_joint_qpos(jname, target_qpos)
-                        placed = True
-                        break
-                    except Exception:
-                        continue
-
-                if not placed:
-                    logger.warning("Nut %s: could not find a free joint; skipping goal placement.", nut_name)
-
-            sim.forward()
-            goal_img = self._render_rgb()
-        finally:
-            sim.set_state(saved_state)
-            sim.forward()
-
-        return goal_img
 
     # ── observation helpers ────────────────────────────────────────────
 

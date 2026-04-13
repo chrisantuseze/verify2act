@@ -7,7 +7,10 @@ placing them on their corresponding pegs.
 from robosuite.environments.base import make
 from robosuite.controllers import load_composite_controller_config
 from robosuite.utils import transform_utils as T
+from goal_renderer import NutAssemblyGoalRenderer
 import numpy as np
+from pathlib import Path
+from PIL import Image
 from typing import Dict, List, Tuple, Optional
 from enum import Enum
 from dataclasses import dataclass
@@ -1464,12 +1467,30 @@ def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000, nut
 
     # Create environment
     env = create_environment(env_name, horizon=horizon, nut_type_mode=nut_type_mode)
+
+    # Goal renderer — created once; render_goal() is called per episode after
+    # HeuristicNutAssemblyPolicy.__init__() resets the env (objects settle).
+    # target_nut_type=None so it reads env.current_nut_type each episode.
+    goal_renderer = NutAssemblyGoalRenderer(env, camera="agentview", image_size=512)
     
     # Run policy loop
     try:
         for episode in range(10):
-            # Create policy
+            # Create policy (calls env.reset() internally — objects settle here).
+            # env.reset() does a hard reset so the MuJoCo model/sim is replaced;
+            # flush stale renderers so render_goal() allocates fresh ones.
             policy = HeuristicNutAssemblyPolicy(env)
+            goal_renderer.flush_renderers()
+
+            # Render goal image anchored to this episode's settled configuration.
+            print("Rendering goal image...")
+            goal_rgb = goal_renderer.render_goal()
+            if goal_rgb is not None:
+                goal_path = Path(f"goal_nut_ep{episode}.png")
+                Image.fromarray(goal_rgb).save(str(goal_path))
+                print(f"Goal image saved to: {goal_path.resolve()}")
+            else:
+                print("[Warning] Goal rendering failed; continuing without goal image.")
 
             print("Starting episode loop...\n")
             step = 0

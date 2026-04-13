@@ -169,6 +169,7 @@ def _save_image(img_np: np.ndarray, output_dir: Path, name: str) -> None:
 
 def run_episode(
     env_wrapper,
+    goal_renderer,
     vae: torch.nn.Module,
     world_model: WorldModelBase,
     critic: torch.nn.Module,
@@ -190,6 +191,8 @@ def run_episode(
     ----------
     env_wrapper : NutAssemblyEnvWrapper
         The wrapped robosuite environment.
+    goal_renderer : NutAssemblyGoalRenderer
+        Goal renderer bound to the same env instance.
     vae : AutoencoderKL
         Frozen VAE encoder — used only by the diffusion world model.
     world_model : WorldModelBase
@@ -230,16 +233,21 @@ def run_episode(
     if not isinstance(critic, DINOv2DualHeadCritic):
         raise TypeError("run_episode expects DINOv2DualHeadCritic")
 
-    # ── Reset environment ──────────────────────────────────────────────
-    # obs, goal_image_np = env_wrapper.reset()
-    env_wrapper._obs = env_wrapper.env.reset()
-    goal_image_np = np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8)
+    # ── Reset environment + render goal ─────────────────────────────────────
+    obs = env_wrapper.reset()
+
+    # Hard-reset rebuilds the MuJoCo model; flush stale renderer cache before
+    # goal rendering so NutAssemblyGoalRenderer allocates a fresh Renderer.
+    goal_renderer.flush_renderers()
+    goal_image_np = goal_renderer.render_goal()
+    if goal_image_np is None:
+        raise RuntimeError(
+            "NutAssemblyGoalRenderer.render_goal() returned None after env reset."
+        )
+
     import matplotlib.pyplot as plt
 
-    # Ensure the MuJoCo viewer window is created and shows the reset state.
-    # env.reset() alone does not call env.render(), so with diffusion WM mode
-    # (where env.step() is never called during imagination) the viewer would
-    # otherwise never appear.
+    # Sync the on-screen viewer to the settled T=0 state.
     env_wrapper._settle_and_sync_viewer(n_steps=0)
 
     # plt.figure(figsize=(6, 6))
@@ -548,6 +556,7 @@ def _build_env(args: argparse.Namespace):
     if str(_robosuite_root) not in sys.path:
         sys.path.insert(0, str(_robosuite_root))
     from run_cluttered_nutassembly import create_environment
+    from goal_renderer import NutAssemblyGoalRenderer
 
     env = create_environment(
         env_name="ClutteredNutAssembly",
@@ -560,7 +569,9 @@ def _build_env(args: argparse.Namespace):
         use_camera_obs=False,
         horizon=args.env_horizon,
     )
-    return NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
+    wrapper = NutAssemblyEnvWrapper(env, camera=args.camera, image_size=args.image_size)
+    goal_renderer = NutAssemblyGoalRenderer(env, camera=args.camera, image_size=args.image_size)
+    return wrapper, goal_renderer
 
 
 def _build_critic(
@@ -716,7 +727,7 @@ def main() -> int:
         logger.warning("fp16 is not supported on %s; falling back to fp32", device.type)
         args.dtype = "fp32"
 
-    args.env_wrapper = _build_env(args)
+    args.env_wrapper, args.goal_renderer = _build_env(args)
     vae, _resolved = load_vae_encoder(
         model_name_or_path=args.vae_model,
         device=device,
@@ -735,6 +746,7 @@ def main() -> int:
 
     trace = run_episode(
         env_wrapper=args.env_wrapper,
+        goal_renderer=args.goal_renderer,
         vae=vae,
         world_model=world_model,
         requery_world_model=requery_world_model,
