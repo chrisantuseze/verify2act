@@ -9,7 +9,7 @@ Usage patterns:
      --prompt "pick round nut. position: (0.1, -0.05, 0.83)." \
      --adapter-dir verify2act/output/wm/best/unet_lora
 
-2) Pull sample from dataset transitions.jsonl:
+2) Pull sample from dataset transitions_subskill.jsonl:
    python verify2act/world_model/demo_wm.py \
      --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
      --transition-index 0 \
@@ -75,6 +75,12 @@ def parse_args():
 
     parser.add_argument("--dataset-dir", type=str, default=None)
     parser.add_argument("--transition-index", type=int, default=0)
+    parser.add_argument(
+        "--transitions-file",
+        type=str,
+        default="transitions_subskill.jsonl",
+        help="JSONL filename inside dataset-dir (e.g. 'transitions_subskill.jsonl').",
+    )
 
     parser.add_argument("--output-path", type=str, default="verify2act/output/wm_demo/generated.png")
     parser.add_argument("--meta-path", type=str, default="verify2act/output/wm_demo/run_meta.json")
@@ -99,8 +105,8 @@ def resolve_dtype(dtype_name: str):
     return torch.float32
 
 
-def load_transition_sample(dataset_dir: Path, index: int):
-    transitions_path = dataset_dir / "transitions.jsonl"
+def load_transition_sample(dataset_dir: Path, index: int, transitions_file: str = "transitions_subskill.jsonl"):
+    transitions_path = dataset_dir / transitions_file
     if not transitions_path.exists():
         raise FileNotFoundError(f"Missing transitions file: {transitions_path}")
 
@@ -120,7 +126,9 @@ def ensure_inputs(args):
         return Path(args.image_path), args.prompt, {"source": "direct_args"}
 
     if args.dataset_dir:
-        image_path, prompt, row = load_transition_sample(Path(args.dataset_dir), args.transition_index)
+        image_path, prompt, row = load_transition_sample(
+            Path(args.dataset_dir), args.transition_index, args.transitions_file
+        )
         return image_path, prompt, row
 
     raise ValueError(

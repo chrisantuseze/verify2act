@@ -61,7 +61,7 @@ def _imagenet_normalise(t: torch.Tensor) -> torch.Tensor:
 
 def _load_dataset(
     dataset_dir: str,
-    transitions_file: str = "transitions.jsonl",
+    transitions_file: str = "transitions_subskill.jsonl",
     labels_file: str = "labels.jsonl",
 ) -> Tuple[Dict, Dict]:
     """Return (transitions_by_ep, success_set) dicts."""
@@ -270,7 +270,7 @@ def parse_args() -> argparse.Namespace:
         description="Zero-shot DINOv2 goal-proximity AUROC: patch_mean vs CLS"
     )
     p.add_argument("--dataset-dir",      type=str, required=True)
-    p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
+    p.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl")
     p.add_argument("--labels-file",      type=str, default="labels.jsonl")
     p.add_argument("--image-size",       type=int, default=224)
     p.add_argument("--n-samples",        type=int, default=400,
