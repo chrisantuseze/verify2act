@@ -238,8 +238,12 @@ def evaluate(
     def _auroc(pos: List[float], neg: List[float]) -> float:
         if not pos or not neg:
             return float("nan")
-        scores = pos + neg
-        labels = [1] * len(pos) + [0] * len(neg)
+        pos_clean = [v for v in pos if not (v != v)]   # filter NaN (NaN != NaN)
+        neg_clean = [v for v in neg if not (v != v)]
+        if not pos_clean or not neg_clean:
+            return float("nan")
+        scores = pos_clean + neg_clean
+        labels = [1] * len(pos_clean) + [0] * len(neg_clean)
         return float(roc_auc_score(labels, scores))
 
     auroc_gp = _auroc(gp_pos_sims, gp_neg_sims)
@@ -330,7 +334,9 @@ def main():
                     {"params": model.backbone.parameters(), "lr": args.backbone_lr},
                     {
                         "params": list(model.head1.parameters()) +
-                                  list(model.head2.parameters()),
+                                  list(model.head2.parameters()) +
+                                  list(model.log_var_head1.parameters()) +
+                                  list(model.log_var_head2.parameters()),
                         "lr": args.learning_rate,
                     },
                 ],
@@ -389,6 +395,11 @@ def main():
 
             if loss.requires_grad is False or loss.item() == 0.0:
                 continue   # batch had <2 samples of either mode
+
+            # Guard against NaN/inf loss corrupting all model weights
+            if torch.isnan(loss) or torch.isinf(loss):
+                print(f"  ⚠️  Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
+                continue
 
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -502,7 +513,7 @@ def parse_args():
                    help="Cap batches per epoch (0 = all). Useful for debugging.")
 
     # Phase schedule
-    p.add_argument("--freeze-backbone-epochs", type=int, default=5,
+    p.add_argument("--freeze-backbone-epochs", type=int, default=3,
                    help="Epochs with backbone frozen (head warm-up). Phase 2 unfreezes.")
     p.add_argument("--warmup-epochs", type=int, default=2,
                    help="Linear LR warmup epochs during phase 1.")
@@ -523,7 +534,7 @@ def parse_args():
     p.add_argument("--output-dir", type=str, default="verify2act/output/contrastive")
     p.add_argument("--seed",       type=int, default=42)
     p.add_argument("--device",     type=str, default="cuda", choices=["cuda", "cpu"])
-    p.add_argument("--mixed-precision", type=str, default="fp16",
+    p.add_argument("--mixed-precision", type=str, default="bf16",
                    choices=["no", "fp16", "bf16"])
     p.add_argument("--tracker", type=str, default="tensorboard",
                    choices=["tensorboard", "wandb", "none"])
