@@ -101,6 +101,28 @@ def get_dtype(precision: str):
     return torch.float32
 
 
+def compute_snr_weights(
+    alphas_cumprod: torch.Tensor,
+    timesteps: torch.Tensor,
+    gamma: float,
+) -> torch.Tensor:
+    """Min-SNR-γ per-sample loss weights for ε-prediction (Hang et al., 2023).
+
+    weight_t = min(SNR_t, γ) / SNR_t
+
+    This re-balances per-timestep gradient contributions: pure-noise steps
+    (SNR→0) and near-clean steps (SNR→∞) are both de-emphasized relative to
+    perceptually-important mid-noise timesteps, which improves visual fidelity
+    without changing model architecture.
+
+    Returns a [B] tensor of per-sample weights on the same device as
+    ``timesteps``.
+    """
+    alpha = alphas_cumprod[timesteps].float().to(timesteps.device)
+    snr = alpha / (1.0 - alpha).clamp(min=1e-8)
+    return (torch.clamp(snr, max=gamma) / snr)
+
+
 def build_lr_lambda(warmup_steps: int, total_steps: int, min_lr_ratio: float = 0.1):
     """Linear warmup followed by cosine decay to min_lr_ratio * peak_lr."""
     def lr_lambda(step: int):
@@ -237,6 +259,10 @@ def main():
     accelerator.print(f"Grad accum:       {args.gradient_accumulation_steps}")
     accelerator.print(f"LR:               {args.learning_rate}")
     accelerator.print(f"Max steps:        {args.max_steps}")
+    accelerator.print(f"Min-SNR γ:        {args.snr_gamma if args.snr_gamma > 0 else 'disabled'}")
+    accelerator.print(f"LoRA FF targets:  {args.lora_target_ff}")
+    accelerator.print(f"Cond dropout:     {args.conditioning_dropout_prob if args.conditioning_dropout_prob > 0 else 'disabled'}")
+    accelerator.print(f"Noise offset:     {args.noise_offset if args.noise_offset > 0 else 'disabled'}")
 
     accelerator.print("\nLoading datasets...")
     train_ds = WMTransitionDataset(
@@ -302,6 +328,17 @@ def main():
 
     del pipeline
 
+    # Precompute null text embedding once for use in conditioning dropout.
+    with torch.no_grad():
+        _null_ids = tokenizer(
+            [""],
+            padding="max_length",
+            truncation=True,
+            max_length=tokenizer.model_max_length,
+            return_tensors="pt",
+        ).input_ids.to(device)
+        null_text_emb = text_encoder(_null_ids)[0]  # [1, seq_len, hidden_dim]
+
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
@@ -319,7 +356,11 @@ def main():
     lora_config = LoraConfig(
         r=args.lora_rank,
         lora_alpha=args.lora_alpha,
-        target_modules=["to_q", "to_k", "to_v", "to_out.0"],
+        target_modules=(
+            ["to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"]
+            if args.lora_target_ff
+            else ["to_q", "to_k", "to_v", "to_out.0"]
+        ),
         lora_dropout=args.lora_dropout,
         bias="none",
     )
@@ -374,6 +415,10 @@ def main():
                 "warmup_steps": args.warmup_steps,
                 "lora_rank": args.lora_rank,
                 "lora_alpha": args.lora_alpha,
+                "lora_target_ff": args.lora_target_ff,
+                "snr_gamma": args.snr_gamma,
+                "conditioning_dropout_prob": args.conditioning_dropout_prob,
+                "noise_offset": args.noise_offset,
                 "resolution": args.resolution,
                 "dataset_dir": args.dataset_dir,
                 "pretrained_model": args.pretrained_model,
@@ -386,6 +431,8 @@ def main():
     loss_window: List[float] = []
     best_val_loss = float("inf")
     history: List[Dict] = []
+    _last_eval_step = -1
+    _last_save_step = -1
 
     progress = tqdm(
         total=args.max_steps,
@@ -420,7 +467,23 @@ def main():
                 z_t1 = vae.encode(image_t1).latent_dist.sample() * latent_scale
                 text_emb = text_encoder(input_ids)[0]
 
+            # IP2P-style 3-region conditioning dropout so the model learns
+            # unconditional predictions required by dual CFG at inference.
+            if args.conditioning_dropout_prob > 0:
+                p = args.conditioning_dropout_prob
+                random_p = torch.rand(z_t1.shape[0], device=device)
+                # [0, 2p): drop text conditioning
+                prompt_mask = (random_p < 2.0 * p).view(-1, 1, 1).to(dtype=text_emb.dtype)
+                text_emb = text_emb * (1.0 - prompt_mask) + null_text_emb.to(dtype=text_emb.dtype) * prompt_mask
+                # [p, 3p): zero image conditioning
+                image_mask = ((random_p >= p) & (random_p < 3.0 * p)).view(-1, 1, 1, 1).to(dtype=z_t.dtype)
+                z_t = z_t * (1.0 - image_mask)
+
             noise = torch.randn_like(z_t1)
+            if args.noise_offset > 0:
+                noise = noise + args.noise_offset * torch.randn(
+                    z_t1.shape[0], z_t1.shape[1], 1, 1, device=device, dtype=noise.dtype,
+                )
             timesteps = torch.randint(
                 0,
                 noise_scheduler.config.num_train_timesteps,
@@ -438,7 +501,17 @@ def main():
                         timesteps,
                         encoder_hidden_states=text_emb,
                     ).sample
-                    loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+                    if args.snr_gamma > 0:
+                        snr_w = compute_snr_weights(
+                            noise_scheduler.alphas_cumprod,
+                            timesteps,
+                            args.snr_gamma,
+                        )
+                        loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="none")
+                        loss = loss.mean(dim=list(range(1, loss.ndim)))  # [B]
+                        loss = (snr_w * loss).mean()
+                    else:
+                        loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
 
                 if not torch.isfinite(loss):
                     optimizer.zero_grad(set_to_none=True)
@@ -466,7 +539,8 @@ def main():
                 if tracker is not None:
                     tracker.log({"train/loss": avg_loss, "train/lr": lr}, step=global_step)
 
-            if global_step > 0 and global_step % args.eval_every == 0:
+            if global_step > 0 and global_step % args.eval_every == 0 and global_step != _last_eval_step:
+                _last_eval_step = global_step
                 val_loss = evaluate(
                     unet=unet,
                     vae=vae,
@@ -495,7 +569,6 @@ def main():
                     "best_val_loss": float(best_val_loss) if np.isfinite(best_val_loss) else None,
                 })
 
-                _saved_best_this_step = False
                 if np.isfinite(val_loss) and val_loss < best_val_loss and accelerator.is_main_process:
                     best_val_loss = val_loss
                     save_checkpoint(
@@ -520,16 +593,17 @@ def main():
                             indent=2,
                         )
                     accelerator.print(f"Saved best checkpoint at step {global_step} (val_loss={best_val_loss:.6f}) → {best_dir}")
-                    _saved_best_this_step = True
+                    _last_save_step = global_step
 
-            # Skip periodic save if we already wrote a best checkpoint at this
-            # step — they share the same directory and would overwrite is_best.
+            # Periodic checkpoint: skip if a best-model save already occurred at
+            # this step (same directory) or if this step was already saved.
             if (
                 global_step > 0
                 and global_step % args.save_every == 0
+                and global_step != _last_save_step
                 and accelerator.is_main_process
-                and not _saved_best_this_step
             ):
+                _last_save_step = global_step
                 save_checkpoint(
                     accelerator.unwrap_model(unet),
                     output_dir,
@@ -596,7 +670,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly")
-    parser.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl",
+    parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
                         help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
                              "'transitions_subskill.jsonl').")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/wm")
@@ -634,6 +708,17 @@ def parse_args():
     parser.add_argument("--lora-rank", type=int, default=32) #16
     parser.add_argument("--lora-alpha", type=int, default=32) #32
     parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--lora-target-ff",
+        action="store_true",
+        help="Extend LoRA to FF layers (ff.net.0.proj, ff.net.2) in addition to QKV/out.",
+    )
+    parser.add_argument(
+        "--snr-gamma",
+        type=float,
+        default=5.0,
+        help="Min-SNR-γ loss weighting (Hang et al. 2023). Set 0 to use plain MSE.",
+    )
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
@@ -651,6 +736,10 @@ def parse_args():
                         help="Experiment tracker: tensorboard (default), wandb, or none.")
     parser.add_argument("--wandb-project", type=str, default="verify2act-wm",
                         help="W&B project name (only used when --tracker=wandb).")
+    parser.add_argument("--conditioning-dropout-prob", type=float, default=0.05,
+                        help="IP2P-style 3-region conditioning dropout probability. Set 0 to disable.")
+    parser.add_argument("--noise-offset", type=float, default=0.05,
+                        help="Noise offset magnitude added during training. Set 0 to disable.")
 
     return parser.parse_args()
 

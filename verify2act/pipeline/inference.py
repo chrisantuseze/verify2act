@@ -677,7 +677,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/best/unet_lora")
     parser.add_argument("--wm-decoder-dir", default="verify2act/output/decoder")
     parser.add_argument("--wm-steps", type=int, default=30)
-    parser.add_argument("--wm-image-guidance", type=float, default=1.5)
+    parser.add_argument("--wm-image-guidance", type=float, default=2.8)
     parser.add_argument("--wm-text-guidance", type=float, default=7.5)
     parser.add_argument("--wm-seed", type=int, default=None)
 

@@ -78,17 +78,17 @@ def parse_args():
     parser.add_argument(
         "--transitions-file",
         type=str,
-        default="transitions_subskill.jsonl",
-        help="JSONL filename inside dataset-dir (e.g. 'transitions_subskill.jsonl').",
+        default="transitions.jsonl",
+        help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or 'transitions_subskill.jsonl').",
     )
 
     parser.add_argument("--output-path", type=str, default="verify2act/output/wm_demo/generated.png")
     parser.add_argument("--meta-path", type=str, default="verify2act/output/wm_demo/run_meta.json")
 
     parser.add_argument("--resolution", type=int, default=512)
-    parser.add_argument("--num-inference-steps", type=int, default=30)
+    parser.add_argument("--num-inference-steps", type=int, default=50)
     parser.add_argument("--image-guidance-scale", type=float, default=1.5)
-    parser.add_argument("--guidance-scale", type=float, default=7.5)
+    parser.add_argument("--guidance-scale", type=float, default=10)
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument("--device", type=str, default="cuda")
@@ -105,7 +105,7 @@ def resolve_dtype(dtype_name: str):
     return torch.float32
 
 
-def load_transition_sample(dataset_dir: Path, index: int, transitions_file: str = "transitions_subskill.jsonl"):
+def load_transition_sample(dataset_dir: Path, index: int, transitions_file: str = "transitions.jsonl"):
     transitions_path = dataset_dir / transitions_file
     if not transitions_path.exists():
         raise FileNotFoundError(f"Missing transitions file: {transitions_path}")

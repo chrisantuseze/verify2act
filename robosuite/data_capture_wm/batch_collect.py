@@ -12,7 +12,7 @@ Usage:
     # Expert episodes
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
-        --transition-mode both \
+        --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.0 \
         --nut-type-mode random --num-episodes 3000 \
@@ -21,7 +21,7 @@ Usage:
     # Expert episodes --headless
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
-        --transition-mode both \
+        --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
         --nut-type-mode random --num-episodes 3000 \
@@ -31,7 +31,7 @@ Usage:
     # Noisy episodes (sigma=0.05)
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
-        --transition-mode both \
+        --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
         --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
         --nut-type-mode random --num-episodes 3000 \
@@ -370,7 +370,7 @@ def main():
     parser.add_argument("--policy-mode", type=str, default="expert",
                         choices=["expert", "noisy"])
     parser.add_argument("--noise-sigma", type=float, default=0.05)
-    parser.add_argument("--transition-mode", type=str, default="both",
+    parser.add_argument("--transition-mode", type=str, default="keyframe",
                         choices=["dense", "keyframe", "subskill", "both"])
     parser.add_argument("--seed", type=int, default=42)
     # Nut assembly params

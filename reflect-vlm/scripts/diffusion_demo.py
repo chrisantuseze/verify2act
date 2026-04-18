@@ -30,7 +30,7 @@ if __name__ == '__main__':
 
    generator = torch.Generator("cuda").manual_seed(0)
    model_path='yunhaif/ReflectVLM-diffusion'
-   pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
+   pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda:2")
 
    cur_image_path = "assets/images/diffusion_examples/0.png"
    action = "pick up orange"

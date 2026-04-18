@@ -4,16 +4,19 @@ clear
 
 
 conda activate verify2act
+# v3: Min-SNR-γ + FF LoRA targets
 python verify2act/world_model/train_wm.py \
   --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/wm_v2 \
-  --max-steps 15000 \
+  --output-dir verify2act/output/wm_v3 \
+  --max-steps 20000 \
   --eval-every 1000 \
   --train-batch-size 8 \
   --gradient-accumulation-steps 2 \
   --learning-rate 5e-5 \
   --lora-rank 32 \
   --lora-alpha 32 \
+  --lora-target-ff \
+  --snr-gamma 5.0 \
   --val-frac 0.2 \
   --mixed-precision fp16 \
   --device cuda
@@ -59,3 +62,5 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --wm-mode diffusion \
   --vae-model runwayml/stable-diffusion-v1-5 \
   --output-dir verify2act/output/inference_run
+
+  tensorboard --logdir=path/to/logs

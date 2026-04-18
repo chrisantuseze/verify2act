@@ -61,8 +61,7 @@ def _imagenet_normalise(t: torch.Tensor) -> torch.Tensor:
 
 def _load_dataset(
     dataset_dir: str,
-    transitions_file: str = "transitions_subskill.jsonl",
-    labels_file: str = "labels.jsonl",
+    transitions_file: str = "transitions.jsonl",
 ) -> Tuple[Dict, Dict]:
     """Return (transitions_by_ep, success_set) dicts."""
     ds_path = Path(dataset_dir)
@@ -74,19 +73,12 @@ def _load_dataset(
             ep = row["episode_id"]
             rows_by_ep.setdefault(ep, []).append(row)
 
-    success_set = set()
-    with open(ds_path / labels_file) as f:
-        labels_by_ep: Dict[str, List[int]] = {}
-        for line in f:
-            row = json.loads(line)
-            ep = row["episode_id"]
-            labels_by_ep.setdefault(ep, []).append(row["label_reachable"])
-
-    for ep, labels in labels_by_ep.items():
-        n = len(labels)
-        cutoff = max(1, int(n * 0.8))
-        if any(labels[cutoff:]):
-            success_set.add(ep)
+    # Derive success_set from episode_success flag stored in each transition row.
+    success_set = {
+        ep
+        for ep, rows in rows_by_ep.items()
+        if any(r.get("episode_success", False) for r in rows)
+    }
 
     return rows_by_ep, success_set
 
@@ -139,7 +131,7 @@ def run_diagnostic(args: argparse.Namespace) -> Dict:
 
     print(f"Loading dataset from {args.dataset_dir}...")
     rows_by_ep, success_set = _load_dataset(
-        args.dataset_dir, args.transitions_file, args.labels_file
+        args.dataset_dir, args.transitions_file
     )
     n_success = len(success_set)
     n_total   = len(rows_by_ep)
@@ -270,8 +262,7 @@ def parse_args() -> argparse.Namespace:
         description="Zero-shot DINOv2 goal-proximity AUROC: patch_mean vs CLS"
     )
     p.add_argument("--dataset-dir",      type=str, required=True)
-    p.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl")
-    p.add_argument("--labels-file",      type=str, default="labels.jsonl")
+    p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     p.add_argument("--image-size",       type=int, default=224)
     p.add_argument("--n-samples",        type=int, default=400,
                    help="Number of positive (and negative) pairs to sample")

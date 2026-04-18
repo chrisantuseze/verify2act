@@ -477,6 +477,12 @@ class EpisodeRecorder:
     def _build_subskill_transitions(self) -> List[Dict]:
         """Build finer-grained sub-skill transitions using subskill_event_tag.
 
+        .. deprecated::
+            No longer called by default. The world-model pipeline now uses
+            keyframe transitions (``transitions.jsonl``) exclusively.
+            Retained for reference; pass ``--transition-mode both`` or
+            ``"subskill"`` to re-enable.
+
         Same pairing logic as keyframe, but reads from the 'subskill_event_tag'
         field and uses 'subskill_action_text' for the action_text column.
         """

@@ -279,7 +279,7 @@ def parse_args():
     parser.add_argument(
         "--transitions-file",
         type=str,
-        default="transitions_subskill.jsonl",
+        default="transitions.jsonl",
         help="JSONL filename inside dataset-dir for real rendered transitions.",
     )
     parser.add_argument(

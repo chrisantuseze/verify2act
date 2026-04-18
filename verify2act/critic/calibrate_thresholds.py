@@ -130,8 +130,7 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument("--critic-ckpt", type=str, required=True)
     p.add_argument("--dataset-dir", type=str, required=True)
-    p.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl")
-    p.add_argument("--labels-file", type=str, default="labels.jsonl")
+    p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--image-size", type=int, default=224)
@@ -159,7 +158,6 @@ def main() -> int:
     _, val_ds = build_contrastive_datasets(
         dataset_dir=args.dataset_dir,
         transitions_file=args.transitions_file,
-        labels_file=args.labels_file,
         val_frac=args.val_frac,
         seed=args.seed,
         image_size=args.image_size,

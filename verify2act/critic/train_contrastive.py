@@ -287,7 +287,6 @@ def main():
     train_ds, val_ds = build_contrastive_datasets(
         dataset_dir=args.dataset_dir,
         transitions_file=args.transitions_file,
-        labels_file=args.labels_file,
         val_frac=args.val_frac,
         seed=args.seed,
         image_size=args.image_size,
@@ -489,8 +488,7 @@ def parse_args():
 
     # Data
     p.add_argument("--dataset-dir",      type=str, required=True)
-    p.add_argument("--transitions-file", type=str, default="transitions_subskill.jsonl")
-    p.add_argument("--labels-file",      type=str, default="labels.jsonl")
+    p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     p.add_argument("--image-size",       type=int, default=224,
                    help="Resize target for DINOv2 (must be divisible by 14; 224 recommended)")
     p.add_argument("--mode0-prob",       type=float, default=0.5,
@@ -513,7 +511,7 @@ def parse_args():
                    help="Cap batches per epoch (0 = all). Useful for debugging.")
 
     # Phase schedule
-    p.add_argument("--freeze-backbone-epochs", type=int, default=3,
+    p.add_argument("--freeze-backbone-epochs", type=int, default=5,
                    help="Epochs with backbone frozen (head warm-up). Phase 2 unfreezes.")
     p.add_argument("--warmup-epochs", type=int, default=2,
                    help="Linear LR warmup epochs during phase 1.")
@@ -533,7 +531,7 @@ def parse_args():
     # Output
     p.add_argument("--output-dir", type=str, default="verify2act/output/contrastive")
     p.add_argument("--seed",       type=int, default=42)
-    p.add_argument("--device",     type=str, default="cuda", choices=["cuda", "cpu"])
+    p.add_argument("--device",     type=str, default="cuda", choices=["cuda", "cuda:1", "cpu"])
     p.add_argument("--mixed-precision", type=str, default="bf16",
                    choices=["no", "fp16", "bf16"])
     p.add_argument("--tracker", type=str, default="tensorboard",

@@ -28,7 +28,7 @@ class WMTransitionDataset(Dataset):
         split: str = "train",
         val_frac: float = 0.1,
         seed: int = 42,
-        transitions_file: str = "transitions_subskill.jsonl",
+        transitions_file: str = "transitions.jsonl",
     ):
         self.root = Path(dataset_dir)
 
@@ -77,7 +77,7 @@ class ContrastiveRow:
     image_t: str
     image_t1: str
     goal_image: str
-    label_reachable: int
+    episode_success: bool
 
 
 class ContrastivePairDataset(Dataset):
@@ -129,7 +129,7 @@ class ContrastivePairDataset(Dataset):
             late_rows = ep_rows[late_start:]
             early_rows = ep_rows[:early_end]
 
-            ep_success = any(r.label_reachable == 1 for r in late_rows)
+            ep_success = any(r.episode_success for r in late_rows)
             if ep_success and late_rows:
                 self._positive_anchors.extend(late_rows)
             if early_rows:
@@ -140,7 +140,7 @@ class ContrastivePairDataset(Dataset):
 
         if not self._positive_anchors:
             raise RuntimeError(
-                "No positive anchors found. Check labels.jsonl has label_reachable=1 in late episode steps."
+                "No positive anchors found. Check that episode_success=True exists in late episode rows of the transitions file."
             )
         if not self._negative_anchors:
             raise RuntimeError("No early-frame negatives found.")
@@ -199,8 +199,7 @@ def _resolve_goal_image(trans: Dict, dataset_root: Path) -> str:
 
 def build_contrastive_datasets(
     dataset_dir: str,
-    transitions_file: str = "transitions_subskill.jsonl",
-    labels_file: str = "labels.jsonl",
+    transitions_file: str = "transitions.jsonl",
     val_frac: float = 0.1,
     seed: int = 42,
     image_size: int = 224,
@@ -214,16 +213,6 @@ def build_contrastive_datasets(
         for line in f:
             item = json.loads(line)
             trans_map[(item["episode_id"], int(item["timestep"]))] = item
-
-    label_map: Dict[Tuple[str, int], int] = {}
-    labels_path = root / labels_file
-    if labels_path.exists():
-        with open(labels_path) as f:
-            for line in f:
-                row = json.loads(line)
-                label_map[(row["episode_id"], int(row["timestep"]))] = int(
-                    row.get("label_reachable", -1)
-                )
 
     all_rows: List[ContrastiveRow] = []
     for (ep, ts), trans in trans_map.items():
@@ -242,7 +231,7 @@ def build_contrastive_datasets(
                 image_t=image_t,
                 image_t1=image_t1,
                 goal_image=goal,
-                label_reachable=label_map.get((ep, ts), -1),
+                episode_success=bool(trans.get("episode_success", False)),
             )
         )
 

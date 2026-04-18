@@ -55,6 +55,7 @@ class PolicyAdapter:
         self._prev_stage = stage
         return event_tag
 
+    # [DEPRECATED] Only called when transition_mode='subskill'/'both'.
     def _subskill_event_on_stage_entry(self, stage: str, stage_to_event: dict[str, str]) -> Optional[str]:
         event_tag = None
         if stage != self._prev_stage_subskill:
@@ -114,8 +115,9 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
         "done":               "insert_end",
     }
 
-    # ── Sub-skill keyframe events (finer-grained transitions) ──
-    # Splits each pick/insert into multiple sub-skill transitions.
+    # ── Sub-skill keyframe events (finer-grained transitions) ── [DEPRECATED]
+    # No longer used by default. The pipeline uses keyframe transitions only.
+    # Retained for reference; only active when transition_mode='subskill'/'both'.
     _SUBSKILL_EVENT_TAG_BY_STAGE = {
         "move_to_nut":        "approach_start",
         "lower_to_nut":       "approach_end|grasp_start",
@@ -128,7 +130,7 @@ class NutAssemblyPolicyAdapter(PolicyAdapter):
         "done":               "lower_end",
     }
 
-    # Sub-skill name by policy stage (for enriched action text)
+    # Sub-skill name by policy stage (for enriched action text) [DEPRECATED]
     _SUBSKILL_BY_STAGE = {
         "move_to_nut":       "approach",
         "lower_to_nut":      "approach",

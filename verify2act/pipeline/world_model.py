@@ -235,6 +235,17 @@ class DiffusionWorldModel(WorldModelBase):
         Optional seed for the generator (reproducibility).
     """
 
+    # [DEPRECATED] Per-subskill IGS values for sub-skill action texts (approach/grasp/carry/align/lower).
+    # No longer matched by default since the pipeline uses keyframe action texts (pick/insert).
+    # Retained for reference; only active when adaptive_igs=True and action text starts with a subskill verb.
+    _SUBSKILL_IGS: dict = {
+        "approach": 1.5,
+        "grasp": 2.0,
+        "carry": 2.5,
+        "align": 3.0,
+        "lower": 3.5,
+    }
+
     def __init__(
         self,
         pretrained_model: str = "timbrooks/instruct-pix2pix",
@@ -245,9 +256,10 @@ class DiffusionWorldModel(WorldModelBase):
         device: str = "cuda",
         torch_dtype: torch.dtype = torch.float16,
         num_inference_steps: int = 30,
-        image_guidance_scale: float = 1.5,
+        image_guidance_scale: float = 2.8,
         guidance_scale: float = 7.5,
         seed: Optional[int] = None,
+        adaptive_igs: bool = True,
     ) -> None:
         from diffusers import StableDiffusionInstructPix2PixPipeline
         from verify2act.utils.vae import load_vae_decoder, load_vae_encoder
@@ -256,6 +268,7 @@ class DiffusionWorldModel(WorldModelBase):
         self.num_inference_steps = num_inference_steps
         self.image_guidance_scale = image_guidance_scale
         self.guidance_scale = guidance_scale
+        self.adaptive_igs = adaptive_igs
         self._seed = seed
 
         logger.info("Loading InstructPix2Pix pipeline from %s …", pretrained_model)
@@ -298,6 +311,20 @@ class DiffusionWorldModel(WorldModelBase):
             ).to(self.device)
             logger.info("LoRA adapter loaded from %s", adapter_dir)
 
+    def _igs_for_action(self, action_text: str) -> float:
+        """Return the image_guidance_scale for this action text.
+
+        When ``adaptive_igs`` is enabled, the leading verb of the prompt is
+        matched against ``_SUBSKILL_IGS`` so that sub-skills with smaller
+        expected visual changes use a lower IGS (preserving image structure)
+        while sub-skills with larger changes use a higher IGS.  Falls back to
+        ``self.image_guidance_scale`` when the verb is unrecognised.
+        """
+        if not self.adaptive_igs:
+            return self.image_guidance_scale
+        first_word = action_text.strip().split()[0].lower() if action_text.strip() else ""
+        return self._SUBSKILL_IGS.get(first_word, self.image_guidance_scale)
+
     def imagine(
         self,
         current_image_np: np.ndarray,
@@ -309,12 +336,13 @@ class DiffusionWorldModel(WorldModelBase):
         if self._seed is not None:
             generator = torch.Generator(self.device.type).manual_seed(self._seed)
 
+        igs = self._igs_for_action(action_text)
         with torch.inference_mode():
             out = self.pipeline(
                 action_text,
                 image=img_pil,
                 num_inference_steps=self.num_inference_steps,
-                image_guidance_scale=self.image_guidance_scale,
+                image_guidance_scale=igs,
                 guidance_scale=self.guidance_scale,
                 generator=generator,
             ).images[0]
