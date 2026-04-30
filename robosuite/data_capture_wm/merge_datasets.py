@@ -41,15 +41,26 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="One or more dataset roots to merge",
     )
-    parser.add_argument(
+
+    # Mutually exclusive: either create a new output dir, or append into an existing base.
+    dest_group = parser.add_mutually_exclusive_group(required=True)
+    dest_group.add_argument(
         "--output-dir",
-        required=True,
-        help="Output dataset root to create",
+        help="Output dataset root to create (fresh merge)",
     )
+    dest_group.add_argument(
+        "--base-dir",
+        help=(
+            "Existing dataset root to append into. "
+            "Episodes from --source-dirs are added after the last episode already present. "
+            "The base dataset's files are never re-copied or renumbered."
+        ),
+    )
+
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Delete output directory first if it already exists",
+        help="(--output-dir only) Delete output directory first if it already exists",
     )
     parser.add_argument(
         "--skip-labels",
@@ -120,42 +131,101 @@ def aggregate_field(values: List):
     return "mixed"
 
 
+def _find_next_episode_idx(episodes_dir: Path) -> int:
+    """Return the integer index one past the highest ep_NNNNN found."""
+    max_idx = -1
+    if episodes_dir.exists():
+        for ep in episodes_dir.iterdir():
+            if ep.is_dir() and ep.name.startswith("ep_"):
+                try:
+                    idx = int(ep.name[3:])
+                    if idx > max_idx:
+                        max_idx = idx
+                except ValueError:
+                    pass
+    return max_idx + 1
+
+
 def main() -> None:
     args = parse_args()
 
     source_dirs = [Path(p).resolve() for p in args.source_dirs]
-    output_dir = Path(args.output_dir).resolve()
+
+    # ── Determine output directory and append-vs-create mode ─────────────────
+    append_mode: bool = args.base_dir is not None
+    output_dir = Path(args.base_dir if append_mode else args.output_dir).resolve()
     output_episodes_dir = output_dir / "episodes"
 
-    if output_dir.exists():
-        if not args.overwrite:
-            raise FileExistsError(
-                f"Output directory exists: {output_dir}. Use --overwrite to replace it."
+    if append_mode:
+        # Sanity-check: base dir must already exist with an episodes/ subdir.
+        if not output_dir.exists():
+            raise FileNotFoundError(
+                f"--base-dir does not exist: {output_dir}"
             )
-        shutil.rmtree(output_dir)
+        if not output_episodes_dir.exists():
+            raise FileNotFoundError(
+                f"--base-dir has no episodes/ subdirectory: {output_dir}"
+            )
+        # Ensure none of the source dirs resolve to the base dir itself.
+        for src in source_dirs:
+            if src == output_dir:
+                raise ValueError(
+                    f"Source dir is the same as --base-dir; "
+                    f"cannot append a dataset to itself: {src}"
+                )
+    else:
+        if output_dir.exists():
+            if not args.overwrite:
+                raise FileExistsError(
+                    f"Output directory exists: {output_dir}. Use --overwrite to replace it."
+                )
+            shutil.rmtree(output_dir)
+        output_episodes_dir.mkdir(parents=True, exist_ok=True)
 
-    output_episodes_dir.mkdir(parents=True, exist_ok=True)
     output_transitions = output_dir / "transitions.jsonl"
     output_subskill = output_dir / "transitions_subskill.jsonl"
     output_labels = output_dir / "labels.jsonl"
 
-    next_episode_idx = 0
-    total_transitions_written = 0
-    total_subskill_written = 0
-    total_labels_written = 0
-    total_episodes_written = 0
-    successful_episodes = 0
+    # ── Seed running counters from existing base dataset (append mode) ────────
+    if append_mode:
+        base_meta = read_json(output_dir / "metadata.json") or {}
+        base_stats = base_meta.get("stats", {})
+        next_episode_idx: int = _find_next_episode_idx(output_episodes_dir)
+        total_episodes_written: int = base_stats.get("total", 0)
+        successful_episodes: int = base_stats.get("success", 0)
+        total_transitions_written: int = base_stats.get("transitions", 0)
+        total_subskill_written: int = base_stats.get("subskill_transitions", 0)
+        total_labels_written: int = count_jsonl_lines(output_labels)
+        # Carry forward existing source metadata for aggregate_field
+        source_metadatas: List[Dict] = [base_meta] if base_meta else []
+        print(
+            f"Appending to base dataset: {output_dir}\n"
+            f"  Existing episodes : {next_episode_idx}  "
+            f"(next index: ep_{next_episode_idx:05d})\n"
+            f"  Existing transitions: {total_transitions_written}\n"
+            f"  Existing subskill   : {total_subskill_written}"
+        )
+    else:
+        next_episode_idx = 0
+        total_transitions_written = 0
+        total_subskill_written = 0
+        total_labels_written = 0
+        total_episodes_written = 0
+        successful_episodes = 0
+        source_metadatas = []
 
-    source_metadatas: List[Dict] = []
     source_reports: List[Dict] = []
 
-    with open(output_transitions, "w") as transitions_out:
+    # In append mode open .jsonl files for appending; otherwise create fresh.
+    open_mode = "a" if append_mode else "w"
+
+    with open(output_transitions, open_mode) as transitions_out:
         labels_out = None
         if not args.skip_labels:
-            labels_out = open(output_labels, "w")
+            labels_out = open(output_labels, open_mode)
         subskill_out = None
         if not args.skip_subskill:
-            subskill_out = open(output_subskill, "w")
+            subskill_out = open(output_subskill, open_mode)
 
         try:
             for src_dir in source_dirs:
@@ -296,6 +366,15 @@ def main() -> None:
     if not args.skip_labels and output_labels.exists() and total_labels_written == 0:
         output_labels.unlink()
 
+    # In append mode, preserve the original merged_from list and extend it.
+    if append_mode:
+        base_meta_for_final = read_json(output_dir / "metadata.json") or {}
+        prior_merged_from: List[str] = base_meta_for_final.get("merged_from", [])
+        prior_sources: List[Dict] = base_meta_for_final.get("sources", [])
+    else:
+        prior_merged_from = []
+        prior_sources = []
+
     merged_meta = {
         "env_name": aggregate_field([md.get("env_name") for md in source_metadatas]),
         "env_config": aggregate_field([md.get("env_config") for md in source_metadatas]),
@@ -312,8 +391,8 @@ def main() -> None:
             "subskill_transitions": total_subskill_written,
         },
         "timestamp": datetime.now().isoformat(),
-        "merged_from": [str(path) for path in source_dirs],
-        "sources": source_reports,
+        "merged_from": prior_merged_from + [str(path) for path in source_dirs],
+        "sources": prior_sources + source_reports,
     }
 
     with open(output_dir / "metadata.json", "w") as f:

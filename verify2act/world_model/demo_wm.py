@@ -115,25 +115,55 @@ def load_transition_sample(dataset_dir: Path, index: int, transitions_file: str 
             if i == index:
                 row = json.loads(line)
                 image_path = dataset_dir / row["image_t"]
+                gt_path = dataset_dir / row["image_t1"] if "image_t1" in row else None
                 prompt = row["action_text"]
-                return image_path, prompt, row
+                return image_path, gt_path, prompt, row
 
     raise IndexError(f"transition-index={index} is out of range for {transitions_path}")
 
 
 def ensure_inputs(args):
     if args.image_path and args.prompt:
-        return Path(args.image_path), args.prompt, {"source": "direct_args"}
+        return Path(args.image_path), None, args.prompt, {"source": "direct_args"}
 
     if args.dataset_dir:
-        image_path, prompt, row = load_transition_sample(
+        image_path, gt_path, prompt, row = load_transition_sample(
             Path(args.dataset_dir), args.transition_index, args.transitions_file
         )
-        return image_path, prompt, row
+        return image_path, gt_path, prompt, row
 
     raise ValueError(
         "Provide either (--image-path and --prompt) or (--dataset-dir with optional --transition-index)."
     )
+
+
+def save_collage(image_in: Image.Image, gt_image: Image.Image | None, image_out: Image.Image, output_path: Path):
+    """Save a side-by-side collage of input | ground truth | generated."""
+    from PIL import ImageDraw, ImageFont
+
+    w, h = image_in.size
+    labels = ["Input", "Ground Truth", "Generated"]
+    panels = [image_in, gt_image if gt_image is not None else Image.new("RGB", (w, h), (30, 30, 30)), image_out]
+
+    label_height = 24
+    collage = Image.new("RGB", (w * 3, h + label_height), (20, 20, 20))
+    draw = ImageDraw.Draw(collage)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+    except Exception:
+        font = ImageFont.load_default()
+
+    for idx, (panel, label) in enumerate(zip(panels, labels)):
+        panel_resized = panel.resize((w, h))
+        collage.paste(panel_resized, (idx * w, label_height))
+        text_x = idx * w + w // 2
+        draw.text((text_x, 4), label, fill=(255, 255, 255), font=font, anchor="mt")
+
+    if gt_image is None:
+        draw.text((w + w // 2, label_height + h // 2), "N/A", fill=(180, 180, 180), font=font, anchor="mm")
+
+    collage.save(output_path)
+    print(f"Saved collage:         {output_path}")
 
 
 def main():
@@ -145,7 +175,7 @@ def main():
     torch_dtype = resolve_dtype(args.dtype)
     device = torch.device(args.device)
 
-    image_path, prompt, sample_meta = ensure_inputs(args)
+    image_path, gt_path, prompt, sample_meta = ensure_inputs(args)
     if not image_path.exists():
         raise FileNotFoundError(f"Input image not found: {image_path}")
 
@@ -207,6 +237,12 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image_out.save(output_path)
 
+    gt_image = None
+    if gt_path is not None and Path(gt_path).exists():
+        gt_image = Image.open(gt_path).convert("RGB").resize(original_size)
+    collage_path = output_path.parent / (output_path.stem + "_collage.png")
+    save_collage(image_in.resize(original_size), gt_image, image_out, collage_path)
+
     meta = {
         "pretrained_model": args.pretrained_model,
         "vae_model": vae_model,
@@ -214,8 +250,10 @@ def main():
         "adapter_dir": args.adapter_dir,
         "decoder_dir": args.decoder_dir,
         "input_image": str(image_path),
+        "gt_image": str(gt_path) if gt_path is not None else None,
         "prompt": prompt,
         "output_image": str(output_path),
+        "collage_image": str(collage_path),
         "seed": args.seed,
         "num_inference_steps": args.num_inference_steps,
         "image_guidance_scale": args.image_guidance_scale,

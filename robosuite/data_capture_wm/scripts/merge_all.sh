@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # dataset/ lives next to the scripts/ directory (parent of SCRIPT_DIR)
-DATASET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/dataset"
+DATASET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/dataset2"
 OUTPUT_DIR="${DATASET_DIR}/nut_assembly_merged"
 EXTRA_ARGS=()
 
@@ -57,6 +57,40 @@ if (( ${#FILTERED_DIRS[@]} == 0 )); then
     exit 1
 fi
 
+# ── Detect a large pre-merged base dataset ───────────────────────────────────
+# If nut_assembly_merged_prev exists among the source dirs, promote it to the
+# base (output) directory instead of re-copying all its episodes.  We simply
+# rename it to OUTPUT_DIR (an instant mv on the same filesystem) and then only
+# append the remaining smaller datasets to it.
+PREV_DIR="${DATASET_DIR}/nut_assembly_merged_prev"
+USE_BASE_DIR=false
+if [[ -d "${PREV_DIR}/episodes" ]]; then
+    # Remove prev from the list of sources so it is not copied again.
+    NEW_FILTERED=()
+    for d in "${FILTERED_DIRS[@]}"; do
+        if [[ "$(realpath "${d}")" != "$(realpath "${PREV_DIR}")" ]]; then
+            NEW_FILTERED+=("${d}")
+        fi
+    done
+    FILTERED_DIRS=("${NEW_FILTERED[@]}")
+
+    # Handle the case where OUTPUT_DIR already exists.
+    if [[ -d "${OUTPUT_DIR}" ]]; then
+        if [[ " ${EXTRA_ARGS[*]} " == *" --overwrite "* ]]; then
+            echo "--overwrite: removing existing output dir ${OUTPUT_DIR}"
+            rm -rf "${OUTPUT_DIR}"
+        else
+            echo "ERROR: Output directory already exists: ${OUTPUT_DIR}" >&2
+            echo "       Pass --overwrite to replace it." >&2
+            exit 1
+        fi
+    fi
+
+    echo "Promoting ${PREV_DIR} → ${OUTPUT_DIR}  (rename, no copy)"
+    mv "${PREV_DIR}" "${OUTPUT_DIR}"
+    USE_BASE_DIR=true
+fi
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════════"
@@ -66,6 +100,11 @@ for d in "${FILTERED_DIRS[@]}"; do
     echo "    ${d}"
 done
 echo "  Output dir: ${OUTPUT_DIR}"
+if [[ "${USE_BASE_DIR}" == true ]]; then
+    echo "  Mode: append to base (nut_assembly_merged_prev promoted, no re-copy)"
+else
+    echo "  Mode: fresh merge"
+fi
 echo "══════════════════════════════════════════════════════════"
 echo ""
 
@@ -76,10 +115,21 @@ if [[ ! -f "${MERGE_SCRIPT}" ]]; then
     exit 1
 fi
 
-python "${MERGE_SCRIPT}" \
-    --source-dirs "${FILTERED_DIRS[@]}" \
-    --output-dir  "${OUTPUT_DIR}" \
-    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+if [[ "${USE_BASE_DIR}" == true ]]; then
+    if (( ${#FILTERED_DIRS[@]} == 0 )); then
+        echo "No additional datasets to append — base dataset is already up to date."
+    else
+        python "${MERGE_SCRIPT}" \
+            --source-dirs "${FILTERED_DIRS[@]}" \
+            --base-dir    "${OUTPUT_DIR}" \
+            "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+    fi
+else
+    python "${MERGE_SCRIPT}" \
+        --source-dirs "${FILTERED_DIRS[@]}" \
+        --output-dir  "${OUTPUT_DIR}" \
+        "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+fi
 
 echo ""
 echo "Done. Merged dataset written to: ${OUTPUT_DIR}"
