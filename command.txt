@@ -9,6 +9,8 @@ squeue -u echris #checks the status of a pete job
 
 scancel jobid
 
+sbatch verify2act.sbatch
+
 conda activate verify2act
 # v3: Min-SNR-γ + FF LoRA targets
 python verify2act/world_model/train_wm.py \
