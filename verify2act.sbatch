@@ -9,8 +9,7 @@
 module load apptainer/1.2.2 cuda/12.1
 export APPTAINER_BIND=$PWD
 
-apptainer run --nv apptainerfile.sif 
-xvfb-run -a python robosuite/data_capture_wm/batch_collect.py \
+apptainer exec --nv apptainerfile.sif xvfb-run -a python3 robosuite/data_capture_wm/batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir robosuite/data_capture_wm/dataset/nut_assembly \
