@@ -2,6 +2,14 @@ conda activate verify2act
 cd robosuite/data_capture_wm
 clear
 
+###################### HPCC ####################
+ssh echris@pete.hpc.okstate.edu
+
+squeue -u echris #checks the status of a pete job
+
+scancel jobid
+
+sbatch verify2act.sbatch
 
 conda activate verify2act
 # v3: Min-SNR-γ + FF LoRA targets

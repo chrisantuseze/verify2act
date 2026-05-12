@@ -29,13 +29,14 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
         python3-opencv \
         libglib2.0-0 \
         nvidia-container-toolkit \
+        xvfb \
 		wget 
 	wget https://files.pythonhosted.org/packages/b6/cb/b86984bed139586d01532a587464b5805f12e397594f19f931c4c2fbfa61/tenacity-9.0.0-py3-none-any.whl
     python3 -m pip install --upgrade pip
 	python3 -m pip freeze > requirements.txt #fixes the issue with hashes
 	python3 -m pip cache purge	#fixes the issue with hashes and caches
 	python3 -m pip install tenacity
-    python3 -m pip install --no-cache-dir numpy==1.26.3 \
+    python3 -m pip install --no-cache-dir \
 	numpy>=1.24.0 \
 	scikit-learn>=1.2.0 \
 	robosuite>=1.4.0 \
@@ -54,7 +55,7 @@ From: nvidia/cuda:12.2.0-base-ubuntu22.04
 	lpips>=0.1.4 \
 	peft>=0.18.0 \
 	diffusers==0.31.0 \
-	transformers>=4.41.2,<5.0.0 \
+	'transformers>=4.41.2,<5.0.0' \
 	safetensors>=0.7.0 \
 	tqdm
 
