@@ -178,7 +178,7 @@ class HeuristicNutAssemblyPolicy:
     """
     
     # Constants
-    P_GAIN = 5.0 #10.0  # Proportional gain for position control
+    P_GAIN = 6.0  # Proportional gain for position control
     R_GAIN = 2.0 #5.0   # Proportional gain for orientation control
     
     # Height offsets
@@ -192,15 +192,15 @@ class HeuristicNutAssemblyPolicy:
     NUT_EEF_ATTACH_THRESH = 0.04  # Max distance (m) between nut and EEF to consider it attached
     
     # Counter thresholds
-    GRASP_DURATION = 50
-    RELEASE_DURATION = 50
+    GRASP_DURATION = 25
+    RELEASE_DURATION = 20
     ALIGN_DURATION = 40  # For aligning nut over peg
-    PRE_GRASP_ALIGN_DURATION = 20  # Min steps to spend aligning orientation before lowering to nut
-    ORIENTATION_RESET_DURATION = 80  # Steps to spend resetting gripper orientation after release
+    PRE_GRASP_ALIGN_DURATION = 15  # Min steps to spend aligning orientation before lowering to nut
+    ORIENTATION_RESET_DURATION = 50  # Steps to spend resetting gripper orientation after release
     # End-effector stagnation detection (if EEF stays within `EEF_STAGNATION_THRESH`
     # meters for `EEF_STAGNATION_MAX_STEPS` steps, reset the episode)
-    EEF_STAGNATION_THRESH = 0.002  # meters (2 mm)
-    EEF_STAGNATION_MAX_STEPS = 350 #50
+    EEF_STAGNATION_THRESH = 0.0015  # meters (2 mm)
+    EEF_STAGNATION_MAX_STEPS = 150 #50
     
     def __init__(self, env, data_collection_mode: bool = True):
         """
