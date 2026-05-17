@@ -19,3 +19,4 @@ diffusers==0.31.0  # >=0.32.0 requires PyTorch>=2.3; macOS Intel max is 2.2.2
 transformers>=4.41.2,<5.0.0  # 5.x dropped FLAX_WEIGHTS_NAME and requires PyTorch>=2.4
 safetensors>=0.7.0
 tqdm
+jaxtyping

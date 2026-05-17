@@ -176,7 +176,20 @@ class DINOv2DualHeadCritic(nn.Module):
         """
         x = self._normalize(img.float())
         feats = self.backbone.forward_features(x)
-        mu = feats["x_norm_patchtokens"].mean(dim=1)  # [B, 768]
+        return self.encode_features(feats["x_norm_patchtokens"])
+
+    def encode_features(self, patch_tokens: torch.Tensor) -> "ProbEmbedding":
+        """Bypasses the backbone and evaluates predicted DINO patches directly.
+
+        Parameters
+        ----------
+        patch_tokens : [B, num_patches, 768]  (e.g., from LatentDynamicsModel)
+
+        Returns
+        -------
+        ProbEmbedding
+        """
+        mu = patch_tokens.mean(dim=1)  # [B, 768]
         log_var1 = self.log_var_head1(mu).clamp(-4.0, 4.0)
         log_var2 = self.log_var_head2(mu).clamp(-4.0, 4.0)
         return ProbEmbedding(mu=mu, log_var1=log_var1, log_var2=log_var2)

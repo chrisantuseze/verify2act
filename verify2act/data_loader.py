@@ -55,12 +55,41 @@ class WMTransitionDataset(Dataset):
     def __len__(self):
         return len(self.rows)
 
+    def sample_weights(self) -> torch.Tensor:
+        """Per-sample weights that balance the three visual sub-distributions:
+          - move_to_nut, t=0  (home start, 54% of data)
+          - move_to_nut, t>0  (mid-episode start, 22%)
+          - move_to_peg       (pre-insertion, 24%)
+        """
+        buckets = {
+            "home":  [i for i, r in enumerate(self.rows)
+                      if r.get("policy_stage_t") == "move_to_nut" and r["source_timestep_t"] == 0],
+            "mid":   [i for i, r in enumerate(self.rows)
+                      if r.get("policy_stage_t") == "move_to_nut" and r["source_timestep_t"] > 0],
+            "peg":   [i for i, r in enumerate(self.rows)
+                      if r.get("policy_stage_t") != "move_to_nut"],
+        }
+        n = len(self.rows)
+        num_buckets = sum(1 for b in buckets.values() if b)
+        weights = torch.zeros(n, dtype=torch.double)
+        for indices in buckets.values():
+            if indices:
+                w = n / (num_buckets * len(indices))
+                for i in indices:
+                    weights[i] = w
+        return weights
+
     def __getitem__(self, idx):
         row = self.rows[idx]
+        action_text = row["action_text"]
+        if "action_params" in row and "cartesian_target" in row["action_params"]:
+            ct = row["action_params"]["cartesian_target"]
+            action_text += f" at loc {ct[0]:.2f} {ct[1]:.2f} {ct[2]:.2f}"
+            
         return {
             "image_t": self._load_image(row["image_t"]),
             "image_t1": self._load_image(row["image_t1"]),
-            "action_text": row["action_text"],
+            "action_text": action_text,
         }
 
     def _load_image(self, relpath: str) -> torch.Tensor:

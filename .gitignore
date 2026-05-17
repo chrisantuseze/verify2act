@@ -102,3 +102,6 @@ robosuite/data_capture/test_episodes/
 *.pth
 temp/
 *.sif
+# dino_wm/
+# rla-wm/
+*.pdf

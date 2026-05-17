@@ -42,8 +42,8 @@ class WorldModelBase(abc.ABC):
         self,
         current_image_np: np.ndarray,
         action_text: str,
-    ) -> np.ndarray:
-        """Predict the next-state image.
+    ) -> Any:
+        """Predict the next state.
 
         Parameters
         ----------
@@ -54,8 +54,8 @@ class WorldModelBase(abc.ABC):
 
         Returns
         -------
-        np.ndarray
-            ``[H, W, 3]`` uint8 RGB image of the predicted next state.
+        Any
+            The predicted next state. Can be an RGB image array or a latent tensor.
         """
         ...
 
@@ -353,3 +353,127 @@ class DiffusionWorldModel(WorldModelBase):
             out = out.resize((w, h))
 
         return np.array(out)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Latent World Model (Flow Matching over DINOv2)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class LatentWorldModel(WorldModelBase):
+    """World model backed by a Flow Matching dynamics core over DINOv2 latents.
+
+    Maintains a rolling window of the last `history_len` latent frames.
+
+    Parameters
+    ----------
+    device : str
+        Torch device string.
+    dynamics_weights_path : str or None
+        Path to the latent dynamics model checkpoint.
+    history_len : int
+        Number of historical frames to maintain for context.
+    """
+
+    def __init__(
+        self,
+        device: str = "cuda",
+        dynamics_weights_path: Optional[str] = None,
+        history_len: int = 3,
+    ) -> None:
+        from verify2act.latent_wm.dynamics import LatentDynamicsModel
+        from verify2act.latent_wm.train_dynamics import FeatureExtractor
+
+        self.device = torch.device(device)
+        self.history_len = history_len
+
+        logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")
+        self.extractor = FeatureExtractor(self.device)
+
+        logger.info("Initializing Latent Dynamics Core...")
+        self.dynamics = LatentDynamicsModel(history_len=history_len).to(self.device)
+        self.dynamics.eval()
+
+        if dynamics_weights_path:
+            logger.info("Loading LatentDynamicsModel weights from %s", dynamics_weights_path)
+            self.dynamics.load_state_dict(torch.load(dynamics_weights_path, map_location=self.device))
+
+        self._history: Optional[torch.Tensor] = None
+
+    def initialize_history(self, start_img_np: np.ndarray) -> None:
+        import torchvision.transforms as T
+        img = Image.fromarray(start_img_np).resize((224, 224))
+        tensor = T.ToTensor()(img)
+        tensor = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(tensor)
+        tensor = tensor.unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            F_start = self.extractor.extract_dino(tensor)  # (1, 256, 768)
+        self._history = F_start.unsqueeze(1).repeat(1, self.history_len, 1, 1)
+
+    def set_history(self, history: torch.Tensor) -> None:
+        self._history = history
+
+    def get_history(self) -> Optional[torch.Tensor]:
+        return self._history
+
+    def imagine(
+        self,
+        current_image_np: np.ndarray,
+        action_text: str,
+    ) -> Tuple[torch.Tensor, float]:
+        """
+        Predict the next latent state.
+
+        Returns
+        -------
+        F_next : torch.Tensor
+            The predicted next latent state (1, 256, 768).
+        uncertainty : float
+            A metric indicating model uncertainty (currently 0.0).
+        """
+        if self._history is None:
+            self.initialize_history(current_image_np)
+
+        with torch.no_grad():
+            action_emb = self.extractor.extract_clip([action_text])
+            F_next = self.dynamics.step(self._history, action_emb, num_steps=5)
+
+            # Update history sliding window
+            self._history = torch.cat([self._history[:, 1:, :, :], F_next.unsqueeze(1)], dim=1)
+            uncertainty = 0.0
+
+        return F_next, uncertainty
+
+
+class RLAWorldModel(LatentWorldModel):
+    """World model backed by the Baseline RLA-WM architecture.
+
+    Inherits feature extraction and history management from LatentWorldModel,
+    but swaps the dynamics core for the BaselineRLAWM.
+    """
+    def __init__(
+        self,
+        device: str = "cuda",
+        dynamics_weights_path: Optional[str] = None,
+        history_len: int = 3,
+    ) -> None:
+        from verify2act.rla_wm_baseline.dynamics import BaselineRLAWM
+        from verify2act.latent_wm.train_dynamics import FeatureExtractor
+        
+        super(LatentWorldModel, self).__init__()
+        self.device = torch.device(device)
+        self.history_len = history_len
+
+        logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")
+        self.extractor = FeatureExtractor(self.device)
+
+        logger.info("Initializing Baseline RLA Dynamics Core...")
+        self.dynamics = BaselineRLAWM(history_len=history_len).to(self.device)
+        self.dynamics.eval()
+
+        if dynamics_weights_path:
+            logger.info("Loading BaselineRLAWM weights from %s", dynamics_weights_path)
+            self.dynamics.load_state_dict(torch.load(dynamics_weights_path, map_location=self.device))
+
+        self._history: Optional[torch.Tensor] = None

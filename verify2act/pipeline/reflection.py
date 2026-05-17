@@ -25,6 +25,7 @@ import numpy as np
 def classify_failure_pattern(
     consistency_scores: List[float],
     proximity_score: Optional[float],
+    wm_uncertainty: float = 0.0,
 ) -> str:
     """Return a human-readable summary of how the rollout quality evolved.
 
@@ -65,11 +66,17 @@ def classify_failure_pattern(
     # Intermediate proximity case
     delta = consistency_scores[-1] - consistency_scores[0] if k > 1 else 0.0
     kind = "improving" if delta > 0.05 else ("degrading" if delta < -0.05 else "stable")
-    return (
+    
+    base_msg = (
         f"the plan is partially aligned (proximity={proximity_score:.3f}) but insufficient; "
         f"temporal consistency was {kind} across {k} steps "
-        f"(scores: {[f'{s:.2f}' for s in consistency_scores]})"
+        f"(scores: {[f'{s:.2f}' for s in consistency_scores]})."
     )
+
+    if wm_uncertainty > 0.5:
+        base_msg += f" Note: the world model reported high uncertainty (value: {wm_uncertainty:.3f}), indicating a likely hallucination rather than a confident physical prediction."
+        
+    return base_msg
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +90,7 @@ def build_reflection_context(
     proximity_score: Optional[float],
     failed_step: int,
     full_plan: List[str],
+    wm_uncertainty: float = 0.0,
 ) -> Dict[str, Any]:
     """Assemble the reflection context dict consumed by VLMPlanner.reflect().
 
@@ -101,7 +109,7 @@ def build_reflection_context(
             f"failed_step={failed_step} out of range for plan length {len(full_plan)}"
         )
 
-    failure_pattern = classify_failure_pattern(consistency_scores, proximity_score)
+    failure_pattern = classify_failure_pattern(consistency_scores, proximity_score, wm_uncertainty)
 
     return {
         "imagined_state":     imagined_state,

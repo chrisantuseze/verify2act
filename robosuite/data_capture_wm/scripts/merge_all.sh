@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # dataset/ lives next to the scripts/ directory (parent of SCRIPT_DIR)
-DATASET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/dataset2"
+DATASET_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)/dataset"
 OUTPUT_DIR="${DATASET_DIR}/nut_assembly_merged"
 EXTRA_ARGS=()
 

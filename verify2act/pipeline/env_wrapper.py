@@ -149,14 +149,14 @@ class NutAssemblyEnvWrapper:
         self._obs = self.env._get_observations(force_update=True)
         return self._obs
 
-    def _settle_and_sync_viewer(self, n_steps: int = 100) -> None:
-        """Run raw physics steps until objects are stable, then sync the viewer.
+    def _settle_and_sync_viewer(self, n_steps: int = 100, sync_viewer: bool = True) -> None:
+        """Run raw physics steps until objects are stable, then optionally sync the viewer.
 
         Uses ``sim.step()`` (dynamics integration) rather than
         ``sim.forward()`` (geometry propagation only) so that stacked nuts
         actually fall into their resting positions under gravity.
 
-        After settling, forces ``viewer.update()`` so the on-screen passive
+        After settling, forces ``viewer.update()`` if sync_viewer is True so the on-screen passive
         viewer window is created / refreshed to the settled state *before* we
         render the goal image or block on matplotlib.  This ensures the viewer
         and our offscreen renders (goal + current) are always in sync.
@@ -166,10 +166,11 @@ class NutAssemblyEnvWrapper:
             sim.step()
         sim.forward()   # propagate final geometry
 
-        # Refresh on-screen viewer — launches it if not yet open, or syncs it.
-        viewer = getattr(self.env, "viewer", None)
-        if viewer is not None and hasattr(viewer, "update"):
-            viewer.update()
+        if sync_viewer:
+            # Refresh on-screen viewer — launches it if not yet open, or syncs it.
+            viewer = getattr(self.env, "viewer", None)
+            if viewer is not None and hasattr(viewer, "update"):
+                viewer.update()
 
     # ── observation helpers ────────────────────────────────────────────
 
