@@ -92,16 +92,14 @@ ENV/
 
 Points2Plans/Training/
 Points2Plans/ckpt/
-robosuite/data_capture/dataset/
-robosuite/data_capture/test_episodes/
+robosuite/data_capture_wm/dataset/
+robosuite/data_capture_p2p/dataset/
 *MUJOCO_LOG.txt
-*dataset/
+# *dataset/
 
 *.pickle
 *.png
 *.pth
 temp/
 *.sif
-# dino_wm/
-# rla-wm/
 *.pdf
