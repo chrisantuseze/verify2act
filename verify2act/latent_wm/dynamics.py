@@ -93,41 +93,62 @@ class LatentDynamicsModel(nn.Module):
         self.flow_norm_out = nn.LayerNorm(model_channels)
         self.flow_out_proj = nn.Linear(model_channels, dino_channels)
 
+        # Learnable [START] token: substituted for padded history slots.
+        # Shape (1, 1, num_patches, dino_channels) broadcasts over batch and history dims.
+        self.start_token = nn.Parameter(torch.zeros(1, 1, num_patches, dino_channels))
+
         self._initialize_weights()
 
     def _initialize_weights(self):
         nn.init.normal_(self.temporal_emb, std=0.02)
         nn.init.normal_(self.spatial_emb, std=0.02)
+        nn.init.normal_(self.start_token, std=0.02)
         nn.init.zeros_(self.flow_out_proj.weight)
         nn.init.zeros_(self.flow_out_proj.bias)
 
     def forward_cond(
-        self, 
-        xt_history: Tensor,    # (B, history_len, num_patches, dino_channels)
-        action_tokens: Tensor  # (B, seq_len, clip_channels)
+        self,
+        xt_history: Tensor,                          # (B, H, num_patches, dino_channels)
+        action_tokens: Tensor,                       # (B, seq_len, clip_channels)
+        history_mask: Optional[Tensor] = None,       # (B, H) True=real, False=padded
     ) -> Tensor:
         """
         Processes history context and grounds it with the VLM action.
+        If history_mask is provided, padded slots are replaced with a learned [START]
+        token and are blocked from self-attention via key_padding_mask.
         """
-        B = xt_history.shape[0]
-        
-        # Project inputs
-        h = self.history_proj(xt_history)  # (B, H, P, C)
-        a = self.action_proj(action_tokens) # (B, Seq, C)
+        B, H = xt_history.shape[:2]
 
-        # Add spatio-temporal embeddings
+        # 1. Substitute padded history slots with the learnable [START] token
+        if history_mask is not None:
+            valid = history_mask[:, :, None, None].to(xt_history.device)  # (B, H, 1, 1)
+            start = self.start_token.expand(B, H, -1, -1)
+            xt_history = torch.where(valid, xt_history, start)
+
+        # 2. Project inputs and add spatio-temporal embeddings
+        h = self.history_proj(xt_history)   # (B, H, P, C)
+        a = self.action_proj(action_tokens) # (B, Seq, C)
         h = h + self.temporal_emb + self.spatial_emb
-        
-        # Flatten history for self-attention
-        # (B, H*P, C)
+
+        # 3. Flatten history for self-attention: (B, H*P, C)
         h = rearrange(h, 'b h p c -> b (h p) c')
 
-        # Dummy modulation for cond blocks
+        # 4. Build key_padding_mask for self-attention
+        #    history_mask: (B, H); each frame covers num_patches patches.
+        #    key_padding_mask: (B, H*P), True = ignore this key token.
+        if history_mask is not None:
+            patch_valid = history_mask.unsqueeze(-1).expand(-1, -1, self.num_patches)
+            patch_valid = rearrange(patch_valid, 'b h p -> b (h p)')
+            key_padding_mask = ~patch_valid  # invert: True means "mask out"
+        else:
+            key_padding_mask = None
+
+        # 5. Dummy modulation for cond blocks
         mod = self.cond_mod_emb.expand(B, -1)
 
-        # Apply blocks (self-attention on history, cross-attention on action tokens)
+        # 6. Apply cond blocks: self-attention respects the mask
         for block in self.cond_blocks:
-            h = block(h, mod=mod, cond=a)
+            h = block(h, mod=mod, cond=a, key_padding_mask=key_padding_mask)
 
         return h  # (B, H*P, C)
 
@@ -161,48 +182,51 @@ class LatentDynamicsModel(nn.Module):
         xt_history: Tensor,
         action_tokens: Tensor,
         noisy_latent: Tensor,
-        flow_t: Tensor
+        flow_t: Tensor,
+        history_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Training forward pass."""
-        cond = self.forward_cond(xt_history, action_tokens)
+        cond = self.forward_cond(xt_history, action_tokens, history_mask=history_mask)
         return self.forward_flow(cond, noisy_latent, flow_t)
 
     @torch.no_grad()
     def step(
-        self, 
-        xt_history: Tensor, 
-        action_tokens: Tensor, 
-        num_steps: int = 5
+        self,
+        xt_history: Tensor,
+        action_tokens: Tensor,
+        num_steps: int = 5,
+        history_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """
         Inference rollout step.
-        Uses a simple Euler ODE solver to integrate the predicted velocity 
-        and output the final residual \Delta F.
-        
+        Uses a simple Euler ODE solver to integrate the predicted velocity
+        and output the predicted next feature state F_{t+1}.
+
+        Args:
+            xt_history:   (B, H, num_patches, dino_channels)
+            action_tokens: (B, seq_len, clip_channels)
+            num_steps:    Euler integration steps
+            history_mask: (B, H) bool, True=real frame. Pass None to skip masking
+                          (legacy repeat-first-frame behaviour).
         Returns:
             predicted_F_{t+1}: (B, num_patches, dino_channels)
         """
         B = xt_history.shape[0]
         device = xt_history.device
-        
-        # Precompute conditioning once
-        cond = self.forward_cond(xt_history, action_tokens)
-        
-        # Initialize noisy latent (start from pure noise for standard CFM)
-        # In Residual Flow Matching, we map from Noise -> Residual (\Delta F)
+
+        # Precompute conditioning once (causal mask applied here if provided)
+        cond = self.forward_cond(xt_history, action_tokens, history_mask=history_mask)
+
+        # Initialize from pure noise; integrate velocity field via Euler method
         x = torch.randn(B, self.num_patches, self.dino_channels, device=device, dtype=self.dtype)
-        
+
         dt = 1.0 / num_steps
-        
         for i in range(num_steps):
             t = torch.ones(B, device=device) * (i / num_steps)
-            # Predict velocity
             v = self.forward_flow(cond, x, t)
-            # Euler step
             x = x + v * dt
-            
-        # x is now the predicted residual \Delta F
-        # Return F_t + \Delta F
+
+        # x is the predicted residual ΔF; add to current frame features
         F_t = xt_history[:, -1, :, :]
         return F_t + x
 

@@ -522,3 +522,28 @@ class PromptManager:
         ]
         msgs.append(format_openai(role="user", content=user_content))
         return msgs
+
+    def build_verify_goal_messages(
+        self,
+        imagined_image_np: np.ndarray,
+        text_goal: str,
+    ) -> List[Dict[str, Any]]:
+        """Build the message list to verify if a language goal is met in an image."""
+        msgs: List[Dict[str, Any]] = []
+
+        # We can reuse the reflect system prompt or use a hardcoded one if it doesn't exist
+        sys_msg = (
+            "You are a robotic vision-language model evaluating the outcome of an action. "
+            "You will be given an image representing the state of the world, and a text goal. "
+            "Your task is to determine whether the text goal has been successfully achieved in the image. "
+            "Respond with JSON only, containing a boolean 'achieved' and a short string 'reason'. "
+            "Example: {\"achieved\": true, \"reason\": \"The drawer is clearly open.\"}"
+        )
+        msgs.append(format_openai(role="system", content=sys_msg))
+
+        user_content = [
+            _text_block(f"### Goal to verify: '{text_goal}'\n\n### Image to evaluate:"),
+            _img_block(imagined_image_np),
+        ]
+        msgs.append(format_openai(role="user", content=user_content))
+        return msgs

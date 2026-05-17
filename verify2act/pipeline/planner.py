@@ -173,6 +173,30 @@ class VLMPlanner:
         logger.info("Revised plan: %s", result.get("revised_plan"))
         return result
 
+    def verify_goal(
+        self,
+        imagined_image_np: np.ndarray,
+        text_goal: str,
+    ) -> Dict[str, Any]:
+        """Verify if a language goal is met in the imagined image.
+
+        Returns ``{"achieved": bool, "reason": str}``.
+        """
+        messages = self._pm.build_verify_goal_messages(
+            imagined_image_np=imagined_image_np,
+            text_goal=text_goal,
+        )
+        raw = self._call(messages)
+        result = self._parse_json(raw)
+        
+        achieved = result.get("achieved")
+        if not isinstance(achieved, bool):
+            raise ValueError(f"Invalid 'achieved' output from model (must be bool): {achieved}")
+            
+        logger.info("Goal Verification for '%s': Achieved=%s, Reason=%s", 
+                    text_goal, achieved, result.get("reason", ""))
+        return result
+
 
 class BeamSearchPlanner:
     """

@@ -317,9 +317,10 @@ class ModCrossAttentionBlock(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor, # B, L, C
-        mod: torch.Tensor, # B, C
-        cond: torch.Tensor # B, Lcond, Ccond
+        x: torch.Tensor,                                   # (B, L, C)
+        mod: torch.Tensor,                                 # (B, C)
+        cond: torch.Tensor,                                # (B, Lcond, Ccond)
+        key_padding_mask: Optional[torch.Tensor] = None,  # (B, L) True=ignore
     ) -> torch.Tensor:
         _bsz, _lp, _ch = x.shape
         _bsz_cond, _lp_cond, _ch_cond = cond.shape
@@ -335,7 +336,10 @@ class ModCrossAttentionBlock(nn.Module):
 
         h = self.norm1(x)
         h = h * (1.0 + scale_msa) + shift_msa
-        h, _ = self.self_attn(h, h, h, need_weights=False)
+        # Pass mask into self-attention only; cross-attention on CLIP tokens is unmasked
+        h, _ = self.self_attn(h, h, h,
+                               key_padding_mask=key_padding_mask,
+                               need_weights=False)
         x = x + h * gate_msa
 
         h = self.norm2(x)

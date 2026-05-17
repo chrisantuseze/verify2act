@@ -82,16 +82,20 @@ class LatentDynamicsDataset(Dataset):
                     action_text += f" at loc {ct[0]:.2f} {ct[1]:.2f} {ct[2]:.2f}"
                 
                 # History is [I_{t-H+1}, ..., I_t]
-                # If we don't have enough history, pad by repeating the first available frame
+                # Track which slots are genuine vs. clamped (early-episode padding).
                 history_relpaths = []
+                history_mask = []
                 for j in range(history_len - 1, -1, -1):
-                    idx = max(0, i - j)
-                    history_relpaths.append(rows[idx]["image_t"])
-                    
+                    idx = i - j              # can be negative for early frames
+                    is_real = (idx >= 0)
+                    history_mask.append(is_real)
+                    history_relpaths.append(rows[max(0, idx)]["image_t"])
+
                 self.samples.append({
                     "history_paths": history_relpaths,
-                    "target_path": target_relpath,
-                    "action_text": action_text
+                    "history_mask":  history_mask,   # list of bools, True=real frame
+                    "target_path":   target_relpath,
+                    "action_text":   action_text
                 })
 
     def __len__(self):
@@ -103,12 +107,13 @@ class LatentDynamicsDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.samples[idx]
-        
-        history_imgs = [self._load_image(p) for p in sample["history_paths"]]
-        history_tensor = torch.stack(history_imgs) # (history_len, 3, H, W)
-        target_tensor = self._load_image(sample["target_path"]) # (3, H, W)
-        
-        return history_tensor, target_tensor, sample["action_text"]
+
+        history_imgs   = [self._load_image(p) for p in sample["history_paths"]]
+        history_tensor = torch.stack(history_imgs)                                  # (H, 3, H, W)
+        history_mask   = torch.tensor(sample["history_mask"], dtype=torch.bool)    # (H,) True=valid
+        target_tensor  = self._load_image(sample["target_path"])                   # (3, H, W)
+
+        return history_tensor, target_tensor, sample["action_text"], history_mask
 
 
 # ─── FEATURE EXTRACTOR WRAPPER ──────────────────────────────────────────
@@ -178,17 +183,36 @@ def train(args):
         print(f"Using device: {device} (Accelerate distributed)")
     
     # 1. Dataset & DataLoader
-    dataset = LatentDynamicsDataset(dataset_dir=args.dataset_dir, transitions_file=args.transitions_file, history_len=args.history_len, image_size=args.image_size)
-    
-    # Split into train/val
-    train_size = int(0.9 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-    
+    if args.dataset_type == "calvin":
+        from verify2act.data_loader_calvin import CalvinTransitionDataset
+        # We use CalvinTransitionDataset for both train and val by splitting it natively
+        # Or we can just use the build_calvin_datasets function
+        from verify2act.data_loader_calvin import build_calvin_datasets
+        train_dataset, val_dataset = build_calvin_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=args.val_frac,
+            image_size=args.image_size,
+            history_len=args.history_len,
+            seed=args.seed
+        )
+        if accelerator.is_local_main_process:
+            print(f"CALVIN Dataset loaded. Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+    else:
+        dataset = LatentDynamicsDataset(
+            dataset_dir=args.dataset_dir, 
+            transitions_file=args.transitions_file, 
+            history_len=args.history_len, 
+            image_size=args.image_size
+        )
+        # Split into train/val
+        train_size = int((1.0 - args.val_frac) * len(dataset))
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+        if accelerator.is_local_main_process:
+            print(f"RoboSuite Dataset loaded. Train: {train_size}, Val: {val_size}")
+
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
-    if accelerator.is_local_main_process:
-        print(f"Dataset loaded with {len(dataset)} samples. Train: {train_size}, Val: {val_size}")
     
     # 2. Models
     extractor = FeatureExtractor(device)
@@ -238,6 +262,11 @@ def train(args):
         os.makedirs(args.output_dir, exist_ok=True)
         os.makedirs(f'{args.output_dir}/ckpt', exist_ok=True)
         writer = SummaryWriter(log_dir=f'{args.output_dir}/tb_logs')
+        # Save run config for reproducibility
+        import json as _json
+        with open(f'{args.output_dir}/config.json', 'w') as _f:
+            _json.dump(vars(args), _f, indent=2)
+        print(f"Run config saved to {args.output_dir}/config.json")
     
     for epoch in range(start_epoch, num_epochs):
         model.train()
@@ -247,9 +276,20 @@ def train(args):
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         
-        for batch_idx, (history_imgs, target_img, action_texts) in enumerate(pbar):
-            history_imgs = history_imgs.to(device)
-            target_img = target_img.to(device)
+        for batch_idx, batch in enumerate(pbar):
+            if isinstance(batch, dict):
+                # CALVIN batch (dict)
+                history_imgs = batch["history_imgs"].to(device)
+                target_img   = batch["image_t1"].to(device)
+                action_texts = batch["action_text"]
+                history_mask = batch["history_mask"].to(device) if args.causal_masking else None
+            else:
+                # RoboSuite batch (4-tuple)
+                history_imgs, target_img, action_texts, history_mask_raw = batch
+                history_imgs = history_imgs.to(device)
+                target_img   = target_img.to(device)
+                history_mask = history_mask_raw.to(device) if args.causal_masking else None
+                
             B = target_img.shape[0]
             
             # --- Feature Extraction ---
@@ -283,7 +323,7 @@ def train(args):
             
             # Forward pass
             unwrapped_model = accelerator.unwrap_model(model)
-            cond = unwrapped_model.forward_cond(F_history, A_clip)
+            cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
             velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
             
             # --- Losses ---
@@ -332,9 +372,18 @@ def train(args):
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         with torch.no_grad():
-            for batch_idx, (history_imgs, target_img, action_texts) in enumerate(pbar_val):
-                history_imgs = history_imgs.to(device)
-                target_img = target_img.to(device)
+            for batch_idx, batch in enumerate(pbar_val):
+                if isinstance(batch, dict):
+                    history_imgs = batch["history_imgs"].to(device)
+                    target_img   = batch["image_t1"].to(device)
+                    action_texts = batch["action_text"]
+                    history_mask = batch["history_mask"].to(device) if args.causal_masking else None
+                else:
+                    history_imgs, target_img, action_texts, history_mask_raw = batch
+                    history_imgs = history_imgs.to(device)
+                    target_img   = target_img.to(device)
+                    history_mask = history_mask_raw.to(device) if args.causal_masking else None
+                
                 B = target_img.shape[0]
                 
                 F_history = extractor.extract_dino(history_imgs)
@@ -350,7 +399,7 @@ def train(args):
                 velocity_target = residual_target - noise
                 
                 unwrapped_model = accelerator.unwrap_model(model)
-                cond = unwrapped_model.forward_cond(F_history, A_clip)
+                cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
                 velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
                 
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
@@ -400,10 +449,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"], help="Type of dataset loader to use")
+    parser.add_argument("--val-frac", type=float, default=0.1, help="Validation fraction")
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
                         help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
                              "'transitions_subskill.jsonl').")
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/latent_wm")
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/v2a_wm/nut_assembly")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--history-len", type=int, default=3, help="Number of past frames to use as history")
     parser.add_argument("--image-size", type=int, default=224, help="Image size for DINOv2 input")
@@ -413,6 +464,11 @@ def parse_args():
     parser.add_argument("--sparsity-weight", type=float, default=0.1, help="Sparsity regularization weight")
     parser.add_argument("--checkpoint-freq", type=int, default=2, help="Checkpoint frequency (epochs)")
     parser.add_argument("--resume-from", type=str, default=None, help="Path to checkpoint to resume from")
+    parser.add_argument(
+        "--causal-masking", action="store_true", default=False,
+        help="Use Transformer-native causal attention masking + learnable [START] tokens for "
+             "early-episode history padding. Omit to use the legacy repeat-first-frame baseline."
+    )
 
     return parser.parse_args()
 

@@ -31,11 +31,29 @@ Instead of generic video-prediction dynamics, we design a custom **Flow Matching
 - **Objective Evaluation:** We compute the cosine similarity between the predicted terminal latent state and the latent goal representation using a Dual-Head Contrastive Critic.
 - **Dynamic Horizon:** Because the rollout occurs entirely in the latent space and evaluation requires no image rendering, we can afford **Monte‑Carlo Tree Search (MCTS)** or Beam Search. The horizon is dynamic, continuing the rollout until the critic's goal similarity exceeds a confidence threshold.
 
+### 4. Causal Temporal Masking & Learnable Start-of-Sequence Context
+Instead of using the standard CNN‑era hack of repeating the first frame (e.g., $[I_0, I_0, I_0]$) to fill the history buffer at early-episode timesteps—which introduces a mathematically flawed zero-momentum prior and misleads the model—we leverage a true Transformer‑native **Causal Masking and Learnable Padding** scheme:
+- **Autoregressive Attention Masking:** We track a dynamic historical validity mask (e.g., `[False, False, True]` at $t=0$) and supply it directly to the Transformer self-attention blocks. Padded positions are strictly causal-masked, forcing the network to only attend to physically occurred history steps.
+- **Learnable [START] Embeddings:** We substitute empty history indices with a specialized learnable sequence-initiator embedding (synonymous with `<BOS>` tokens in LLMs). This provides an explicit semantic signal to the model that it is operating at the genesis of an episode and should rely purely on the action prompt rather than searching for non-existent past momentum.
+
+#### From Chat
+Yes, absolutely! In fact, this exact approach is the gold standard for modern sequential vision models and robotics transformers.
+
+The "repeating the first frame" trick is actually an outdated hack leftover from the era of Convolutional Neural Networks (CNNs). In older reinforcement learning setups (like playing Atari), agents stacked the last 4 frames into a 12-channel image. Because CNNs require a fixed number of input channels and can't use "attention masks," researchers had to copy the first frame 4 times just to make the tensor shape fit.
+
+However, since your Latent World Model uses a Transformer architecture (via ModCrossAttentionBlock), you are not bound by CNN limitations. Using padding and attention masks is standard practice in:
+
+Robotic Transformers (RT-1, RT-2, Decision Transformer): These models treat states, actions, and text as a stream of tokens. At step $t=0$, the context window isn't full yet, so they pad the empty slots with zeros and pass a causal attention mask to the transformer to ignore the padding.
+Video Generation Models (VideoGPT, Sora-like architectures): Autoregressive video models explicitly use causal masking across the time dimension. For the first frame prediction, the attention heads are masked to only see the initial frame and the text prompt, never a repeated fake history.
+Vision Transformers (ViViT, TimeSformer): Sequence-based vision models almost always use learnable [START] or [CLASS] tokens combined with padding masks when dealing with variable-length clips.
+By implementing attention masking, you are essentially upgrading the temporal processing of your world model from a "CNN-style hack" to a proper "Transformer-style sequence modeling" approach.
+
 ## Contributions
 1. **Decoupling Semantic Reasoning from Physical Simulation:** Demonstrates that a VLM does not need to “reflect” on generated pixels. Semantics are handled by the VLM (Proposal), and physics by the latent model (Evaluation).
 2. **VLM‑Guided Latent Search:** Uses the VLM as a high‑level heuristic to solve the search-space explosion problem in continuous latent world models, enabling tractable planning for long‑horizon manipulation.
 3. **Specialized Manipulation Dynamics:** Introduces architectural upgrades to residual flow-matching (Cross-Attention grounding, Sparsity loss, History context) that explicitly solve occlusion and drift in robotic assembly tasks.
-4. **Unified, Ghost-Free Framework:** Outperforms pure latent models and pure VLM pipelines by perfectly combining common-sense reasoning with hallucination-free, deterministic physical prediction.
+4. **Causal Autoregressive History Alignment:** Replaces the standard but mathematically flawed first-frame duplication hack at episode boundaries with a clean causal attention masking mechanism and a learnable sequence-initiator (`[START]`) token, maintaining true physical momentum priors across the temporal context window.
+5. **Unified, Ghost-Free Framework:** Outperforms pure latent models and pure VLM pipelines by perfectly combining common-sense reasoning with hallucination-free, deterministic physical prediction.
 
 ## Narrative for the Introduction
 > *“Recent feature‑based world models (e.g., DINO‑WM, RLA‑WM) have removed the hallucination problems of pixel‑space diffusion by predicting dynamics in a pre‑trained latent space, yet they lack high‑level semantic reasoning and suffer from inefficient sampling for long‑horizon tasks. Conversely, VLM‑based planners excel at language grounding but are limited by a pixel‑generation bottleneck that introduces ghosting and scales poorly. In this work, we present **[Your System Name]**, a hybrid neuro-symbolic architecture. We decouple reasoning from physics by leveraging a VLM solely for semantic action proposal, while utilizing a specialized, sparsity-regularized latent flow-matching model for deterministic feature rollout and zero-shot evaluation, thereby achieving scalable, accurate, and language‑conditioned robotic planning.”*

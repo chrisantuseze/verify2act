@@ -71,30 +71,13 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --vae-model runwayml/stable-diffusion-v1-5 \
   --output-dir verify2act/output/inference_run
 
-  tensorboard --logdir=path/to/logs
+tensorboard --logdir=path/to/logs
 
 
-  python verify2act/latent_wm/train_decoder.py \
+python verify2act/latent_wm/train_decoder.py \
     --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
     --batch-size 8 \
     --num-epochs 50
-
-
-python verify2act/latent_wm/train_dynamics.py \
-    --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-    --batch-size 8 \
-    --num-epochs 50 \
-    --resume-from verify2act/output/latent_wm/ckpt/latent_dynamics_best.pt 
-
-accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
-  verify2act/latent_wm/train_dynamics.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/latent_wm \
-  --num-epochs 20 \
-  --batch-size 12 \
-  --lr 1e-4 \
-  --checkpoint-freq 5 \
-  --resume-from verify2act/output/latent_wm/ckpt/latent_dynamics_best.pt
 
 python verify2act/latent_wm/visualize_wm.py \
     --wm-ckpt verify2act/output/latent_wm/ckpt/latent_dynamics_best.pt \
@@ -116,3 +99,34 @@ python verify2act/rla_wm_baseline/visualize_baseline.py \
     --wm-ckpt verify2act/output/rla_wm_baseline/ckpt/latent_dynamics_best.pt \
     --decoder-ckpt verify2act/output/latent_wm/decoder/latent_decoder_best.pt \
     --num-samples 5
+
+# ─── v2a_wm Training Commands ───────────────────────────────────────────────
+
+# RoboSuite (nut_assembly)
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_dynamics.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
+  --output-dir verify2act/output/v2a_wm/nut_assembly \
+  --num-epochs 50 --batch-size 12 --lr 1e-4 --checkpoint-freq 5 \
+  --causal-masking \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt
+
+# CALVIN (debug split — for quick smoke tests)
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_dynamics.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/calvin_debug_dataset/training \
+  --output-dir verify2act/output/v2a_wm/calvin_debug \
+  --num-epochs 50 --batch-size 12 --lr 1e-4 --checkpoint-freq 5 \
+  --causal-masking
+
+# CALVIN (full D split — for real training)
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_dynamics.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_D_D/training \
+  --output-dir verify2act/output/v2a_wm/calvin_D \
+  --num-epochs 50 --batch-size 12 --lr 1e-4 --checkpoint-freq 5 \
+  --causal-masking \
+  --resume-from verify2act/output/v2a_wm/calvin_D/ckpt/latent_dynamics_best.pt
