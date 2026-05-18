@@ -159,9 +159,13 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                 mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
                 
             decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
-            
-            # 5. Semantic Check (VLM Goal Verification)
-            vlm_verification = {"achieved": True, "reason": "Not checked"}
+
+            # 5. Goal proximity check via language goal (Head 1, CLIP path)
+            with torch.no_grad():
+                emb_next_pe = self.critic.encode(img_224_next)
+                mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(
+                    emb_next_pe, active_instruction
+                )
             if decision.action != "reflect":
                 # Only check semantics if physics didn't break
                 vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
@@ -169,10 +173,14 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                     decision.action = "reflect"
                     decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
 
-            # 6. Reflection Loop
-            if decision.action == "reflect":
-                # Trigger VLM to reflect on the failure and decompose the goal
-                logger.warning(f"Rejected imagined outcome of '{active_instruction}'. Reason: {decision.reason}")
+            # 6. Reflection — triggered by low temporal consistency OR low goal proximity
+            proximity_ok = mean_prox.item() >= self.theta_c
+            if decision.action == "reflect" or not proximity_ok:
+                reason = decision.reason if decision.action == "reflect" \
+                    else f"low_goal_proximity prox={mean_prox.item():.3f}"
+                logger.warning(
+                    f"Rejected imagined outcome of '{active_instruction}'. Reason: {reason}"
+                )
                 
                 # We need a reflection context similar to inference.py
                 ctx = {
@@ -187,12 +195,19 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                 # Ask VLM to revise the plan
                 reflect_result = self.vlm_planner.reflect(
                     current_image_np=img_np,
-                    goal_image_np=img_np, # No goal image in CALVIN
+                    goal_image_np=img_np,   # no pixel goal image; text goal is used by the critic
                     history=self.plan_queue,
-                    obj_labels=[], # Not strict for CALVIN, VLM can see image
+                    obj_labels=[],
                     full_plan=self.plan_queue,
-                    ctx=ctx,
-                    task_instruction=self.current_subgoal
+                    ctx={
+                        "all_scores": [(mean_tc.item(), mean_prox.item())],
+                        "imagined_state": imagined_img_next,
+                        "failed_step": 0,
+                        "failed_action": active_instruction,
+                        "failed_highlevel_action": active_instruction,
+                        "failure_pattern": reason,
+                    },
+                    task_instruction=self.current_subgoal,
                 )
                 
                 new_plan = reflect_result.get("revised_plan", self.plan_queue)

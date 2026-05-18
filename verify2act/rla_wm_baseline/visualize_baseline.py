@@ -76,7 +76,7 @@ def visualize(args):
     with torch.no_grad():
         for i in range(num_samples):
             print(f"Processing sample {i+1}/{num_samples}...")
-            history_imgs, target_img, action_text = dataset[i]
+            history_imgs, target_img, action_text, _ = dataset[i]
             
             history_imgs = history_imgs.unsqueeze(0).to(device)
             target_img = target_img.unsqueeze(0).to(device)     

@@ -55,7 +55,7 @@ def train_decoder(args):
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Train]", dynamic_ncols=True)
         
-        for batch_idx, (_, target_img, _) in enumerate(pbar):
+        for batch_idx, (_, target_img, _, _) in enumerate(pbar):
             target_img = target_img.to(device)
             
             # Extract ground truth DINO features
@@ -100,7 +100,7 @@ def train_decoder(args):
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Val]", dynamic_ncols=True)
         with torch.no_grad():
-            for batch_idx, (_, target_img, _) in enumerate(pbar_val):
+            for batch_idx, (_, target_img, _, _) in enumerate(pbar_val):
                 target_img = target_img.to(device)
                 
                 F_target = extractor.extract_dino(target_img)

@@ -24,8 +24,8 @@ export APPTAINER_BIND=$PWD
 
 apptainer exec --nv verify2act.sif python3 verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_D_D/training \
-  --output-dir verify2act/output/v2a_wm/calvin_D \
+  --dataset-dir calvin/dataset/task_ABCD_D/training \
+  --output-dir verify2act/output/v2a_wm/calvin_ABCD_D \
   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/calvin_D/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/calvin_ABCD_D/ckpt/latent_dynamics_best.pt

@@ -77,9 +77,9 @@ class LatentDynamicsDataset(Dataset):
                 # Target is I_{t+1} (from the row's image_t1)
                 target_relpath = rows[i]["image_t1"]
                 action_text = rows[i]["action_text"]
-                if "action_params" in rows[i] and "cartesian_target" in rows[i]["action_params"]:
-                    ct = rows[i]["action_params"]["cartesian_target"]
-                    action_text += f" at loc {ct[0]:.2f} {ct[1]:.2f} {ct[2]:.2f}"
+                # if "action_params" in rows[i] and "cartesian_target" in rows[i]["action_params"]:
+                #     ct = rows[i]["action_params"]["cartesian_target"]
+                #     action_text += f" at loc {ct[0]:.2f} {ct[1]:.2f} {ct[2]:.2f}"
                 
                 # History is [I_{t-H+1}, ..., I_t]
                 # Track which slots are genuine vs. clamped (early-episode padding).
@@ -90,6 +90,14 @@ class LatentDynamicsDataset(Dataset):
                     is_real = (idx >= 0)
                     history_mask.append(is_real)
                     history_relpaths.append(rows[max(0, idx)]["image_t"])
+
+                # Validate that all referenced images exist on disk before adding
+                # this sample. Corrupt/incomplete episodes (e.g. a capture that
+                # terminated early) can leave dangling JSONL rows; we skip them
+                # gracefully instead of crashing mid-training.
+                all_paths = history_relpaths + [target_relpath]
+                if not all(( self.root / p).exists() for p in all_paths):
+                    continue
 
                 self.samples.append({
                     "history_paths": history_relpaths,
@@ -171,16 +179,13 @@ def train(args):
     # dispatch_batches=False is safer for standard datasets
     dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
     accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[])
+    device = accelerator.device
     # Hyperparameters
     batch_size = args.batch_size
     num_epochs = args.num_epochs
     lr = args.lr
     sparsity_weight = args.sparsity_weight
     dataset_dir = args.dataset_dir # Adjust as needed
-    device = accelerator.device
-    
-    if accelerator.is_local_main_process:
-        print(f"Using device: {device} (Accelerate distributed)")
     
     # 1. Dataset & DataLoader
     if args.dataset_type == "calvin":
@@ -254,6 +259,8 @@ def train(args):
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, val_dataloader
     )
+    if accelerator.is_local_main_process:
+        print(f"Using device: {device} (Accelerate distributed)")
     
     # 3. Training Loop
     best_val_loss = float('inf')

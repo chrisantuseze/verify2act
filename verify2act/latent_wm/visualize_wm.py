@@ -72,11 +72,12 @@ def visualize(args):
     with torch.no_grad():
         for i in range(num_samples):
             print(f"Processing sample {i+1}/{num_samples}...")
-            history_imgs, target_img, action_text = dataset[i]
+            history_imgs, target_img, action_text, history_mask = dataset[i]
             
             # Add batch dimension and move to device
             history_imgs = history_imgs.unsqueeze(0).to(device) # (1, H, 3, 224, 224)
             target_img = target_img.unsqueeze(0).to(device)     # (1, 3, 224, 224)
+            history_mask = history_mask.unsqueeze(0).to(device) if args.causal_masking else None
             
             print(f"  Action: '{action_text}'")
 
@@ -86,7 +87,7 @@ def visualize(args):
             A_clip = extractor.extract_clip([action_text])   # (1, seq_len, 512)
 
             # Predict next step features using ODE solver (Euler, 5 steps)
-            F_pred = wm.step(F_history, A_clip, num_steps=5) # (1, 256, 768)
+            F_pred = wm.step(F_history, A_clip, num_steps=5, history_mask=history_mask) # (1, 256, 768)
 
             # Decode features back to images
             pred_rgb = visualizer.decode(F_pred)             # (1, 3, H, W)
@@ -130,6 +131,11 @@ if __name__ == "__main__":
     parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm decoder checkpoint (e.g. runs/xxx.pt)")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/latent_wm/visualizations")
     parser.add_argument("--num-samples", type=int, default=5, help="Number of samples to visualize")
+    parser.add_argument(
+        "--causal-masking", action="store_true", default=False,
+        help="Use Transformer-native causal attention masking + learnable [START] tokens for "
+             "early-episode history padding. Omit to use the legacy repeat-first-frame baseline."
+    )
     
     # Ensure huggingface cache doesn't blow up
     os.environ["HF_HOME"] = str(Path.home() / ".cache" / "huggingface")

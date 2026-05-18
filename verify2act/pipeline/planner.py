@@ -289,10 +289,6 @@ class BeamSearchPlanner:
         
         logger.info(f"Generated {len(candidate_plans)} distinct candidate plans.")
         
-        goal_img_224 = preprocess_image_for_critic(goal_image_np).to(device)
-        with torch.no_grad():
-            emb_goal = self.critic.encode(goal_img_224)
-
         best_plan = candidate_plans[0]
         best_score = -float('inf')
         best_final_state = current_image_np
@@ -328,7 +324,7 @@ class BeamSearchPlanner:
                     emb_final = self.critic.encode(img_224)
                     final_state = final_img
                     
-                mean_prox, std_prox = self.critic.goal_sim_with_uncertainty(emb_final, emb_goal)
+                mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(emb_final, task_instruction)
                 score = mean_prox.item()
                 # Mock temporal consistency as 1.0 for the search phase, just taking terminal proximity
                 all_scores = [(1.0, 0.0)] * (len(imagination_steps) - 1) + [(1.0, score)]

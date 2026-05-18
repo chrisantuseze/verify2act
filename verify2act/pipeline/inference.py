@@ -247,19 +247,19 @@ def run_episode(
 
     # Hard-reset rebuilds the MuJoCo model; flush stale renderer cache before
     # goal rendering so NutAssemblyGoalRenderer allocates a fresh Renderer.
-    goal_renderer.flush_renderers()
-    goal_image_np = goal_renderer.render_goal()
-    if goal_image_np is None:
-        raise RuntimeError(
-            "NutAssemblyGoalRenderer.render_goal() returned None after env reset."
-        )
+    # goal_renderer.flush_renderers()
+    # goal_image_np = goal_renderer.render_goal()
+    # if goal_image_np is None:
+    #     raise RuntimeError(
+    #         "NutAssemblyGoalRenderer.render_goal() returned None after env reset."
+    #     )
 
-    # Sync the on-screen viewer to the settled T=0 state.
-    env_wrapper._settle_and_sync_viewer(n_steps=0)
+    # # Sync the on-screen viewer to the settled T=0 state.
+    # env_wrapper._settle_and_sync_viewer(n_steps=0)
          
-    goal_img_224 = preprocess_image_for_critic(goal_image_np).to(torch_device)
-    with torch.no_grad():
-        emb_goal = critic.encode(goal_img_224)  # ProbEmbedding
+    # goal_img_224 = preprocess_image_for_critic(goal_image_np).to(torch_device)
+    # with torch.no_grad():
+    #     emb_goal = critic.encode(goal_img_224)  # ProbEmbedding
     obj_labels = env_wrapper.get_obj_labels()
     task_instruction = env_wrapper.get_task_instruction()
     print(f"Task instruction: {task_instruction}")
@@ -452,7 +452,8 @@ def run_episode(
                 if not step_failed:
                     # emb_prev is now the final imagined frame embedding
                     with torch.no_grad():
-                        mean_prox, std_prox = critic.goal_sim_with_uncertainty(emb_prev, emb_goal)
+                        # mean_prox, std_prox = critic.goal_sim_with_uncertainty(emb_prev, emb_goal)
+                        mean_prox, std_prox = critic.goal_sim_from_text_with_uncertainty(emb_prev, task_instruction)        
                         prox_score = mean_prox.item()
                         prox_uncertainty = std_prox.item()
     

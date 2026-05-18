@@ -125,7 +125,7 @@ def train(args):
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         
-        for batch_idx, (history_imgs, target_img, action_texts) in enumerate(pbar):
+        for batch_idx, (history_imgs, target_img, action_texts, _) in enumerate(pbar):
             history_imgs = history_imgs.to(device)
             target_img = target_img.to(device)
             B = target_img.shape[0]
@@ -193,7 +193,7 @@ def train(args):
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         with torch.no_grad():
-            for batch_idx, (history_imgs, target_img, action_texts) in enumerate(pbar_val):
+            for batch_idx, (history_imgs, target_img, action_texts, _) in enumerate(pbar_val):
                 history_imgs = history_imgs.to(device)
                 target_img = target_img.to(device)
                 B = target_img.shape[0]

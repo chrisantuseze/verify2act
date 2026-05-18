@@ -34,6 +34,54 @@ from verify2act.critic.model import DINOv2DualHeadCritic
 from verify2act.data_loader import build_contrastive_datasets, ContrastivePairDataset
 
 
+# ── CLIP language-goal alignment loss ─────────────────────────────────────────
+
+def _compute_lang_gp_loss(
+    model: DINOv2DualHeadCritic,
+    batch: Dict,
+    device: torch.device,
+    amp_enabled: bool,
+) -> torch.Tensor:
+    """Align clip_goal_proj(CLIP(text)) with head1(DINOv2(goal_frame)).
+
+    For each GP-mode sample in the batch, the positive frame is the goal
+    frame (close-to-goal), so we train clip_goal_proj to produce an
+    embedding close to head1(goal_frame) when given the task's text label.
+
+    Requires batch to contain a ``lang_goal`` list of strings and a binary
+    ``has_lang_goal`` mask indicating which samples have a valid text goal.
+    Falls back to a zero loss if the dataset does not include text goals.
+    """
+    lang_goals: list = batch.get("lang_goal", [])
+    has_lang = batch.get("has_lang_goal", None)
+    modes = batch["mode"].to(device)
+    mask0 = (modes == 0)   # goal proximity pairs
+
+    if not lang_goals or has_lang is None:
+        return torch.tensor(0.0, device=device)
+
+    has_lang = has_lang.to(device).bool() & mask0
+    if has_lang.sum() < 1:
+        return torch.tensor(0.0, device=device)
+
+    positive = batch["positive"].to(device)   # [B, 3, H, W] goal frames
+
+    # Encode positive (goal) frames through DINOv2 + head1
+    with torch.amp.autocast('cuda', enabled=amp_enabled):
+        emb_goal = model.encode(positive[has_lang])   # ProbEmbedding
+        visual_proj = model.project(emb_goal.mu, head=1)   # [n, HEAD_DIM]
+
+    # Encode language goals through CLIP + clip_goal_proj
+    valid_texts = [lang_goals[i] for i, v in enumerate(has_lang.tolist()) if v]
+    lang_proj = torch.stack(
+        [model.encode_text_goal(t) for t in valid_texts], dim=0
+    ).squeeze(1)   # [n, HEAD_DIM]
+
+    # Symmetric MSE alignment loss between the two projections
+    loss = F.mse_loss(lang_proj, visual_proj.detach())
+    return loss
+
+
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
 def set_seed(seed: int) -> None:
@@ -166,6 +214,35 @@ def _train_step(
         loss_tc_val = loss_tc.item()
 
     return total_loss, loss_gp_val, loss_tc_val, int(n_gp), int(n_tc)
+
+
+# ── Main training step wrapper (adds lang-GP loss) ────────────────────────────
+
+def train_step_with_lang(
+    model: DINOv2DualHeadCritic,
+    batch: Dict,
+    criterion: InfoNCELoss,
+    device: torch.device,
+    lambda1: float,
+    lambda2: float,
+    kl_weight: float,
+    lang_goal_weight: float,
+    use_inbatch: bool,
+    amp_enabled: bool,
+) -> Tuple[torch.Tensor, float, float, float, int, int]:
+    """Wrapper around _train_step that adds the optional CLIP-GP alignment loss.
+
+    Returns (total_loss, loss_gp, loss_tc, loss_lang_gp, n_gp, n_tc).
+    """
+    loss, lgp, ltc, n0, n1 = _train_step(
+        model, batch, criterion, device,
+        lambda1, lambda2, kl_weight, use_inbatch, amp_enabled,
+    )
+    loss_lang = torch.tensor(0.0, device=device)
+    if lang_goal_weight > 0.0:
+        loss_lang = _compute_lang_gp_loss(model, batch, device, amp_enabled)
+        loss = loss + lang_goal_weight * loss_lang
+    return loss, lgp, ltc, loss_lang.item(), n0, n1
 
 
 # ── Validation ─────────────────────────────────────────────────────────────────
@@ -334,6 +411,7 @@ def main():
                     {
                         "params": list(model.head1.parameters()) +
                                   list(model.head2.parameters()) +
+                                  list(model.clip_goal_proj.parameters()) +
                                   list(model.log_var_head1.parameters()) +
                                   list(model.log_var_head2.parameters()),
                         "lr": args.learning_rate,
@@ -385,10 +463,11 @@ def main():
                 break
 
             with torch.amp.autocast('cuda', enabled=(device.type == "cuda" and args.mixed_precision != "no")):
-                loss, lgp, ltc, n0, n1 = _train_step(
+                loss, lgp, ltc, llang, n0, n1 = train_step_with_lang(
                     model, batch, criterion, device,
                     args.lambda1, args.lambda2,
                     kl_weight=args.kl_weight,
+                    lang_goal_weight=args.lang_goal_weight,
                     use_inbatch=True, amp_enabled=amp_enabled,
                 )
 
@@ -414,10 +493,11 @@ def main():
                 losses_tc.append(ltc)
 
             pbar.set_postfix({
-                "loss": f"{np.mean(totals):.4f}",
-                "gp":   f"{np.mean(losses_gp) if losses_gp else 0:.3f}",
-                "tc":   f"{np.mean(losses_tc) if losses_tc else 0:.3f}",
-                "lr":   f"{optimizer.param_groups[0]['lr']:.1e}",
+                "loss":  f"{np.mean(totals):.4f}",
+                "gp":    f"{np.mean(losses_gp) if losses_gp else 0:.3f}",
+                "tc":    f"{np.mean(losses_tc) if losses_tc else 0:.3f}",
+                "lang":  f"{llang:.3f}",
+                "lr":    f"{optimizer.param_groups[0]['lr']:.1e}",
             })
 
         scheduler.step()
@@ -527,6 +607,10 @@ def parse_args():
                    help="Weight for KL regulariser on log-variance heads. "
                         "Pulls σ toward 1 without pulling μ toward 0. "
                         "Start with 1e-3; increase to 1e-2 if uncertainty collapses.")
+    p.add_argument("--lang-goal-weight", type=float, default=0.5,
+                   help="Weight for CLIP↔DINOv2 language-goal alignment loss on the GP head. "
+                        "Set to 0 to disable (pure visual-visual GP training, original behaviour). "
+                        "Requires batch items to contain 'lang_goal' and 'has_lang_goal' fields.")
 
     # Output
     p.add_argument("--output-dir", type=str, default="verify2act/output/contrastive")

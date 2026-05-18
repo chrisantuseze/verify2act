@@ -4,6 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# CLIP text encoder is loaded lazily to avoid hard dependency at import time.
+# We use openai/clip for the text encoder (768-dim → HEAD_DIM projection).
+_CLIP_TEXT_DIM = 512   # CLIP ViT-B/32 text embedding dimension
+
 # ── ImageNet normalisation constants (shared) ──────────────────────────────────
 
 _IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -83,8 +87,9 @@ class DINOv2DualHeadCritic(nn.Module):
     ~86M backbone + ~800k head parameters (projection + log-var heads).
     """
 
-    EMBED_DIM = 768   # DINOv2-B/14 patch embedding dimension
-    HEAD_DIM  = 256   # projection head output dimension
+    EMBED_DIM     = 768   # DINOv2-B/14 patch embedding dimension
+    HEAD_DIM      = 256   # projection head output dimension
+    CLIP_TEXT_DIM = 512   # CLIP ViT-B/32 text embedding dimension
 
     def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None):
         super().__init__()
@@ -116,8 +121,19 @@ class DINOv2DualHeadCritic(nn.Module):
                 nn.Linear(hidden, self.HEAD_DIM, bias=False),
             )
 
-        self.head1 = _make_proj_head(head_hidden)   # goal proximity
+        self.head1 = _make_proj_head(head_hidden)   # goal proximity (visual side)
         self.head2 = _make_proj_head(head_hidden)   # temporal consistency
+
+        # ── CLIP text-goal projection (Head 1 language side) ──────────────
+        # Projects a frozen CLIP text embedding (512-dim) into the same
+        # HEAD_DIM space as head1, enabling language goals to be scored
+        # against DINOv2 predicted terminal states via cosine similarity.
+        # This is the only component that bridges the CLIP ↔ DINOv2 spaces.
+        self.clip_goal_proj = nn.Sequential(
+            nn.Linear(self.CLIP_TEXT_DIM, self.EMBED_DIM),
+            nn.GELU(),
+            nn.Linear(self.EMBED_DIM, self.HEAD_DIM, bias=False),
+        )
 
         # ── Log-variance heads (probabilistic embeddings) ─────────────────
         # Output log σ² in the backbone embedding space [B, 768].
@@ -134,6 +150,10 @@ class DINOv2DualHeadCritic(nn.Module):
 
         self.log_var_head1 = _make_logvar_head()   # uncertainty for Head 1
         self.log_var_head2 = _make_logvar_head()   # uncertainty for Head 2
+
+        # CLIP model loaded lazily via encode_text_goal()
+        self._clip_model = None
+        self._clip_tokenizer = None
 
         self.freeze_backbone()
 
@@ -157,6 +177,26 @@ class DINOv2DualHeadCritic(nn.Module):
         if x.shape[-2:] != (224, 224):
             x = F.interpolate(x, size=(224, 224), mode="bilinear", align_corners=False)
         return (x - self.img_mean) / self.img_std
+
+    # ── CLIP lazy loader ───────────────────────────────────────────────────────
+
+    def _load_clip(self, device: Optional[torch.device] = None) -> None:
+        """Load the CLIP ViT-B/32 model and tokenizer on first call."""
+        if self._clip_model is not None:
+            return
+        try:
+            import clip as openai_clip
+        except ImportError as e:
+            raise ImportError(
+                "openai-clip is required for language-goal encoding. "
+                "Install with: pip install git+https://github.com/openai/CLIP.git"
+            ) from e
+        clip_device = device or next(self.parameters()).device
+        self._clip_model, _ = openai_clip.load("ViT-B/32", device=clip_device)
+        self._clip_model.eval()
+        for p in self._clip_model.parameters():
+            p.requires_grad_(False)
+        self._clip_tokenizer = openai_clip.tokenize
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -238,6 +278,72 @@ class DINOv2DualHeadCritic(nn.Module):
         log_var == 0 (σ == 1).
         """
         return 0.5 * (log_var.exp() - 1.0 - log_var).mean()
+
+    def encode_text_goal(self, text: str) -> torch.Tensor:
+        """Encode a language goal string into a HEAD_DIM embedding via CLIP + clip_goal_proj.
+
+        The returned embedding is L2-normalised and lies in the same space as
+        ``project(emb.mu, head=1)``, so cosine similarity can be used directly.
+
+        Parameters
+        ----------
+        text : str  natural language goal (e.g. "push the slider right")
+
+        Returns
+        -------
+        goal_emb : [1, HEAD_DIM]  L2-normalised text-goal embedding
+        """
+        device = next(self.parameters()).device
+        self._load_clip(device)
+        with torch.no_grad():
+            tokens = self._clip_tokenizer([text], truncate=True).to(device)
+            clip_emb = self._clip_model.encode_text(tokens).float()   # [1, 512]
+        return F.normalize(self.clip_goal_proj(clip_emb), dim=-1)     # [1, HEAD_DIM]
+
+    def goal_sim_from_text(
+        self,
+        emb_frame: "ProbEmbedding",
+        text_goal: str,
+    ) -> torch.Tensor:
+        """Deterministic cosine similarity between a predicted DINOv2 frame embedding
+        and a language goal, using the CLIP projection head.
+
+        Parameters
+        ----------
+        emb_frame : ProbEmbedding  output of encode() or encode_features()
+        text_goal : str  language instruction
+
+        Returns
+        -------
+        sim : [B]  cosine similarity in [-1, 1]
+        """
+        goal_emb = self.encode_text_goal(text_goal)   # [1, HEAD_DIM]
+        frame_emb = self.project(emb_frame.mu, 1)     # [B, HEAD_DIM]
+        return (frame_emb * goal_emb).sum(dim=-1)     # [B]
+
+    def goal_sim_from_text_with_uncertainty(
+        self,
+        emb_frame: "ProbEmbedding",
+        text_goal: str,
+        n_samples: int = 20,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Monte-Carlo version of goal_sim_from_text for uncertainty estimation.
+
+        Only the *frame* embedding is sampled (the text goal is deterministic).
+
+        Returns
+        -------
+        mean_sim : [B]
+        std_sim  : [B]  predictive uncertainty
+        """
+        goal_emb = self.encode_text_goal(text_goal)   # [1, HEAD_DIM]
+        sims = []
+        for _ in range(n_samples):
+            z = self.sample_embed(emb_frame.mu, emb_frame.log_var1)   # [B, 768]
+            proj = self.project(z, 1)                                  # [B, HEAD_DIM]
+            sims.append((proj * goal_emb).sum(dim=-1))                # [B]
+        sims = torch.stack(sims, dim=0)   # [n_samples, B]
+        return sims.mean(dim=0), sims.std(dim=0)
 
     def goal_sim(self, emb_frame: "ProbEmbedding", emb_goal: "ProbEmbedding") -> torch.Tensor:
         """Deterministic cosine similarity via Head 1 using mean embeddings.
