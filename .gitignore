@@ -103,3 +103,4 @@ robosuite/data_capture_p2p/dataset/
 temp/
 *.sif
 *.pdf
+v2a_paper/
