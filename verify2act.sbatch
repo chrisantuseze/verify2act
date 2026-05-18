@@ -22,7 +22,7 @@ export APPTAINER_BIND=$PWD
 # # Wait for all background processes to finish before ending the slurm job
 # wait
 
-apptainer exec --nv apptainerfile.sif python3 verify2act/latent_wm/train_dynamics.py \
+apptainer exec --nv verify2act.sif python3 verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_D_D/training \
   --output-dir verify2act/output/v2a_wm/calvin_D \
