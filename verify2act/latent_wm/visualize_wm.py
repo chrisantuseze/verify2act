@@ -6,7 +6,7 @@ from torchvision.utils import save_image
 import torch.nn.functional as F
 
 from dynamics import LatentDynamicsModel
-from visualizer import FeatureDecoder
+from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
 def visualize(args):
@@ -44,25 +44,25 @@ def visualize(args):
 
     # 4. Load Visualizer (Decoder)
     print(f"Loading Visualizer from {args.decoder_ckpt}...")
-    visualizer = FeatureDecoder(dino_channels=768, model_channels=256).to(device)
+    decoder = FeatureDecoder(dino_channels=768, model_channels=256).to(device)
     
     if args.decoder_ckpt and os.path.exists(args.decoder_ckpt):
         try:
             ckpt = torch.load(args.decoder_ckpt, map_location=device)
             # rla-wm generic trainer saves model state under 'model' or 'state_dict'
             if "model" in ckpt:
-                visualizer.decoder.load_state_dict(ckpt["model"])
+                decoder.load_state_dict(ckpt["model"])
             elif "state_dict" in ckpt:
-                visualizer.decoder.load_state_dict(ckpt["state_dict"])
+                decoder.load_state_dict(ckpt["state_dict"])
             else:
                 # Direct state dict
-                visualizer.decoder.load_state_dict(ckpt)
+                decoder.load_state_dict(ckpt)
             print("Visualizer weights loaded successfully.")
         except Exception as e:
             print(f"Warning: Failed to load decoder weights: {e}. Output images may look like noise.")
     else:
         print(f"Warning: Decoder checkpoint not found at {args.decoder_ckpt}. Output images will look like noise.")
-    visualizer.eval()
+    decoder.eval()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -90,8 +90,8 @@ def visualize(args):
             F_pred = wm.step(F_history, A_clip, num_steps=5, history_mask=history_mask) # (1, 256, 768)
 
             # Decode features back to images
-            pred_rgb = visualizer.decode(F_pred)             # (1, 3, H, W)
-            target_rgb = visualizer.decode(F_target)         # (1, 3, H, W)
+            pred_rgb = decoder.decode(F_pred)             # (1, 3, H, W)
+            target_rgb = decoder.decode(F_target)         # (1, 3, H, W)
 
             # Typical decoders output [-1, 1], map to [0, 1]
             pred_rgb = (pred_rgb + 1) / 2.0

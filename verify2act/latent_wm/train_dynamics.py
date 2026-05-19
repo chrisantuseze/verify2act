@@ -330,8 +330,9 @@ def train(args):
             
             # Forward pass
             unwrapped_model = accelerator.unwrap_model(model)
-            cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
-            velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+            # cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
+            # velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+            velocity_pred = unwrapped_model.forward(F_history, A_clip, noisy_latent, t, history_mask=history_mask)
             
             # --- Losses ---
             # Main CFM MSE loss
@@ -406,8 +407,9 @@ def train(args):
                 velocity_target = residual_target - noise
                 
                 unwrapped_model = accelerator.unwrap_model(model)
-                cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
-                velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+                # cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
+                # velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+                velocity_pred = unwrapped_model.forward(F_history, A_clip, noisy_latent, t, history_mask=history_mask)
                 
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
                 patch_movement = residual_target.norm(dim=-1)

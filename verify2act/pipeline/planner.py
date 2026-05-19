@@ -232,6 +232,8 @@ class BeamSearchPlanner:
         attempts = 0
         max_attempts = num_candidates * 2
         
+        # TODO: do you think the vlm should be prompted N times or once, but have it produce multiple plans and pick the top N?
+        # TODO: how to ensure the candidate plans are diverse and distinct from each other? 
         while len(candidates) < num_candidates and attempts < max_attempts:
             try:
                 # Use the VLM to propose a plan
@@ -304,10 +306,13 @@ class BeamSearchPlanner:
             if is_latent_wm:
                 self.world_model.initialize_history(current_image_np)
                 
+            # TODO: why do we need to expand nut_plan? and what happens if the task is calvin?
             imagination_steps = expand_nut_plan(plan)
             final_latent = None
             final_img = current_image_np
             
+            # TODO: whats the point of this loop? For each horizon, we need to check using critic for temporal consistency before proceeding to the next step?
+            # TODO: ideally if temporal consistency score is lower than threshold, we should replan until the limit is reached, then we skip that candidate.
             for k, (nut_name, imagine_action) in enumerate(imagination_steps):
                 if is_latent_wm:
                     F_next, _ = self.world_model.imagine(current_image_np, imagine_action)
@@ -317,7 +322,7 @@ class BeamSearchPlanner:
             
             with torch.no_grad():
                 if is_latent_wm and final_latent is not None:
-                    emb_final = self.critic.encode_features(final_latent)
+                    emb_final = self.critic.encode_features(final_latent) # TODO: why do we need to reencode features since world model outputs embeddings?
                     final_state = final_latent
                 else:
                     img_224 = preprocess_image_for_critic(final_img).to(device)
@@ -326,6 +331,8 @@ class BeamSearchPlanner:
                     
                 mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(emb_final, task_instruction)
                 score = mean_prox.item()
+
+                # TODO: whats this? why do we need this?
                 # Mock temporal consistency as 1.0 for the search phase, just taking terminal proximity
                 all_scores = [(1.0, 0.0)] * (len(imagination_steps) - 1) + [(1.0, score)]
                 
@@ -343,4 +350,6 @@ class BeamSearchPlanner:
                 break
                 
         logger.info(f"BeamSearchPlanner Selected Plan: {best_plan} (Score: {best_score:.3f})")
+
+        # TODO: how about we handle the reflection part here instead of in the inference loop?
         return best_plan, best_score, best_final_state, best_all_scores, best_imagination_steps
