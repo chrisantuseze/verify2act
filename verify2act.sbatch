@@ -30,4 +30,4 @@ export APPTAINER_BIND=$PWD
 #   --causal-masking \
 #   --resume-from verify2act/output/v2a_wm/calvin_ABCD_D/ckpt/latent_dynamics_best.pt
 
-apptainer exec --nv verify2act.sif unzip task_ABC_D.zip
+apptainer exec --nv verify2act.sif python3 unzip.py
