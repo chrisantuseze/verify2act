@@ -5,6 +5,7 @@
 #SBATCH --ntasks-per-node=12
 #SBATCH --mail-user=chrisantus.eze@okstate.edu
 #SBATCH --mail-type=end
+#SBATCH --gres=gpu:1 
 module load apptainer/1.2.2 cuda/12.1
 export APPTAINER_BIND=$PWD
 
