@@ -457,7 +457,7 @@ def main():
         model.train()
         losses_gp, losses_tc, totals = [], [], []
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
         for batch_idx, batch in enumerate(pbar):
             if args.max_train_batches > 0 and batch_idx >= args.max_train_batches:
                 break

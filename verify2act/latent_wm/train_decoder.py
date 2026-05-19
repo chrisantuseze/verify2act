@@ -7,7 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 import lpips
 
-from visualizer import FeatureDecoder
+from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
 def train_decoder(args):

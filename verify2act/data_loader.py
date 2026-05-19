@@ -218,11 +218,13 @@ class ContrastivePairDataset(Dataset):
 
 def _resolve_goal_image(trans: Dict, dataset_root: Path) -> str:
     goal = (trans.get("goal_image") or "").strip()
-    if goal:
+    if goal and (dataset_root / goal).exists():
         return goal
     fallback = Path("episodes") / trans["episode_id"] / "goal.png"
     if (dataset_root / fallback).exists():
         return str(fallback)
+
+    print(f"Warning: Goal image not found for episode {trans['episode_id']}. Checked '{goal}' and '{fallback}'. Skipping this transition.")
     return ""
 
 

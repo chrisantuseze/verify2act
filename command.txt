@@ -73,6 +73,7 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 
 tensorboard --logdir=path/to/logs
 
+###################################################################################################
 
 python verify2act/latent_wm/train_decoder.py \
     --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
