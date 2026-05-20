@@ -136,3 +136,12 @@ python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABC_D/training \
   --output-dir calvin/dataset/task_ABC_D_filtered/training \
   --history-len 5
+
+python3 verify2act/latent_wm/train_dynamics.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
+  --num-epochs 50 \
+  --batch-size 32 \
+  --lr 1e-4 \
+  --causal-masking
