@@ -51,12 +51,12 @@ def visualize(args):
             ckpt = torch.load(args.decoder_ckpt, map_location=device)
             # rla-wm generic trainer saves model state under 'model' or 'state_dict'
             if "model" in ckpt:
-                decoder.load_state_dict(ckpt["model"])
+                decoder.decoder.load_state_dict(ckpt["model"])
             elif "state_dict" in ckpt:
-                decoder.load_state_dict(ckpt["state_dict"])
+                decoder.decoder.load_state_dict(ckpt["state_dict"])
             else:
                 # Direct state dict
-                decoder.load_state_dict(ckpt)
+                decoder.decoder.load_state_dict(ckpt)
             print("Visualizer weights loaded successfully.")
         except Exception as e:
             print(f"Warning: Failed to load decoder weights: {e}. Output images may look like noise.")

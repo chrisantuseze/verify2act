@@ -137,6 +137,7 @@ class ExamplePrompt:
     history: Optional[List[str]] = None
     # Propose behaviour
     plan: Optional[List[str]] = None
+    plans: Optional[List[List[str]]] = None
     horizon: Optional[int] = None
     # Reflect behaviour
     analysis: Optional[str] = None
@@ -173,13 +174,20 @@ class ExamplePrompt:
 
     # -- query / response builders per behaviour ----------------------------
 
-    def _propose_query(self) -> Union[str, list]:
+    def _propose_query(self, num_candidates: int = 1) -> Union[str, list]:
         history_str = (
             "\n".join(f"  {i+1}. {a}" for i, a in enumerate(self.history))
             if self.history else "  (none — start of episode)"
         )
         obj_str = ", ".join(self.objects or [])
         horizon = self.horizon or 10
+
+        if num_candidates > 1:
+            req_format = f'Respond with JSON only: {{"plans": [["nut_label_1", ...], ...]}}'
+            plan_req = f"Propose exactly {num_candidates} distinct, diverse, and plausible candidate plans to achieve the task."
+        else:
+            req_format = f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+            plan_req = "List the available nuts in the order they should be assembled."
 
         if (
             self.goal_image and self.current_image
@@ -196,9 +204,9 @@ class ExamplePrompt:
                 _text_block(
                     f"### Assembled nuts (history)\n{history_str}\n\n"
                     f"### Planning request\n"
-                    f"List the available nuts in the order they should be assembled.\n"
+                    f"{plan_req}\n"
                     f"Available nuts: {obj_str}\n\n"
-                    f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+                    f"{req_format}"
                 ),
             ]
 
@@ -209,10 +217,18 @@ class ExamplePrompt:
             f"Plan: "
         )
 
-    def _propose_response(self) -> str:
-        if self.plan is None:
-            raise ValueError("Example 'plan' is required for propose behavior.")
-        return json.dumps({"plan": self.plan})
+    def _propose_response(self, num_candidates: int = 1) -> str:
+        if num_candidates > 1:
+            if self.plans is not None:
+                return json.dumps({"plans": self.plans})
+            elif self.plan is not None:
+                return json.dumps({"plans": [self.plan]})
+            else:
+                raise ValueError("Example 'plans' or 'plan' is required for propose behavior.")
+        else:
+            if self.plan is None:
+                raise ValueError("Example 'plan' is required for propose behavior.")
+            return json.dumps({"plan": self.plan})
 
     def _reflect_query(self) -> Union[str, list]:
         history_str = (
@@ -295,14 +311,14 @@ class ExamplePrompt:
             raise ValueError("Reflect examples require 'analysis' and 'revised_plan'.")
         return json.dumps({"analysis": self.analysis, "revised_plan": self.revised_plan})
 
-    def messages(self, behavior: str) -> List[Dict[str, Any]]:
+    def messages(self, behavior: str, num_candidates: int = 1) -> List[Dict[str, Any]]:
         """Return [query, response] message dicts for the given behaviour."""
         if self.role is None:
             raise ValueError("Example 'role' is required in YAML prompt examples.")
 
         if behavior == "propose":
-            query = self._propose_query()
-            response = self._propose_response()
+            query = self._propose_query(num_candidates=num_candidates)
+            response = self._propose_response(num_candidates=num_candidates)
         elif behavior == "reflect":
             if self.analysis is None or self.revised_plan is None:
                 return []  # this example has no reflect data — skip
@@ -312,8 +328,8 @@ class ExamplePrompt:
             raise ValueError(f"Unknown behavior: {behavior}")
 
         return [
-            format_openai(role=self.role, content=query, name=self.name_query),
-            format_openai(role=self.role, content=response, name=self.name_response),
+            format_openai(role="user", content=query, name=self.name_query),
+            format_openai(role="assistant", content=response, name=self.name_response),
         ]
 
 
@@ -378,6 +394,7 @@ class PromptManager:
         horizon: int,
         task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
+        num_candidates: int = 1,
     ) -> List[Dict[str, Any]]:
         """Build the full message list for a ``propose`` call to GPT-4o."""
         msgs: List[Dict[str, Any]] = []
@@ -391,7 +408,7 @@ class PromptManager:
         # 2. Few-shot examples (text-only, no images)
         if use_examples:
             for ex in self._examples:
-                msgs.extend(ex.messages("propose"))
+                msgs.extend(ex.messages("propose", num_candidates=num_candidates))
 
         # 3. User message (multimodal)
         history_str = (
@@ -399,6 +416,13 @@ class PromptManager:
             if history else "  (none — start of episode)"
         )
         obj_str = ", ".join(obj_labels)
+
+        if num_candidates > 1:
+            req_format = f'Respond with JSON only: {{"plans": [["nut_label_1", ...], ...]}}'
+            plan_req = f"Propose exactly {num_candidates} distinct, diverse, and plausible candidate plans to achieve the task."
+        else:
+            req_format = f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+            plan_req = "List the available nuts in the order they should be assembled."
 
         user_content = [
             _text_block("### Goal state (target configuration)"),
@@ -409,9 +433,9 @@ class PromptManager:
                 f"### Task instruction\n{task_instruction}\n\n"
                 f"### Assembled nuts (history)\n{history_str}\n\n"
                 f"### Planning request\n"
-                f"List the available nuts in the order they should be assembled.\n"
+                f"{plan_req}\n"
                 f"Available nuts: {obj_str}\n\n"
-                f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+                f"{req_format}"
             ),
         ]
         msgs.append(format_openai(role="user", content=user_content))

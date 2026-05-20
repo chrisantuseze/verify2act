@@ -59,8 +59,6 @@ from verify2act.utils.vae import load_vae_encoder
 from verify2act.utils.vae import VAE_LATENT_SCALE
 from verify2act.pipeline.planner import BeamSearchPlanner
 from verify2act.pipeline.world_model import LatentWorldModel
-from verify2act.pipeline.planner import BeamSearchPlanner
-from verify2act.pipeline.world_model import LatentWorldModel
 
 import os
 if 'MUJOCO_GL' not in os.environ:
@@ -182,7 +180,6 @@ def run_episode(
     beam_planner: Optional[BeamSearchPlanner] = None,
     decoder: Optional[torch.nn.Module] = None,
     wm_mode: str = "v2a_wm",
-    requery_world_model=None,
     horizon: int = 4,
     max_steps: int = 10,
     theta_c: float = 0.5,
@@ -203,10 +200,7 @@ def run_episode(
     vae : AutoencoderKL
         Frozen VAE encoder — used only by the diffusion world model.
     world_model : WorldModelBase
-        Primary world model for imagined rollouts.
-    requery_world_model : WorldModelBase or None
-        Optional alternate world model used during ``requery`` retries.
-        If ``None``, retries reuse ``world_model``.
+        Unified world model for imagined rollouts and requery retries.
     critic : DINOv2DualHeadCritic
         Trained dual-head contrastive critic.
     planner : VLMPlanner
@@ -282,228 +276,38 @@ def run_episode(
         if out_path:
             _save_image(current_image_np, out_path / "steps", f"step_{t:03d}_current.png")
 
-        # ── Stage 1: Plan generation (VLM / BeamSearch) ───────────────────────
-        is_latent_mode = wm_mode in ["v2a_wm", "rla_wm"]
-        
-        if is_latent_mode and beam_planner:
+        # ── Stage 1-3: Plan generation, Imagination, and Critic (BeamSearch) ──
+        if beam_planner:
             print(f"t={t}  Generating plan with BeamSearchPlanner (Mode: {wm_mode})...")
-            best_plan, best_score, final_state, all_scores, imagination_steps = beam_planner.plan(
-                current_image_np, goal_image_np, history, obj_labels, horizon, task_instruction
+            res = beam_planner.plan(
+                current_image_np=current_image_np,
+                goal_image_np=goal_image_np,
+                history=history,
+                obj_labels=obj_labels,
+                horizon=horizon,
+                task_instruction=task_instruction,
+                timestep=t,
+                output_dir=out_path,
+                decoder=decoder,
             )
-            plan = best_plan
+            plan = res["plan"]
             step_record.plan = list(plan)
-            logger.info("t=%d  BeamSearch Selected plan: %s (score: %.3f)", t, plan, best_score)
-            
-            plan_accepted = False
-            if best_score >= theta_p:
-                plan_accepted = True
-            else:
-                # Trigger reflection on the failed search
-                step_record.failed_step = len(imagination_steps) - 1
-                step_record.replan_attempts = 1
-                
-                if isinstance(world_model, LatentWorldModel) and decoder is not None:
-                    with torch.no_grad():
-                        rec_img = decoder(final_state.to(torch_device))
-                        rec_img = rec_img.squeeze(0).cpu().numpy()
-                        rec_img = (rec_img * 255).astype(np.uint8)
-                        imagined_img_next = rec_img
-                else:
-                    imagined_img_next = final_state
-                    
-                reflect_plan = [s for _, s in imagination_steps]
-                ctx = build_reflection_context(
-                    imagined_state=imagined_img_next,
-                    all_scores=all_scores,
-                    consistency_scores=[s for s, _ in all_scores],
-                    proximity_score=best_score,
-                    failed_step=step_record.failed_step,
-                    full_plan=reflect_plan,
-                )
-                ctx["failed_highlevel_action"] = imagination_steps[-1][0] if imagination_steps else "none"
-                
-                result = planner.reflect(
-                    current_image_np, goal_image_np,
-                    history, obj_labels, plan, ctx,
-                    task_instruction=task_instruction,
-                )
-                plan = result["revised_plan"]
-                step_record.reflection_analyses.append(result.get("analysis", ""))
-                step_record.plan = list(plan)
-                
-                plan_accepted = True  # Proceed with revised plan
-                step_record.all_scores = all_scores
+            step_record.replan_attempts = res["replan_attempts"]
+            step_record.all_scores = res["all_scores"]
+            step_record.failed_step = res["failed_step"]
+            step_record.reflection_analyses = res["reflection_analyses"]
+            step_record.critic_decisions = res["critic_decisions"]
+            plan_accepted = res["plan_accepted"]
         else:
             print(f"t={t}  Generating plan with VLM (Mode: {wm_mode})...")
             plan = planner.propose(
                 current_image_np, goal_image_np, history, obj_labels, horizon,
                 task_instruction=task_instruction,
-            ) 
+            )
             step_record.plan = list(plan)
             logger.info("t=%d  Proposed plan: %s", t, plan)
-    
-            # ── Stage 2+3: Imagination + Critic loop ──────────────────────
-            plan_accepted = False
-    
-            for replan_attempt in range(max_replans + 1):
-                all_scores: List[Tuple[float, float]] = []
-                imagined_img = current_image_np
-                step_failed = False
-    
-                # Expand nut names to (nut_name, sub_skill_prompt) pairs.
-                imagination_steps = expand_nut_plan(plan)
-    
-                # Track previous frame embedding for Head 2 (temporal consistency)
-                cur_img_224 = preprocess_image_for_critic(current_image_np).to(torch_device)
-                with torch.no_grad():
-                    emb_prev = critic.encode(cur_img_224)  # ProbEmbedding
-    
-                # Wrap the k-loop in rollout_context so the oracle WM chains states:
-                # S0 → S1 → S2 … instead of always branching from S0.
-                _wm_ctx = (
-                    world_model.rollout_context()
-                    if isinstance(world_model, OracleWorldModel)
-                    else nullcontext()
-                )
-                with _wm_ctx:
-                  for k, (hl_action, imagine_action) in enumerate(imagination_steps):
-                    # ── Imagination ────────────────────────────────────────
-                    imagined_img_next = world_model.imagine(imagined_img, imagine_action)
-    
-                    if out_path:
-                        step_dir = out_path / "steps"
-                        _save_image(
-                            imagined_img_next, step_dir,
-                            f"step_{t:03d}_imagine_r{replan_attempt}_k{k}.png",
-                        )
-    
-                    # ── Critic evaluation ──────────────────────────────────
-                    img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
-                    with torch.no_grad():
-                        emb_next = critic.encode(img_224)  # ProbEmbedding
-                        mean_tc, std_tc = critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
-                        tc_score = mean_tc.item()
-                        tc_uncertainty = std_tc.item()
-                    all_scores.append((tc_score, 0.0))
-    
-                    decision = check_rollout_consistency(tc_score, theta_c, uncertainty=tc_uncertainty)
-                    step_record.critic_decisions.append(
-                        f"k={k} action='{imagine_action}' tc={tc_score:.3f}(unc={tc_uncertainty:.3f}) → {decision.action}"
-                    )
-                    logger.info(
-                        "  k=%d  action='%s'  temporal_sim=%.3f(unc=%.3f)  → %s",
-                        k, imagine_action, tc_score, tc_uncertainty, decision.action,
-                    )
-    
-                    if decision.action == "requery":
-                        retry_wm = requery_world_model or world_model
-                        for retry_i in range(max_retries):
-                            # If retrying with the oracle WM inside a chain, roll the sim
-                            # back to the pre-action state before each attempt.
-                            if isinstance(retry_wm, OracleWorldModel) and retry_wm._rollout_state is not None:
-                                retry_wm.rollback_step()
-                            imagined_img_next = retry_wm.imagine(imagined_img, imagine_action)
-                            
-                            img_224 = preprocess_image_for_critic(imagined_img_next).to(torch_device)
-                            with torch.no_grad():
-                                emb_next = critic.encode(img_224)
-                                mean_tc, std_tc = critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
-                                tc_score = mean_tc.item()
-                                tc_uncertainty = std_tc.item()
-                            all_scores[-1] = (tc_score, 0.0)
-                            decision = check_rollout_consistency(tc_score, theta_c, uncertainty=tc_uncertainty)
-                            logger.info(
-                                "    requery %d/%d  tc=%.3f(unc=%.3f)  → %s",
-                                retry_i + 1, max_retries, tc_score, tc_uncertainty, decision.action,
-                            )
-                            if decision.action != "requery":
-                                break
-                        else:
-                            decision = CriticDecision(action="reflect", reason="requery_exhausted")
-    
-                    if decision.action == "reflect":
-                        step_record.failed_step = k
-                        step_record.replan_attempts = replan_attempt + 1
-                        reflect_plan = [s for _, s in imagination_steps]
-                        ctx = build_reflection_context(
-                            imagined_state=imagined_img_next,
-                            all_scores=all_scores,
-                            consistency_scores=[s for s, _ in all_scores],
-                            proximity_score=None,
-                            failed_step=k,
-                            full_plan=reflect_plan,
-                        )
-                        ctx["failed_highlevel_action"] = hl_action
-                        result = planner.reflect(
-                            current_image_np, goal_image_np,
-                            history, obj_labels, plan, ctx,
-                            task_instruction=task_instruction,
-                        )
-                        plan = result["revised_plan"]
-                        step_record.reflection_analyses.append(result.get("analysis", ""))
-                        step_record.plan = list(plan)
-                        step_failed = True
-                        break
-    
-                    emb_prev = emb_next
-                    imagined_img = imagined_img_next
-    
-                # ── Head 1 gate: final proximity check (DINOv2 only) ──────────
-                if not step_failed:
-                    # emb_prev is now the final imagined frame embedding
-                    with torch.no_grad():
-                        # mean_prox, std_prox = critic.goal_sim_with_uncertainty(emb_prev, emb_goal)
-                        mean_prox, std_prox = critic.goal_sim_from_text_with_uncertainty(emb_prev, task_instruction)        
-                        prox_score = mean_prox.item()
-                        prox_uncertainty = std_prox.item()
-    
-                    # Update last score tuple with the proximity score
-                    if all_scores:
-                        last_tc = all_scores[-1][0]
-                        all_scores[-1] = (last_tc, prox_score)
-    
-                    prox_decision = decide_from_proximity(prox_score, theta_p, uncertainty=prox_uncertainty)
-                    logger.info(
-                        "  HEAD1 proximity=%.3f(unc=%.3f)  → %s",
-                        prox_score, prox_uncertainty, prox_decision.action
-                    )
-                    step_record.critic_decisions.append(
-                        f"HEAD1 proximity={prox_score:.3f}(unc={prox_uncertainty:.3f}) → {prox_decision.action}"
-                    )
-    
-                    if prox_decision.action == "requery":
-                        logger.info("  HEAD1 uncertain failure; rerolling imagination with same plan")
-                        continue
-    
-                    if prox_decision.action == "reflect":
-                        step_record.failed_step = len(imagination_steps) - 1
-                        step_record.replan_attempts = replan_attempt + 1
-                        reflect_plan = [s for _, s in imagination_steps]
-                        ctx = build_reflection_context(
-                            imagined_state=imagined_img,
-                            all_scores=all_scores,
-                            consistency_scores=[s for s, _ in all_scores],
-                            proximity_score=prox_score,
-                            failed_step=step_record.failed_step,
-                            full_plan=reflect_plan,
-                        )
-                        ctx["failed_highlevel_action"] = imagination_steps[-1][0]
-                        result = planner.reflect(
-                            current_image_np, goal_image_np,
-                            history, obj_labels, plan, ctx,
-                            task_instruction=task_instruction,
-                        )
-                        plan = result["revised_plan"]
-                        step_record.reflection_analyses.append(result.get("analysis", ""))
-                        step_record.plan = list(plan)
-                        step_failed = True
-    
-                if not step_failed:
-                    plan_accepted = True
-                    break
+            plan_accepted = True
 
-        if not is_latent_mode:
-            step_record.all_scores = all_scores
 
         if not plan_accepted:
             logger.warning(
@@ -622,20 +426,19 @@ def _build_critic(
     return critic
 
 
-def _build_world_models(args: argparse.Namespace):
+def _build_world_model(args: argparse.Namespace):
     mode = args.wm_mode
     wm = None
-    requery_wm = None
 
     if mode == "v2a_wm":
         from verify2act.pipeline.world_model import LatentWorldModel
         wm = LatentWorldModel(device=args.device, dynamics_weights_path=args.latent_wm_ckpt)
-        return wm, wm
+        return wm
         
     if mode == "rla_wm":
         from verify2act.pipeline.world_model import RLAWorldModel
         wm = RLAWorldModel(device=args.device, dynamics_weights_path=args.latent_wm_ckpt)
-        return wm, wm
+        return wm
 
     if mode == "diffusion":
         decoder_dir = args.wm_decoder_dir
@@ -664,11 +467,11 @@ def _build_world_models(args: argparse.Namespace):
             guidance_scale=args.wm_text_guidance,
             seed=args.wm_seed,
         )
-        return wm, wm
+        return wm
 
     if mode == "oracle":
         wm = OracleWorldModel(args.env_wrapper)
-        return wm, wm
+        return wm
     raise ValueError(f"Unsupported wm_mode: {mode}")
 
 
@@ -768,18 +571,22 @@ def main() -> int:
         max_tokens=args.planner_max_tokens,
         temperature=args.planner_temperature,
     )
-    world_model, requery_world_model = _build_world_models(args)
+    world_model = _build_world_model(args)
     
-    beam_planner = None
+    beam_planner = BeamSearchPlanner(
+        vlm_planner=planner,
+        world_model=world_model,
+        critic=critic,
+        beam_width=args.beam_width,
+        goal_threshold=args.theta_p,
+        plan_expander=expand_nut_plan,
+        temporal_threshold=args.theta_c,
+        max_retries=args.max_retries,
+        max_replans=args.max_replans,
+    )
+    
     decoder = None
     if args.wm_mode in ["v2a_wm", "rla_wm"]:
-        beam_planner = BeamSearchPlanner(
-            vlm_planner=planner,
-            world_model=world_model,
-            critic=critic,
-            beam_width=args.beam_width,
-            goal_threshold=args.theta_p,
-        )
         # Load decoder for visual reflection
         from verify2act.latent_wm.visualizer import FeatureDecoder
         logger.info("Loading FeatureDecoder for visual reflection...")
@@ -802,7 +609,6 @@ def main() -> int:
         beam_planner=beam_planner,
         decoder=decoder,
         wm_mode=args.wm_mode,
-        requery_world_model=requery_world_model,
         horizon=args.horizon,
         max_steps=args.max_steps,
         theta_c=args.theta_c,

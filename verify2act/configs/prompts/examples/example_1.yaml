@@ -15,6 +15,9 @@ horizon: 4
 plan:
   - "left round nut"
   - "right round nut"
+plans:
+  - ["left round nut", "right round nut"]
+  - ["right round nut", "left round nut"]
 
 # Reflect (not used for this example)
 analysis: Null
