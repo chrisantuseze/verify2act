@@ -36,7 +36,7 @@ export APPTAINER_BIND=$PWD
 #   --output-dir calvin/dataset/task_ABC_D_filtered/training \
 #   --history-len 5
 
-apptainer exec --nv verify2act.sif python3 verify2act/latent_wm/train_dynamics.py \
+apptainer exec --nv verify2act.sif accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
