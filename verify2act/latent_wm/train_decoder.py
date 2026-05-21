@@ -7,7 +7,7 @@ from tqdm import tqdm
 from pathlib import Path
 import lpips
 
-from visualizer import FeatureDecoder
+from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
 def train_decoder(args):
@@ -15,18 +15,31 @@ def train_decoder(args):
     print(f"Using device: {device}")
 
     # 1. Dataset & DataLoader
-    dataset = LatentDynamicsDataset(
-        dataset_dir=args.dataset_dir,
-        transitions_file=args.transitions_file,
-        history_len=1, # We only need the target image for decoder training
-        image_size=args.image_size
-    )
+    if args.dataset_type == "calvin":
+        from verify2act.data_loader_calvin import build_calvin_datasets
+        # We only need the target image for decoder training
+        train_dataset, val_dataset = build_calvin_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=args.val_frac,
+            image_size=args.image_size,
+            history_len=1,
+            seed=args.seed,
+        )
+    else:
+        dataset = LatentDynamicsDataset(
+            dataset_dir=args.dataset_dir,
+            transitions_file=args.transitions_file,
+            history_len=1, # We only need the target image for decoder training
+            image_size=args.image_size
+        )
+        
+        # Split into train/val
+        train_size = int((1.0 - args.val_frac) * len(dataset))
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
     
-    # Split into train/val
-    train_size = int(0.9 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-    
+    train_size = len(train_dataset)
+    val_size = len(val_dataset)
     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
     print(f"Dataset loaded. Train: {train_size}, Val: {val_size}")
@@ -55,8 +68,12 @@ def train_decoder(args):
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Train]", dynamic_ncols=True)
         
-        for batch_idx, (_, target_img, _, _) in enumerate(pbar):
-            target_img = target_img.to(device)
+        for batch_idx, batch in enumerate(pbar):
+            if isinstance(batch, dict):
+                target_img = batch["image_t1"].to(device)
+            else:
+                _, target_img, _, _ = batch
+                target_img = target_img.to(device)
             
             # Extract ground truth DINO features
             with torch.no_grad():
@@ -100,8 +117,12 @@ def train_decoder(args):
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Val]", dynamic_ncols=True)
         with torch.no_grad():
-            for batch_idx, (_, target_img, _, _) in enumerate(pbar_val):
-                target_img = target_img.to(device)
+            for batch_idx, batch in enumerate(pbar_val):
+                if isinstance(batch, dict):
+                    target_img = batch["image_t1"].to(device)
+                else:
+                    _, target_img, _, _ = batch
+                    target_img = target_img.to(device)
                 
                 F_target = extractor.extract_dino(target_img)
                 pred_img = visualizer.decode(F_target)
@@ -141,8 +162,11 @@ def train_decoder(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Feature Decoder for Latent World Model")
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"])
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl")
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/latent_wm/decoder")
+    parser.add_argument("--val-frac", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/v2a_wm/decoder")
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-epochs", type=int, default=50)
