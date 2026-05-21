@@ -12,9 +12,10 @@ scancel jobid
 sbatch verify2act.sbatch
 
 conda activate verify2act
-# v3: Min-SNR-γ + FF LoRA targets
+
+######################## WM TRAINING #######################
 python verify2act/world_model/train_wm.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/wm_v3 \
   --max-steps 20000 \
   --eval-every 1000 \
@@ -29,8 +30,17 @@ python verify2act/world_model/train_wm.py \
   --mixed-precision fp16 \
   --device cuda
 
+
+python verify2act/world_model/train_decoder.py \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly \
+  --output-dir  verify2act/output/decoder \
+  --max-steps 5000 \
+  --eval-every 500 \
+  --batch-size 2
+
+######################## CRITIC TRAINING #######################
 python verify2act/critic/train_contrastive.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/contrastive \
   --epochs 30 \
   --batch-size 16 \
@@ -40,24 +50,7 @@ python verify2act/critic/train_contrastive.py \
   --kl-weight 5e-4 \
   --device cuda
 
-python verify2act/world_model/train_decoder.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly \
-  --output-dir  verify2act/output/decoder \
-  --max-steps 5000 \
-  --eval-every 500 \
-  --batch-size 2
-
-
-python verify2act/critic/diagnose_dino.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-  --n-samples 400
-
-python verify2act/critic/calibrate_thresholds.py \
-  --critic-ckpt verify2act/output/contrastive/best_contrastive_critic.pt \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-  --output-path verify2act/output/contrastive/threshold_calibration.json
-
-
+######################## INFERENCE #######################
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/best_contrastive_critic.pt \
   --wm-adapter-dir verify2act/output/wm/best/unet_lora \
@@ -73,22 +66,12 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 
 tensorboard --logdir=path/to/logs
 
-
-python verify2act/latent_wm/train_decoder.py \
-    --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
-    --batch-size 8 \
-    --num-epochs 50
-
-python verify2act/latent_wm/visualize_wm.py \
-    --wm-ckpt verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
-    --decoder-ckpt verify2act/output/latent_wm/decoder/latent_decoder_best.pt \
-    --num-samples 5
-
-
+######################## RLA_WM BASELINE #######################
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/rla_wm_baseline/train_baseline.py \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/rla_wm \
+  --encoder-ckpt verify2act/output/v2a_wm/encoder/ckpt/encoder_only_best.pt \
   --num-epochs 20 \
   --batch-size 12 \
   --lr 1e-4 \
@@ -100,48 +83,69 @@ python verify2act/rla_wm_baseline/visualize_baseline.py \
     --decoder-ckpt verify2act/output/latent_wm/decoder/latent_decoder_best.pt \
     --num-samples 5
 
-# ─── v2a_wm Training Commands ───────────────────────────────────────────────
+######################## LATENT WM TRAINING #######################
 
-# RoboSuite (nut_assembly)
+
+######## NUT ASSEMBLY ########
+# Stage 1: Train DeltaEncoder (Bottleneck)
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_encoder.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
+  --num-epochs 30 --batch-size 64 --lr 1e-4
+
+# Stage 2 (aux): Train Decoder (DINO features -> image)
+python verify2act/latent_wm/train_decoder.py \
+    --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
+    --batch-size 8 \
+    --num-epochs 50
+
+python verify2act/latent_wm/visualize_wm.py \
+    --wm-ckpt verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
+    --decoder-ckpt verify2act/output/latent_wm/decoder/latent_decoder_best.pt \
+    --num-samples 5
+
+# Stage 2: Flow Matching
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
-  --dataset-dir robosuite/data_capture_wm/dataset/nut_assembly_merged \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly_1 \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
   --resume-from verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt
 
-# CALVIN (debug split — for quick smoke tests)
-accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
-  verify2act/latent_wm/train_dynamics.py \
-  --dataset-type calvin \
-  --dataset-dir calvin/dataset/calvin_debug_dataset/training \
-  --output-dir verify2act/output/v2a_wm/calvin_debug \
-  --num-epochs 50 --batch-size 12 --lr 1e-4 --checkpoint-freq 5 \
-  --causal-masking
 
-# CALVIN (full ABCD_D split — for real training)
+######## CALVIN ########
+# Stage 1: Train DeltaEncoder (Bottleneck)
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_encoder.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/v2a_wm/calvin/encoder \
+  --num-epochs 30 --batch-size 64 --lr 1e-4
+
+# Stage 2 (aux): Train Decoder (DINO features -> image)
+python verify2act/latent_wm/train_decoder.py \
+    --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+    --batch-size 8 \
+    --num-epochs 50
+
+# Stage 2: Flow Matching - CALVIN (full ABCD_D split — for real training)
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABCD_D/training \
-  --output-dir verify2act/output/v2a_wm/calvin_ABCD_D \
-  --num-epochs 50 --batch-size 12 --lr 1e-4 --checkpoint-freq 5 \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/calvin_ABCD_D/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/calvin/task_ABC_D/ckpt/latent_dynamics_best.pt
 
 # Filter Calvin dataset
 python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABC_D/training \
   --output-dir calvin/dataset/task_ABC_D_filtered/training \
   --history-len 5
-
-python3 verify2act/latent_wm/train_dynamics.py \
-  --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
-  --num-epochs 1 \
-  --batch-size 1 \
-  --lr 1e-4 \
-  --causal-masking

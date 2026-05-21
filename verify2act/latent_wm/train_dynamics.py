@@ -27,8 +27,9 @@ root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-# Import our dynamics model
+# Import our dynamics and encoder models
 from verify2act.latent_wm.dynamics import LatentDynamicsModel
+from verify2act.latent_wm.delta_encoder import DeltaEncoder
 
 # ─── DATASET ─────────────────────────────────────────────────────────────
 
@@ -221,12 +222,47 @@ def train(args):
     
     # 2. Models
     extractor = FeatureExtractor(device)
-    
+
+    # ── Frozen DeltaEncoder (Stage 1 checkpoint) ──────────────────────────────
+    # Compresses F_{t+1} - F_t into compact latent tokens before flow matching,
+    # mirroring RLA-WM's two-stage design.
+    delta_encoder = DeltaEncoder(
+        dino_channels=768,
+        model_channels=args.enc_model_channels,
+        token_dim=args.token_dim,
+        num_latent_tokens=args.num_latent_tokens,
+        num_blocks=args.num_enc_blocks,
+        num_heads=args.enc_num_heads,
+    ).to(device)
+
+    if args.encoder_ckpt:
+        enc_state = torch.load(args.encoder_ckpt, map_location=device)
+        # Support both encoder-only and full encoder+decoder checkpoint formats
+        if isinstance(enc_state, dict) and "encoder" in enc_state:
+            enc_state = enc_state["encoder"]
+        delta_encoder.load_state_dict(enc_state)
+        if accelerator.is_local_main_process:
+            print(f"[DeltaEncoder] Loaded from {args.encoder_ckpt}")
+    else:
+        if accelerator.is_local_main_process:
+            print("[DeltaEncoder] No checkpoint provided — using random weights.")
+            print("               Run train_encoder.py first for best results.")
+
+    # Freeze the encoder — it is not updated during dynamics training
+    delta_encoder.eval()
+    for p in delta_encoder.parameters():
+        p.requires_grad = False
+
+    # ── Flow-matching dynamics model ──────────────────────────────────────────
+    # Flow stage operates in the compact latent token space (token_dim);
+    # conditioning stage still processes full temporal history (dino_channels).
     model = LatentDynamicsModel(
         dino_channels=768,
         clip_channels=512,
         history_len=args.history_len,
         num_patches=256,
+        token_dim=args.token_dim,
+        num_latent_tokens=args.num_latent_tokens,
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -255,7 +291,7 @@ def train(args):
             if accelerator.is_local_main_process:
                 print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
     
-    # Accelerate Prepare
+    # Accelerate Prepare (delta_encoder is frozen, no need to wrap in Accelerate)
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, val_dataloader
     )
@@ -298,55 +334,67 @@ def train(args):
                 history_mask = history_mask_raw.to(device) if args.causal_masking else None
                 
             B = target_img.shape[0]
-            
-            # --- Feature Extraction ---
-            # Extract F_{t-H...t}
-            F_history = extractor.extract_dino(history_imgs) # (B, 3, 256, 768)
-            F_t = F_history[:, -1, :, :]                     # (B, 256, 768)
-            
-            # Extract F_{t+1}
-            F_t1 = extractor.extract_dino(target_img)        # (B, 256, 768)
-            
-            # Extract CLIP action tokens
-            A_clip = extractor.extract_clip(action_texts)    # (B, seq_len, 512)
-            
-            # --- Flow Matching Objective ---
-            # 1. Target residual
-            residual_target = F_t1 - F_t                     # (B, 256, 768)
-            
-            # 2. Sample random timesteps
-            t = torch.rand(B, device=device)
-            
-            # 3. Sample noise (x_0)
-            noise = torch.randn_like(residual_target)
-            
-            # 4. Construct noisy latent (x_t)
-            # In simple Conditional Flow Matching: x_t = (1-t)*noise + t*target
+
+            # --- Feature Extraction (frozen backbone, no grad) ---
+            with torch.no_grad():
+                # Conditioning history: [F_{t-H+1}, ..., F_t]
+                F_history = extractor.extract_dino(history_imgs)  # (B, H, 256, 768)
+                F_t  = F_history[:, -1, :, :]                     # (B, 256, 768)
+                # Target next frame features
+                F_t1 = extractor.extract_dino(target_img)         # (B, 256, 768)
+                # CLIP action tokens for cross-attention grounding
+                A_clip = extractor.extract_clip(action_texts)     # (B, seq_len, 512)
+
+                # --- Stage 1: Encode F_{t+1} - F_t into compact latent tokens ---
+                # This is the key alignment with RLA-WM: the frozen DeltaEncoder
+                # compresses the 256x768 DINO difference into num_latent_tokens x
+                # token_dim compact codes before flow matching.
+                residual_raw = F_t1 - F_t                         # (B, 256, 768)
+                gt_tokens = delta_encoder(residual_raw)           # (B, N, token_dim)
+
+            # --- Stage 2: Flow Matching in compact latent token space ---
+            # 1. Sample flow timesteps via logitNormal distribution.
+            # Concentrates training on t≈0.5 (hardest part of trajectory)
+            # rather than wasting equal budget on trivial t≈0 / t≈1 endpoints.
+            # Same technique used by SD3, Flux, and RLA-WM.
+            t = torch.sigmoid(torch.randn(B, device=device))
+
+            # 2. Sample noise in token space
+            noise = torch.randn_like(gt_tokens)
+
+            # 3. Construct noisy latent: x_t = (1-t)*noise + t*gt_tokens
             t_expand = t.view(B, 1, 1)
-            noisy_latent = (1 - t_expand) * noise + t_expand * residual_target
-            
-            # 5. Predict velocity (target velocity is target - noise)
-            velocity_target = residual_target - noise
-            
-            # Forward pass
+            noisy_latent = (1 - t_expand) * noise + t_expand * gt_tokens
+
+            # 4. Velocity target in token space
+            velocity_target = gt_tokens - noise
+
+            # 5. Forward pass — conditioning uses full history, flow uses token space
             unwrapped_model = accelerator.unwrap_model(model)
-            # cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
-            # velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
-            velocity_pred = unwrapped_model.forward(F_history, A_clip, noisy_latent, t, history_mask=history_mask)
-            
+            velocity_pred = unwrapped_model.forward(
+                F_history, A_clip, noisy_latent, t, history_mask=history_mask
+            )  # (B, N, token_dim)
+
             # --- Losses ---
-            # Main CFM MSE loss
+            # Main CFM MSE loss (in compact latent token space)
             loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-            
-            # Sparsity Regularization (Drift Prevention)
-            # We want patches that didn't move much in ground truth to have exactly 0 predicted residual
-            patch_movement = residual_target.norm(dim=-1) # (B, 256)
-            # Identify static patches (movement below threshold)
-            static_mask = (patch_movement < 0.05).float().unsqueeze(-1) # (B, 256, 1)
-            
-            # Penalize any predicted velocity on static patches
-            loss_sparsity = (static_mask * velocity_pred.abs()).mean()
-            
+
+            # Sparsity loss: operate in raw DINO space on static patches.
+            # We compare movement magnitude of the raw DINO residual.
+            patch_movement = residual_raw.norm(dim=-1)             # (B, 256)
+            static_mask = (patch_movement < 0.05).float()          # (B, 256)
+            # For the sparsity loss we penalise the velocity pred projected back
+            # to dino space via a simple mean-pool proxy (lightweight, no decoder).
+            # If sparsity_weight == 0, this is a no-op.
+            if sparsity_weight > 0:
+                # velocity_pred is (B, N, token_dim); we use its L2 norm as a
+                # global activity proxy averaged over the latent tokens.
+                latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)  # (B,)
+                static_weight   = static_mask.mean(dim=-1)                 # (B,)
+                loss_sparsity   = (static_weight * latent_activity).mean()
+            else:
+                loss_sparsity = torch.tensor(0.0, device=device)
+
             loss = loss_cfm + sparsity_weight * loss_sparsity
             
             # Optimize
@@ -391,31 +439,37 @@ def train(args):
                     history_imgs = history_imgs.to(device)
                     target_img   = target_img.to(device)
                     history_mask = history_mask_raw.to(device) if args.causal_masking else None
-                
+
                 B = target_img.shape[0]
-                
-                F_history = extractor.extract_dino(history_imgs)
-                F_t = F_history[:, -1, :, :]
-                F_t1 = extractor.extract_dino(target_img)
-                A_clip = extractor.extract_clip(action_texts)
-                
-                residual_target = F_t1 - F_t
-                t = torch.rand(B, device=device)
-                noise = torch.randn_like(residual_target)
-                t_expand = t.view(B, 1, 1)
-                noisy_latent = (1 - t_expand) * noise + t_expand * residual_target
-                velocity_target = residual_target - noise
-                
+
+                F_history  = extractor.extract_dino(history_imgs)
+                F_t        = F_history[:, -1, :, :]
+                F_t1       = extractor.extract_dino(target_img)
+                A_clip     = extractor.extract_clip(action_texts)
+
+                residual_raw  = F_t1 - F_t
+                gt_tokens     = delta_encoder(residual_raw)            # (B, N, token_dim)
+
+                t          = torch.sigmoid(torch.randn(B, device=device))
+                noise      = torch.randn_like(gt_tokens)
+                t_expand   = t.view(B, 1, 1)
+                noisy_latent    = (1 - t_expand) * noise + t_expand * gt_tokens
+                velocity_target = gt_tokens - noise
+
                 unwrapped_model = accelerator.unwrap_model(model)
-                # cond = unwrapped_model.forward_cond(F_history, A_clip, history_mask=history_mask)
-                # velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
-                velocity_pred = unwrapped_model.forward(F_history, A_clip, noisy_latent, t, history_mask=history_mask)
-                
+                velocity_pred   = unwrapped_model.forward(
+                    F_history, A_clip, noisy_latent, t, history_mask=history_mask
+                )
+
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-                patch_movement = residual_target.norm(dim=-1)
-                static_mask = (patch_movement < 0.05).float().unsqueeze(-1)
-                loss_sparsity = (static_mask * velocity_pred.abs()).mean()
-                
+                if sparsity_weight > 0:
+                    patch_movement = residual_raw.norm(dim=-1)
+                    static_weight  = (patch_movement < 0.05).float().mean(dim=-1)
+                    latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)
+                    loss_sparsity  = (static_weight * latent_activity).mean()
+                else:
+                    loss_sparsity = torch.tensor(0.0, device=device)
+
                 loss = loss_cfm + sparsity_weight * loss_sparsity
                 
                 val_loss += loss.item()
@@ -455,28 +509,50 @@ def train(args):
         writer.close()
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
+    parser = argparse.ArgumentParser(description="Train Verify2Act latent dynamics (Stage 2: flow matching)")
 
+    # Dataset
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
-    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"], help="Type of dataset loader to use")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"],
+                        help="Type of dataset loader to use")
     parser.add_argument("--val-frac", type=float, default=0.1, help="Validation fraction")
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
-                        help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
-                             "'transitions_subskill.jsonl').")
+                        help="JSONL filename inside dataset-dir")
+    parser.add_argument("--image-size", type=int, default=224, help="Image size for DINOv2 input")
+    parser.add_argument("--history-len", type=int, default=3,
+                        help="Number of past frames to use as conditioning history")
+
+    # Frozen DeltaEncoder (Stage 1)
+    parser.add_argument("--encoder-ckpt", type=str, default=None,
+                        help="Path to pre-trained DeltaEncoder checkpoint (encoder_only_best.pt "
+                             "from train_encoder.py). Strongly recommended; omit only for debugging.")
+    parser.add_argument("--token-dim", type=int, default=64,
+                        help="Compact latent token dimension (must match the encoder checkpoint).")
+    parser.add_argument("--num-latent-tokens", type=int, default=16,
+                        help="Number of compact latent tokens (must match the encoder checkpoint).")
+    parser.add_argument("--enc-model-channels", type=int, default=512,
+                        help="DeltaEncoder internal width (must match checkpoint).")
+    parser.add_argument("--num-enc-blocks", type=int, default=4,
+                        help="DeltaEncoder transformer depth (must match checkpoint).")
+    parser.add_argument("--enc-num-heads", type=int, default=8,
+                        help="DeltaEncoder attention heads (must match checkpoint).")
+
+    # Training
     parser.add_argument("--output-dir", type=str, default="verify2act/output/v2a_wm/nut_assembly")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--history-len", type=int, default=3, help="Number of past frames to use as history")
-    parser.add_argument("--image-size", type=int, default=224, help="Image size for DINOv2 input")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
     parser.add_argument("--num-epochs", type=int, default=5, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--sparsity-weight", type=float, default=0.1, help="Sparsity regularization weight")
+    parser.add_argument("--sparsity-weight", type=float, default=0.0,
+                        help="Sparsity regularization weight (0 = disabled). "
+                             "Applied as a global latent-activity penalty on static patches.")
     parser.add_argument("--checkpoint-freq", type=int, default=2, help="Checkpoint frequency (epochs)")
-    parser.add_argument("--resume-from", type=str, default=None, help="Path to checkpoint to resume from")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Path to dynamics model checkpoint to resume from")
     parser.add_argument(
         "--causal-masking", action="store_true", default=False,
         help="Use Transformer-native causal attention masking + learnable [START] tokens for "
-             "early-episode history padding. Omit to use the legacy repeat-first-frame baseline."
+             "early-episode history padding."
     )
 
     return parser.parse_args()

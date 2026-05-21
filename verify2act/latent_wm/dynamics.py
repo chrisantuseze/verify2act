@@ -23,26 +23,43 @@ except ImportError as e:
 class LatentDynamicsModel(nn.Module):
     """
     Hybrid VLM-Feature World Model: Latent Dynamics Core.
-    
-    Predicts Residual Latent Actions (\Delta F) using Conditional Flow Matching.
+
+    Two-stage flow-matching model that mirrors RLA-WM's architecture while
+    adding temporal history conditioning:
+
+    Stage 1 — Conditioning (forward_cond):
+        Processes a window of DINO history frames [F_{t-H+1}, ..., F_t]
+        with cross-attention to CLIP action tokens.  Output: conditioning
+        queries of shape ``(B, H*num_patches, model_channels)``.
+
+    Stage 2 — Flow (forward_flow):
+        Operates on the **compact latent token space** produced by a frozen
+        ``DeltaEncoder`` (shape ``[B, num_latent_tokens, token_dim]``) rather
+        than the raw DINO feature space.  This aligns with RLA-WM's approach
+        of encoding ``F_{t+1} - F_t`` through a bottleneck before flow matching.
+
     Incorporates:
-    - History Context: [F_{t-2}, F_{t-1}, F_t]
+    - History Context: [F_{t-2}, F_{t-1}, F_t] (causal masking optional)
     - Cross-Attention Action Grounding: CLIP action tokens
-    - Multi-Scale Spatial Resolution: Handles concatenated DINO features
+    - Compact Latent Space: flow matching on DeltaEncoder tokens, not raw DINO
+    - Sparsity Regularization: applied in raw DINO space (via decoder, optional)
     """
 
     def __init__(
         self,
-        dino_channels: int = 768,       # Base DINO dim (e.g., 768 for ViT-B). Can be larger if multi-scale.
+        dino_channels: int = 768,       # DINO patch feature dim (cond stage input)
         clip_channels: int = 512,       # CLIP text embedding dim
-        model_channels: int = 1024,     # Internal transformer dim
-        num_patches: int = 256,         # e.g., 16x16 grid
-        history_len: int = 3,           # F_{t-2}, F_{t-1}, F_t
-        num_cond_blocks: int = 4,       # Blocks to process history and action
-        num_flow_blocks: int = 6,       # Blocks for flow matching (velocity prediction)
+        model_channels: int = 1024,     # Conditioning transformer internal dim
+        num_patches: int = 256,         # Number of DINO patches (e.g. 16×16)
+        history_len: int = 3,           # Frames in the conditioning history window
+        num_cond_blocks: int = 4,       # Conditioning transformer depth
+        num_flow_blocks: int = 6,       # Flow transformer depth
         num_heads: int = 16,
         mlp_ratio: float = 4.0,
         use_fp16: bool = False,
+        # ── Compact latent space (DeltaEncoder output) ──────────────────────
+        token_dim: int = 64,            # Dim of each compact latent token
+        num_latent_tokens: int = 16,    # Number of compact latent tokens
     ):
         super().__init__()
         self.dino_channels = dino_channels
@@ -50,19 +67,22 @@ class LatentDynamicsModel(nn.Module):
         self.model_channels = model_channels
         self.history_len = history_len
         self.num_patches = num_patches
+        self.token_dim = token_dim
+        self.num_latent_tokens = num_latent_tokens
         self.dtype = torch.float16 if use_fp16 else torch.float32
 
-        # 1. Projections for inputs
+        # ── Stage 1: Conditioning Transformer ────────────────────────────────
+        # Receives the full temporal history [F_{t-H+1}, ..., F_t] plus CLIP
+        # action tokens.  This stage is UNCHANGED from the original design —
+        # temporal history conditioning is preserved as a core novelty.
+
         self.history_proj = nn.Linear(dino_channels, model_channels)
-        self.action_proj = nn.Linear(clip_channels, model_channels)
+        self.action_proj  = nn.Linear(clip_channels,  model_channels)
 
-        # We add learned temporal embeddings to distinguish F_{t-2}, F_{t-1}, F_t
+        # Learned temporal and spatial positional embeddings
         self.temporal_emb = nn.Parameter(torch.zeros(1, history_len, 1, model_channels))
-        # Spatial positional embeddings for the patches
-        self.spatial_emb = nn.Parameter(torch.zeros(1, 1, num_patches, model_channels))
+        self.spatial_emb  = nn.Parameter(torch.zeros(1, 1, num_patches, model_channels))
 
-        # 2. Stage 1: Conditioning Transformer
-        # Processes the history and cross-attends to the CLIP action tokens
         self.cond_blocks = nn.ModuleList([
             ModCrossAttentionBlock(
                 channels=model_channels,
@@ -72,14 +92,23 @@ class LatentDynamicsModel(nn.Module):
                 use_fp16=use_fp16,
             ) for _ in range(num_cond_blocks)
         ])
-        # Dummy mod embedding for conditioning stage (since ModCrossAttention needs it)
-        # We can just use a constant vector or learnable parameter.
+        # Learnable modulation seed for the conditioning blocks
         self.cond_mod_emb = nn.Parameter(torch.zeros(1, model_channels))
 
-        # 3. Stage 2: Flow Matching Transformer
+        # Learnable [START] token substituted for padded history slots
+        # (B×H×num_patches×dino_channels — broadcasts over batch and time)
+        self.start_token = nn.Parameter(torch.zeros(1, 1, num_patches, dino_channels))
+
+        # ── Stage 2: Flow Matching Transformer ───────────────────────────────
+        # Operates in the COMPACT LATENT SPACE produced by the frozen
+        # DeltaEncoder.  Input/output shape: (B, num_latent_tokens, token_dim)
+        # instead of the raw (B, num_patches, dino_channels) DINO space.
+        # This aligns with RLA-WM's two-stage design.
+
         self.flow_time_embedder = TimestepEmbedder(model_channels)
-        self.noisy_latent_proj = nn.Linear(dino_channels, model_channels)
-        
+        # Project compact tokens (token_dim) → model_channels
+        self.noisy_latent_proj  = nn.Linear(token_dim, model_channels)
+
         self.flow_blocks = nn.ModuleList([
             ModCrossAttentionBlock(
                 channels=model_channels,
@@ -91,11 +120,8 @@ class LatentDynamicsModel(nn.Module):
         ])
 
         self.flow_norm_out = nn.LayerNorm(model_channels)
-        self.flow_out_proj = nn.Linear(model_channels, dino_channels)
-
-        # Learnable [START] token: substituted for padded history slots.
-        # Shape (1, 1, num_patches, dino_channels) broadcasts over batch and history dims.
-        self.start_token = nn.Parameter(torch.zeros(1, 1, num_patches, dino_channels))
+        # Output dim is token_dim (compact latent space), NOT dino_channels
+        self.flow_out_proj = nn.Linear(model_channels, token_dim)
 
         self._initialize_weights()
 
@@ -154,28 +180,35 @@ class LatentDynamicsModel(nn.Module):
 
     def forward_flow(
         self,
-        cond_queries: Tensor,  # (B, H*P, C)
-        noisy_latent: Tensor,  # (B, num_patches, dino_channels)
-        flow_t: Tensor         # (B,) flow timestep [0, 1]
+        cond_queries: Tensor,  # (B, H*P, model_channels)
+        noisy_latent: Tensor,  # (B, num_latent_tokens, token_dim)  ← compact latent space
+        flow_t: Tensor,        # (B,) flow timestep in [0, 1]
     ) -> Tensor:
-        """
-        Predicts the velocity of the residual given the conditioning.
-        """
-        # Project noisy latent
-        x = self.noisy_latent_proj(noisy_latent)  # (B, P, C)
-        
-        # Add spatial embeddings to the noisy latent so it knows where patches are
-        x = x + self.spatial_emb.squeeze(1)
+        """Predict the velocity field in the compact latent token space.
 
-        # Timestep embedding for modulation
+        The flow model now operates on the output space of the frozen
+        ``DeltaEncoder`` — ``(B, num_latent_tokens, token_dim)`` — rather than
+        the raw DINO feature difference space.  The conditioning queries from
+        ``forward_cond`` (which embed full temporal history) are passed via
+        cross-attention.
+
+        Returns:
+            v_pred: ``(B, num_latent_tokens, token_dim)`` — predicted velocity.
+        """
+        # Project compact latent tokens → model_channels
+        x = self.noisy_latent_proj(noisy_latent.float())  # (B, N, C)
+
+        # Timestep modulation embedding
         t_emb = self.flow_time_embedder(flow_t.float() * 1000)  # (B, C)
 
-        # Flow blocks
+        x = x.to(self.dtype)
         for block in self.flow_blocks:
-            x = block(x, mod=t_emb, cond=cond_queries)
-            
+            x = block(x, mod=t_emb.to(self.dtype), cond=cond_queries)
+
+        x = x.float()
         x = self.flow_norm_out(x)
-        return self.flow_out_proj(x)  # Predicted velocity (B, P, dino_channels)
+        # Output: predicted velocity in token_dim space  (B, N, token_dim)
+        return self.flow_out_proj(x)
 
     def forward(
         self,
@@ -197,28 +230,36 @@ class LatentDynamicsModel(nn.Module):
         num_steps: int = 5,
         history_mask: Optional[Tensor] = None,
     ) -> Tensor:
-        """
-        Inference rollout step.
-        Uses a simple Euler ODE solver to integrate the predicted velocity
-        and output the predicted next feature state F_{t+1}.
+        """Inference rollout step — returns predicted latent tokens.
+
+        Runs an Euler ODE integration in the compact latent token space
+        (output of ``DeltaEncoder``) rather than the raw DINO feature space.
+        The caller is responsible for decoding the predicted tokens back to
+        DINO feature space using ``DeltaDecoder`` if ΔF is needed.
 
         Args:
-            xt_history:   (B, H, num_patches, dino_channels)
-            action_tokens: (B, seq_len, clip_channels)
-            num_steps:    Euler integration steps
-            history_mask: (B, H) bool, True=real frame. Pass None to skip masking
-                          (legacy repeat-first-frame behaviour).
+            xt_history:    ``(B, H, num_patches, dino_channels)``
+            action_tokens: ``(B, seq_len, clip_channels)``
+            num_steps:     Euler ODE steps.
+            history_mask:  ``(B, H)`` bool mask, ``True`` = real frame.
+
         Returns:
-            predicted_F_{t+1}: (B, num_patches, dino_channels)
+            pred_latent: ``(B, num_latent_tokens, token_dim)`` — predicted
+                latent action tokens.  To get ΔF call
+                ``DeltaDecoder.forward(pred_latent)``; to get ``F_{t+1}``
+                add that to ``xt_history[:, -1]``.
         """
         B = xt_history.shape[0]
         device = xt_history.device
 
-        # Precompute conditioning once (causal mask applied here if provided)
+        # Conditioning computed once; temporal history is used here
         cond = self.forward_cond(xt_history, action_tokens, history_mask=history_mask)
 
-        # Initialize from pure noise; integrate velocity field via Euler method
-        x = torch.randn(B, self.num_patches, self.dino_channels, device=device, dtype=self.dtype)
+        # Initialise in compact latent space (NOT DINO feature space)
+        x = torch.randn(
+            B, self.num_latent_tokens, self.token_dim,
+            device=device, dtype=self.dtype,
+        )
 
         dt = 1.0 / num_steps
         for i in range(num_steps):
@@ -226,7 +267,6 @@ class LatentDynamicsModel(nn.Module):
             v = self.forward_flow(cond, x, t)
             x = x + v * dt
 
-        # x is the predicted residual ΔF; add to current frame features
-        F_t = xt_history[:, -1, :, :]
-        return F_t + x
+        # Return the predicted latent tokens.  Caller decodes via DeltaDecoder.
+        return x.float()
 

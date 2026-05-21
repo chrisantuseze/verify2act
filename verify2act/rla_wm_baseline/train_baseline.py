@@ -29,6 +29,7 @@ if str(root_dir) not in sys.path:
 
 from verify2act.latent_wm.train_dynamics import LatentDynamicsDataset, FeatureExtractor
 from verify2act.rla_wm_baseline.dynamics import BaselineRLAWM
+from verify2act.latent_wm.delta_encoder import DeltaEncoder
 
 # ─── TRAINING LOOP ───────────────────────────────────────────────────────
 
@@ -72,12 +73,42 @@ def train(args):
     
     # 2. Models
     extractor = FeatureExtractor(device)
-    
+
+    # ── Frozen DeltaEncoder (same checkpoint as V2A-WM Stage 1) ─────────────────────
+    # The baseline uses the same latent token space so the comparison is fair:
+    # the only difference is in the conditioning stage, not the flow space.
+    delta_encoder = DeltaEncoder(
+        dino_channels=768,
+        model_channels=args.enc_model_channels,
+        token_dim=args.token_dim,
+        num_latent_tokens=args.num_latent_tokens,
+        num_blocks=args.num_enc_blocks,
+        num_heads=args.enc_num_heads,
+    ).to(device)
+
+    if args.encoder_ckpt:
+        enc_state = torch.load(args.encoder_ckpt, map_location=device)
+        if isinstance(enc_state, dict) and "encoder" in enc_state:
+            enc_state = enc_state["encoder"]
+        delta_encoder.load_state_dict(enc_state)
+        if accelerator.is_local_main_process:
+            print(f"[DeltaEncoder] Loaded from {args.encoder_ckpt}")
+    else:
+        if accelerator.is_local_main_process:
+            print("[DeltaEncoder] No checkpoint — using random weights.")
+
+    delta_encoder.eval()
+    for p in delta_encoder.parameters():
+        p.requires_grad = False
+
+    # ── Baseline flow model ────────────────────────────────────────────────
     model = BaselineRLAWM(
         dino_channels=768,
         clip_channels=512,
-        history_len=args.history_len, # API compat
+        history_len=args.history_len,
         num_patches=256,
+        token_dim=args.token_dim,
+        num_latent_tokens=args.num_latent_tokens,
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -104,7 +135,7 @@ def train(args):
             if accelerator.is_local_main_process:
                 print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
     
-    # Accelerate Prepare
+    # Accelerate Prepare (delta_encoder is frozen, not wrapped)
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, val_dataloader
     )
@@ -129,32 +160,41 @@ def train(args):
             history_imgs = history_imgs.to(device)
             target_img = target_img.to(device)
             B = target_img.shape[0]
-            
-            F_history = extractor.extract_dino(history_imgs) 
-            F_t = F_history[:, -1, :, :]                     
-            F_t1 = extractor.extract_dino(target_img)        
-            A_clip = extractor.extract_clip(action_texts)    
-            
-            residual_target = F_t1 - F_t                     
-            t = torch.rand(B, device=device)
-            noise = torch.randn_like(residual_target)
+
+            # Feature extraction (frozen backbone)
+            with torch.no_grad():
+                F_history = extractor.extract_dino(history_imgs)
+                F_t  = F_history[:, -1, :, :]          # Baseline uses only F_t (Markovian)
+                F_t1 = extractor.extract_dino(target_img)
+                A_clip = extractor.extract_clip(action_texts)
+
+                # Encode residual into compact latent tokens
+                residual_raw = F_t1 - F_t
+                gt_tokens = delta_encoder(residual_raw)  # (B, N, token_dim)
+
+            # Flow matching in compact latent space
+            # logitNormal timestep sampling — same as V2A-WM and RLA-WM
+            t = torch.sigmoid(torch.randn(B, device=device))
+            noise = torch.randn_like(gt_tokens)
             t_expand = t.view(B, 1, 1)
-            noisy_latent = (1 - t_expand) * noise + t_expand * residual_target
-            velocity_target = residual_target - noise
-            
+            noisy_latent = (1 - t_expand) * noise + t_expand * gt_tokens
+            velocity_target = gt_tokens - noise
+
             unwrapped_model = accelerator.unwrap_model(model)
+            # Baseline forward_cond uses only F_t (last frame) — ignores history
             cond = unwrapped_model.forward_cond(F_history, A_clip)
             velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
-            
+
             loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-            
-            # Controllable Sparsity Regularization
+
+            # Sparsity (applied in raw DINO space, consistent with V2A-WM)
             loss_sparsity = torch.tensor(0.0, device=device)
             if sparsity_weight > 0.0:
-                patch_movement = residual_target.norm(dim=-1)
-                static_mask = (patch_movement < 0.05).float().unsqueeze(-1)
-                loss_sparsity = (static_mask * velocity_pred.abs()).mean()
-            
+                patch_movement = residual_raw.norm(dim=-1)
+                static_weight  = (patch_movement < 0.05).float().mean(dim=-1)
+                latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)
+                loss_sparsity = (static_weight * latent_activity).mean()
+
             loss = loss_cfm + sparsity_weight * loss_sparsity
             
             optimizer.zero_grad()
@@ -197,31 +237,34 @@ def train(args):
                 history_imgs = history_imgs.to(device)
                 target_img = target_img.to(device)
                 B = target_img.shape[0]
-                
+
                 F_history = extractor.extract_dino(history_imgs)
-                F_t = F_history[:, -1, :, :]
+                F_t  = F_history[:, -1, :, :]
                 F_t1 = extractor.extract_dino(target_img)
                 A_clip = extractor.extract_clip(action_texts)
-                
-                residual_target = F_t1 - F_t
-                t = torch.rand(B, device=device)
-                noise = torch.randn_like(residual_target)
-                t_expand = t.view(B, 1, 1)
-                noisy_latent = (1 - t_expand) * noise + t_expand * residual_target
-                velocity_target = residual_target - noise
-                
+
+                residual_raw  = F_t1 - F_t
+                gt_tokens     = delta_encoder(residual_raw)
+
+                t          = torch.sigmoid(torch.randn(B, device=device))
+                noise      = torch.randn_like(gt_tokens)
+                t_expand   = t.view(B, 1, 1)
+                noisy_latent    = (1 - t_expand) * noise + t_expand * gt_tokens
+                velocity_target = gt_tokens - noise
+
                 unwrapped_model = accelerator.unwrap_model(model)
-                cond = unwrapped_model.forward_cond(F_history, A_clip)
+                cond          = unwrapped_model.forward_cond(F_history, A_clip)
                 velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
-                
+
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-                
+
                 loss_sparsity = torch.tensor(0.0, device=device)
                 if sparsity_weight > 0.0:
-                    patch_movement = residual_target.norm(dim=-1)
-                    static_mask = (patch_movement < 0.05).float().unsqueeze(-1)
-                    loss_sparsity = (static_mask * velocity_pred.abs()).mean()
-                
+                    patch_movement  = residual_raw.norm(dim=-1)
+                    static_weight   = (patch_movement < 0.05).float().mean(dim=-1)
+                    latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)
+                    loss_sparsity   = (static_weight * latent_activity).mean()
+
                 loss = loss_cfm + sparsity_weight * loss_sparsity
                 
                 val_loss += loss.item()
@@ -261,20 +304,35 @@ def train(args):
         writer.close()
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train Baseline RLA-WM")
+    parser = argparse.ArgumentParser(
+        description="Train Baseline RLA-WM (Markovian, pooled-action self-attention conditioning)"
+    )
 
+    # Dataset
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl")
+    parser.add_argument("--history-len", type=int, default=3,
+                        help="Window size for dataloader compat; baseline only uses last frame.")
+    parser.add_argument("--image-size", type=int, default=224)
+
+    # Frozen DeltaEncoder (Stage 1, shared with V2A-WM for fair comparison)
+    parser.add_argument("--encoder-ckpt", type=str, default=None,
+                        help="Path to pre-trained DeltaEncoder (encoder_only_best.pt).")
+    parser.add_argument("--token-dim", type=int, default=64)
+    parser.add_argument("--num-latent-tokens", type=int, default=16)
+    parser.add_argument("--enc-model-channels", type=int, default=512)
+    parser.add_argument("--num-enc-blocks", type=int, default=4)
+    parser.add_argument("--enc-num-heads", type=int, default=8)
+
+    # Training
     parser.add_argument("--output-dir", type=str, default="verify2act/output/rla_wm_baseline")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--history-len", type=int, default=3, help="Number of past frames (ignored by baseline, kept for dataloader compat)")
-    parser.add_argument("--image-size", type=int, default=224, help="Image size for DINOv2 input")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
-    parser.add_argument("--num-epochs", type=int, default=5, help="Number of epochs")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--sparsity-weight", type=float, default=0.0, help="Sparsity regularization weight (default 0.0 for baseline)")
-    parser.add_argument("--checkpoint-freq", type=int, default=2, help="Checkpoint frequency (epochs)")
-    parser.add_argument("--resume-from", type=str, default=None, help="Path to checkpoint to resume from")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--num-epochs", type=int, default=5)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--sparsity-weight", type=float, default=0.0)
+    parser.add_argument("--checkpoint-freq", type=int, default=2)
+    parser.add_argument("--resume-from", type=str, default=None)
 
     return parser.parse_args()
 
