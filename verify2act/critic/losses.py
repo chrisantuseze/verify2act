@@ -19,6 +19,7 @@ class InfoNCELoss(nn.Module):
         positive_emb: torch.Tensor,
         negative_emb: torch.Tensor,
         use_inbatch_negatives: bool = True,
+        symmetric: bool = False,
     ) -> torch.Tensor:
         bsz = anchor_emb.size(0)
         tau = self.temperature
@@ -35,4 +36,22 @@ class InfoNCELoss(nn.Module):
             logits = torch.stack([pos_sim, neg_sim], dim=1)
 
         targets = torch.zeros(bsz, dtype=torch.long, device=anchor_emb.device)
-        return F.cross_entropy(logits, targets)
+        loss_anchor = F.cross_entropy(logits, targets)
+
+        if not symmetric:
+            return loss_anchor
+
+        # Symmetric: positive as query, anchor/negative/in-batch anchors as keys
+        pos_sim_sym = pos_sim  # (positive_emb * anchor_emb).sum(dim=-1) / tau is identical to pos_sim
+        neg_sim_sym = (positive_emb * negative_emb).sum(dim=-1) / tau
+
+        if use_inbatch_negatives and bsz > 1:
+            sim_matrix_sym = torch.mm(positive_emb, anchor_emb.T) / tau
+            inbatch_sym = sim_matrix_sym[mask].view(bsz, bsz - 1)
+            logits_sym = torch.cat([pos_sim_sym.unsqueeze(1), neg_sim_sym.unsqueeze(1), inbatch_sym], dim=1)
+        else:
+            logits_sym = torch.stack([pos_sim_sym, neg_sim_sym], dim=1)
+
+        loss_positive = F.cross_entropy(logits_sym, targets)
+        return (loss_anchor + loss_positive) * 0.5
+

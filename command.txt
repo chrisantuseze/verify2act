@@ -39,15 +39,32 @@ python verify2act/world_model/train_decoder.py \
   --batch-size 2
 
 ######################## CRITIC TRAINING #######################
-python verify2act/critic/train_contrastive.py \
+python3 verify2act/critic/train_contrastive.py \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/contrastive \
-  --epochs 30 \
+  --output-dir verify2act/output/contrastive/nut_assembly \
+  --cached-dino-dir verify2act/output/contrastive/nut_assembly/cached_features \
+  --dataset-type robosuite \
+  --epochs 50 \
   --batch-size 16 \
-  --learning-rate 1e-3 \
+  --learning-rate 1e-4 \
   --lambda1 0.4 \
   --lambda2 0.8 \
   --kl-weight 5e-4 \
+  --use-cached-dino \
+  --device cuda
+
+python3 verify2act/critic/train_contrastive.py \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/contrastive/calvin \
+  --cached-dino-dir verify2act/output/contrastive/calvin/cached_features \
+  --dataset-type calvin \
+  --epochs 50 \
+  --batch-size 32 \
+  --learning-rate 1e-4 \
+  --lambda1 0.4 \
+  --lambda2 0.8 \
+  --kl-weight 5e-4 \
+  --use-cached-dino \
   --device cuda
 
 ######################## INFERENCE #######################
@@ -93,17 +110,19 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
-  --num-epochs 30 --batch-size 64 --lr 1e-4
+  --num-epochs 100 --batch-size 32 --lr 1e-4
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
 python verify2act/latent_wm/train_decoder.py \
+    --dataset-type robosuite \
     --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-    --batch-size 8 \
+    --output-dir verify2act/output/v2a_wm/nut_assembly/decoder \
+    --batch-size 32 \
     --num-epochs 50
 
 python verify2act/latent_wm/visualize_wm.py \
     --wm-ckpt verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
-    --decoder-ckpt verify2act/output/latent_wm/decoder/latent_decoder_best.pt \
+    --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt \
     --num-samples 5
 
 # Stage 2: Flow Matching
@@ -125,12 +144,14 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/encoder \
-  --num-epochs 30 --batch-size 64 --lr 1e-4
+  --num-epochs 100 --batch-size 32 --lr 1e-4
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
 python verify2act/latent_wm/train_decoder.py \
+    --dataset-type calvin \
     --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-    --batch-size 8 \
+    --output-dir verify2act/output/v2a_wm/calvin/decoder \
+    --batch-size 32 \
     --num-epochs 50
 
 # Stage 2: Flow Matching - CALVIN (full ABCD_D split — for real training)

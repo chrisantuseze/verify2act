@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import torch
@@ -131,10 +131,12 @@ class ContrastivePairDataset(Dataset):
         image_size: int = 224,
         mode0_prob: float = 0.5,
         seed: int = 42,
+        cached_dino_dir: Optional[str] = None,
     ):
         self.root = Path(dataset_dir)
         self.mode0_prob = mode0_prob
         self.rng = np.random.RandomState(seed)
+        self.cached_dino_dir = Path(cached_dino_dir) if cached_dino_dir is not None else None
 
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
@@ -212,6 +214,13 @@ class ContrastivePairDataset(Dataset):
         }
 
     def _load(self, rel_path: str) -> torch.Tensor:
+        if self.cached_dino_dir is not None:
+            feat_name = rel_path.replace("/", "_") + ".pt"
+            feat_path = self.cached_dino_dir / feat_name
+            if not feat_path.exists():
+                raise FileNotFoundError(f"Cached DINO feature not found: {feat_path}")
+            return torch.load(feat_path, map_location="cpu").float()
+
         img = Image.open(self.root / rel_path).convert("RGB")
         return self.transform(img)
 
@@ -235,6 +244,7 @@ def build_contrastive_datasets(
     seed: int = 42,
     image_size: int = 224,
     mode0_prob: float = 0.5,
+    cached_dino_dir: Optional[str] = None,
 ) -> Tuple[ContrastivePairDataset, ContrastivePairDataset]:
     """Build episode-level train/val datasets for contrastive critic training."""
     root = Path(dataset_dir)
@@ -289,6 +299,7 @@ def build_contrastive_datasets(
         image_size=image_size,
         mode0_prob=mode0_prob,
         seed=seed,
+        cached_dino_dir=cached_dino_dir,
     )
     val_ds = ContrastivePairDataset(
         dataset_dir=dataset_dir,
@@ -297,5 +308,6 @@ def build_contrastive_datasets(
         image_size=image_size,
         mode0_prob=mode0_prob,
         seed=seed + 1,
+        cached_dino_dir=cached_dino_dir,
     )
     return train_ds, val_ds

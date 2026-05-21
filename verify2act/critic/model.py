@@ -91,15 +91,18 @@ class DINOv2DualHeadCritic(nn.Module):
     HEAD_DIM      = 256   # projection head output dimension
     CLIP_TEXT_DIM = 512   # CLIP ViT-B/32 text embedding dimension
 
-    def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None):
+    def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None, load_backbone: bool = True):
         super().__init__()
 
         # ── Backbone ──────────────────────────────────────────────────────────
-        self.backbone = torch.hub.load(
-            "facebookresearch/dinov2",
-            "dinov2_vitb14",
-            pretrained=pretrained,
-        )
+        if load_backbone:
+            self.backbone = torch.hub.load(
+                "facebookresearch/dinov2",
+                "dinov2_vitb14",
+                pretrained=pretrained,
+            )
+        else:
+            self.backbone = None
 
         # DINOv2 expects ImageNet-normalised input; we receive [-1, 1] images
         self.register_buffer(
@@ -161,13 +164,15 @@ class DINOv2DualHeadCritic(nn.Module):
 
     def freeze_backbone(self) -> None:
         """Freeze all backbone parameters (heads remain trainable)."""
-        for p in self.backbone.parameters():
-            p.requires_grad_(False)
+        if self.backbone is not None:
+            for p in self.backbone.parameters():
+                p.requires_grad_(False)
 
     def unfreeze_backbone(self) -> None:
         """Unfreeze entire backbone for full fine-tuning."""
-        for p in self.backbone.parameters():
-            p.requires_grad_(True)
+        if self.backbone is not None:
+            for p in self.backbone.parameters():
+                p.requires_grad_(True)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -214,12 +219,18 @@ class DINOv2DualHeadCritic(nn.Module):
             .log_var1 : [B, 768]  log-variance for Head 1, clamped to [-4, 4]
             .log_var2 : [B, 768]  log-variance for Head 2, clamped to [-4, 4]
         """
+        if self.backbone is None:
+            raise RuntimeError("Backbone is not loaded. Cannot encode raw images. Use encode_features instead.")
         x = self._normalize(img.float())
         feats = self.backbone.forward_features(x)
         return self.encode_features(feats["x_norm_patchtokens"])
 
     def encode_features(self, patch_tokens: torch.Tensor) -> "ProbEmbedding":
         """Bypasses the backbone and evaluates predicted DINO patches directly.
+
+        WARNING: The input must be raw DINOv2 patch tokens of shape [B, 256, 768]
+        (where 256 is the number of patches and 768 is the embedding dimension).
+        Do NOT pass DeltaEncoder compact tokens (which are shape [B, 16, 64]).
 
         Parameters
         ----------

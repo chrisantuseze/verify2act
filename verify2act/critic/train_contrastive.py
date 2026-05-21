@@ -21,6 +21,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -41,6 +42,7 @@ def _compute_lang_gp_loss(
     batch: Dict,
     device: torch.device,
     amp_enabled: bool,
+    use_cached: bool = False,
 ) -> torch.Tensor:
     """Align clip_goal_proj(CLIP(text)) with head1(DINOv2(goal_frame)).
 
@@ -68,7 +70,10 @@ def _compute_lang_gp_loss(
 
     # Encode positive (goal) frames through DINOv2 + head1
     with torch.amp.autocast('cuda', enabled=amp_enabled):
-        emb_goal = model.encode(positive[has_lang])   # ProbEmbedding
+        if use_cached:
+            emb_goal = model.encode_features(positive[has_lang])
+        else:
+            emb_goal = model.encode(positive[has_lang])   # ProbEmbedding
         visual_proj = model.project(emb_goal.mu, head=1)   # [n, HEAD_DIM]
 
     # Encode language goals through CLIP + clip_goal_proj
@@ -138,6 +143,7 @@ def _train_step(
     kl_weight: float,
     use_inbatch: bool,
     amp_enabled: bool,
+    use_cached: bool = False,
 ) -> Tuple[torch.Tensor, float, float, int, int]:
     """Forward + loss for one mixed batch. Returns (loss, loss_gp, loss_tc, n_gp, n_tc).
 
@@ -153,10 +159,13 @@ def _train_step(
     mask0 = (modes == 0)   # goal proximity
     mask1 = (modes == 1)   # temporal consistency
 
-    # Encode all images in one fused batch for efficiency
-    all_imgs = torch.cat([anchor, positive, negative], dim=0)   # [3B, 3, H, W]
+    # Encode all images/features in one fused batch for efficiency
+    all_imgs = torch.cat([anchor, positive, negative], dim=0)   # [3B, 3, H, W] or [3B, 256, 768]
     with torch.amp.autocast('cuda', enabled=amp_enabled):
-        all_pe = model.encode(all_imgs)   # ProbEmbedding: .mu/.log_var1/.log_var2 each [3B, 768]
+        if use_cached:
+            all_pe = model.encode_features(all_imgs)
+        else:
+            all_pe = model.encode(all_imgs)   # ProbEmbedding: .mu/.log_var1/.log_var2 each [3B, 768]
 
     B = anchor.size(0)
     # Split mean embeddings
@@ -186,7 +195,7 @@ def _train_step(
         a0 = model.project(z_a0, head=1)
         p0 = model.project(z_p0, head=1)
         n0 = model.project(z_n0, head=1)
-        loss_gp = criterion(a0, p0, n0, use_inbatch_negatives=use_inbatch)
+        loss_gp = criterion(a0, p0, n0, use_inbatch_negatives=use_inbatch, symmetric=True)
         # KL regulariser: pull log_var1 toward 0 for GP samples
         kl_gp = (
             model.kl_loss(lv1_anchor[mask0])
@@ -229,6 +238,7 @@ def train_step_with_lang(
     lang_goal_weight: float,
     use_inbatch: bool,
     amp_enabled: bool,
+    use_cached: bool = False,
 ) -> Tuple[torch.Tensor, float, float, float, int, int]:
     """Wrapper around _train_step that adds the optional CLIP-GP alignment loss.
 
@@ -237,10 +247,11 @@ def train_step_with_lang(
     loss, lgp, ltc, n0, n1 = _train_step(
         model, batch, criterion, device,
         lambda1, lambda2, kl_weight, use_inbatch, amp_enabled,
+        use_cached=use_cached,
     )
     loss_lang = torch.tensor(0.0, device=device)
     if lang_goal_weight > 0.0:
-        loss_lang = _compute_lang_gp_loss(model, batch, device, amp_enabled)
+        loss_lang = _compute_lang_gp_loss(model, batch, device, amp_enabled, use_cached=use_cached)
         loss = loss + lang_goal_weight * loss_lang
     return loss, lgp, ltc, loss_lang.item(), n0, n1
 
@@ -254,6 +265,7 @@ def evaluate(
     device: torch.device,
     n_samples: int = 500,
     uncertainty_mc_samples: int = 10,
+    use_cached: bool = False,
 ) -> Dict[str, float]:
     """Compute AUROC and uncertainty metrics for goal proximity and temporal consistency.
 
@@ -289,9 +301,14 @@ def evaluate(
         positive = item["positive"].unsqueeze(0).to(device)
         negative = item["negative"].unsqueeze(0).to(device)
 
-        emb_a = model.encode(anchor)
-        emb_p = model.encode(positive)
-        emb_n = model.encode(negative)
+        if use_cached:
+            emb_a = model.encode_features(anchor)
+            emb_p = model.encode_features(positive)
+            emb_n = model.encode_features(negative)
+        else:
+            emb_a = model.encode(anchor)
+            emb_p = model.encode(positive)
+            emb_n = model.encode(negative)
 
         if mode == 0 and collected["gp"] < target_per_mode:
             # Deterministic similarity for AUROC
@@ -360,24 +377,63 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Cache Setup ───────────────────────────────────────────────────────────
+    cached_dino_dir = None
+    if args.use_cached_dino:
+        cached_dino_dir = args.cached_dino_dir or str(Path(args.dataset_dir) / "dino_features")
+        print(f"Enabling cached DINOv2 features. Cache directory: {cached_dino_dir}")
+        if args.dataset_type == "calvin":
+            from verify2act.critic.cache_utils import ensure_calvin_cache_complete
+            ensure_calvin_cache_complete(
+                dataset_dir=args.dataset_dir,
+                cache_dir=cached_dino_dir,
+                device=args.device,
+                batch_size=64,
+            )
+        else:
+            from verify2act.critic.cache_utils import ensure_cache_complete
+            ensure_cache_complete(
+                dataset_dir=args.dataset_dir,
+                transitions_file=args.transitions_file,
+                cache_dir=cached_dino_dir,
+                device=args.device,
+                batch_size=64,
+            )
+
     # ── Datasets ──────────────────────────────────────────────────────────────
-    train_ds, val_ds = build_contrastive_datasets(
-        dataset_dir=args.dataset_dir,
-        transitions_file=args.transitions_file,
-        val_frac=args.val_frac,
-        seed=args.seed,
-        image_size=args.image_size,
-        mode0_prob=args.mode0_prob,
-    )
-    print(
-        f"Dataset: {len(train_ds)} train pairs / {len(val_ds)} val pairs | "
-        f"mode0_prob={args.mode0_prob}  image_size={args.image_size}"
-    )
-    print(
-        f"  train: {len(train_ds._positive_anchors)} positive anchors, "
-        f"{len(train_ds._negative_anchors)} negative anchors, "
-        f"{len(train_ds._tc_rows)} TC rows"
-    )
+    if args.dataset_type == "calvin":
+        from verify2act.data_loader_calvin import build_calvin_contrastive_datasets
+        train_ds, val_ds = build_calvin_contrastive_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=args.val_frac,
+            seed=args.seed,
+            image_size=args.image_size,
+            mode0_prob=args.mode0_prob,
+            cached_dino_dir=cached_dino_dir,
+        )
+        print(
+            f"Dataset: {len(train_ds)} train pairs / {len(val_ds)} val pairs | "
+            f"mode0_prob={args.mode0_prob}  image_size={args.image_size}"
+        )
+    else:
+        train_ds, val_ds = build_contrastive_datasets(
+            dataset_dir=args.dataset_dir,
+            transitions_file=args.transitions_file,
+            val_frac=args.val_frac,
+            seed=args.seed,
+            image_size=args.image_size,
+            mode0_prob=args.mode0_prob,
+            cached_dino_dir=cached_dino_dir,
+        )
+        print(
+            f"Dataset: {len(train_ds)} train pairs / {len(val_ds)} val pairs | "
+            f"mode0_prob={args.mode0_prob}  image_size={args.image_size}"
+        )
+        print(
+            f"  train: {len(train_ds._positive_anchors)} positive anchors, "
+            f"{len(train_ds._negative_anchors)} negative anchors, "
+            f"{len(train_ds._tc_rows)} TC rows"
+        )
 
     train_loader = DataLoader(
         train_ds,
@@ -390,24 +446,25 @@ def main():
     val_ds_for_eval = val_ds   # keep reference for evaluate()
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    model = DINOv2DualHeadCritic(pretrained=True).to(device)
+    load_backbone = not args.use_cached_dino
+    model = DINOv2DualHeadCritic(pretrained=True, load_backbone=load_backbone).to(device)
     n_total     = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model: {n_total:,} total params | {n_trainable:,} trainable "
-          f"(projection + log-var heads; backbone frozen in phase 1)")
+          f"(projection + log-var heads; backbone {'frozen' if load_backbone else 'not loaded'})")
 
     criterion = InfoNCELoss(temperature=args.temperature)
 
     # ── Optimizer factory ──────────────────────────────────────────────────────
     def _make_optimizer_scheduler(phase: int):
-        if phase == 1:
+        if phase == 1 or args.use_cached_dino:
             params = [p for p in model.parameters() if p.requires_grad]
             opt = AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
-            n_epochs = args.freeze_backbone_epochs
+            n_epochs = args.epochs if args.use_cached_dino else args.freeze_backbone_epochs
         else:
             opt = AdamW(
                 [
-                    {"params": model.backbone.parameters(), "lr": args.backbone_lr},
+                    {"params": model.backbone.parameters() if model.backbone is not None else [], "lr": args.backbone_lr},
                     {
                         "params": list(model.head1.parameters()) +
                                   list(model.head2.parameters()) +
@@ -449,10 +506,17 @@ def main():
     for epoch in range(1, args.epochs + 1):
 
         # Phase transition
-        if epoch == args.freeze_backbone_epochs + 1:
+        if not args.use_cached_dino and epoch == args.freeze_backbone_epochs + 1:
             print(f"\n[Epoch {epoch}] Unfreezing backbone (backbone_lr={args.backbone_lr:.1e})")
             model.unfreeze_backbone()
             optimizer, scheduler = _make_optimizer_scheduler(phase=2)
+
+        # Cosine KL weight annealing/warmup
+        warmup_epochs = max(1, int(args.epochs * 0.3))
+        if epoch <= warmup_epochs:
+            epoch_kl_weight = args.kl_weight * (epoch / warmup_epochs)
+        else:
+            epoch_kl_weight = args.kl_weight
 
         model.train()
         losses_gp, losses_tc, totals = [], [], []
@@ -466,9 +530,10 @@ def main():
                 loss, lgp, ltc, llang, n0, n1 = train_step_with_lang(
                     model, batch, criterion, device,
                     args.lambda1, args.lambda2,
-                    kl_weight=args.kl_weight,
+                    kl_weight=epoch_kl_weight,
                     lang_goal_weight=args.lang_goal_weight,
                     use_inbatch=True, amp_enabled=amp_enabled,
+                    use_cached=args.use_cached_dino,
                 )
 
             if loss.requires_grad is False or loss.item() == 0.0:
@@ -506,6 +571,7 @@ def main():
         val_metrics = evaluate(
             model, val_ds_for_eval, device,
             n_samples=args.val_samples,
+            use_cached=args.use_cached_dino,
         )
         train_loss = float(np.mean(totals)) if totals else float("nan")
         record = {
@@ -571,11 +637,17 @@ def parse_args():
     p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     p.add_argument("--image-size",       type=int, default=224,
                    help="Resize target for DINOv2 (must be divisible by 14; 224 recommended)")
+    p.add_argument("--use-cached-dino",  action="store_true",
+                   help="Precompute and load DINOv2 features from disk to bypass backbone in training")
+    p.add_argument("--cached-dino-dir",  type=str, default=None,
+                   help="Directory path to precompute/load cached DINOv2 features (defaults to dataset_dir/dino_features)")
     p.add_argument("--mode0-prob",       type=float, default=0.5,
                    help="Fraction of batch items that are mode-0 (goal proximity) pairs")
     p.add_argument("--val-frac",         type=float, default=0.1)
     p.add_argument("--val-samples",      type=int, default=500,
                    help="Number of samples for validation AUROC estimation")
+    p.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"],
+                        help="Type of dataset loader to use")
 
     # Training
     p.add_argument("--batch-size",    type=int,   default=32)
