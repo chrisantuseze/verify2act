@@ -107,6 +107,8 @@ class ContrastiveRow:
     image_t1: str
     goal_image: str
     episode_success: bool
+    lang_goal: str
+    has_lang_goal: bool
 
 
 class ContrastivePairDataset(Dataset):
@@ -194,6 +196,8 @@ class ContrastivePairDataset(Dataset):
             "positive": self._load(anchor_row.goal_image),
             "negative": self._load(neg_row.image_t1),
             "mode": torch.tensor(0, dtype=torch.long),
+            "lang_goal": anchor_row.lang_goal,
+            "has_lang_goal": torch.tensor(anchor_row.has_lang_goal, dtype=torch.bool),
         }
 
     def _sample_mode1(self):
@@ -211,6 +215,8 @@ class ContrastivePairDataset(Dataset):
             "positive": self._load(row.image_t1),
             "negative": self._load(neg_row.image_t1),
             "mode": torch.tensor(1, dtype=torch.long),
+            "lang_goal": row.lang_goal,
+            "has_lang_goal": torch.tensor(row.has_lang_goal, dtype=torch.bool),
         }
 
     def _load(self, rel_path: str) -> torch.Tensor:
@@ -265,6 +271,17 @@ def build_contrastive_datasets(
         if not goal:
             continue
 
+        action_text = trans.get("action_text", "").lower()
+        if "square nut" in action_text:
+            lang_goal = "Assemble all square nuts onto their matching pegs."
+            has_lang_goal = True
+        elif "round nut" in action_text:
+            lang_goal = "Assemble all round nuts onto their matching pegs."
+            has_lang_goal = True
+        else:
+            lang_goal = "Assemble all nuts onto their matching pegs."
+            has_lang_goal = True
+
         all_rows.append(
             ContrastiveRow(
                 episode_id=ep,
@@ -273,6 +290,8 @@ def build_contrastive_datasets(
                 image_t1=image_t1,
                 goal_image=goal,
                 episode_success=bool(trans.get("episode_success", False)),
+                lang_goal=lang_goal,
+                has_lang_goal=has_lang_goal,
             )
         )
 
