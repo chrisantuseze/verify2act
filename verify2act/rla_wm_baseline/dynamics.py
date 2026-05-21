@@ -21,10 +21,18 @@ except ImportError as e:
 class BaselineRLAWM(nn.Module):
     """
     Baseline RLA-WM architecture adapted for the Verify2Act pipeline.
-    Uses:
-    - Markovian inputs (current frame only, history ignored)
-    - Weak Action Grounding (mean-pooled text tokens via AdaLN modulation)
-    - Self-Attention for conditioning, ModCrossAttention for flow matching
+
+    Faithfully mirrors the actual RLA-WM design:
+    - **Markovian inputs**: conditions on the single current frame $F_t$ only
+      (no temporal history).
+    - **Weak action grounding**: CLIP token sequence is mean-pooled to a single
+      vector and used as an AdaLN/modulation signal to self-attention — no
+      cross-attention over the token sequence.
+    - **Compact latent flow space**: flow matching operates on
+      ``(B, num_latent_tokens, token_dim)`` tokens produced by the shared
+      frozen ``DeltaEncoder``, same as the main V2A-WM model.
+      The difference between the baseline and V2A-WM is *only* in the
+      conditioning stage, not the flow space.
     """
     def __init__(
         self,
@@ -32,18 +40,23 @@ class BaselineRLAWM(nn.Module):
         clip_channels: int = 512,
         model_channels: int = 1024,
         num_patches: int = 256,
-        history_len: int = 3,  # Present for API compatibility, but unused
+        history_len: int = 3,      # API compat — unused; baseline is Markovian
         num_cond_blocks: int = 4,
         num_flow_blocks: int = 6,
         num_heads: int = 16,
         mlp_ratio: float = 4.0,
         use_fp16: bool = False,
+        # ── Compact latent space (shared with main V2A-WM, from DeltaEncoder) ──
+        token_dim: int = 64,
+        num_latent_tokens: int = 16,
     ):
         super().__init__()
         self.dino_channels = dino_channels
         self.clip_channels = clip_channels
         self.model_channels = model_channels
         self.num_patches = num_patches
+        self.token_dim = token_dim
+        self.num_latent_tokens = num_latent_tokens
         self.dtype = torch.float16 if use_fp16 else torch.float32
 
         # 1. Projections
@@ -69,9 +82,11 @@ class BaselineRLAWM(nn.Module):
         ])
 
         # 3. Stage 2: Flow Matching Transformer
+        # Operates in compact latent token space (token_dim) — same as V2A-WM.
+        # The baseline differs from V2A-WM *only* in the conditioning stage.
         self.flow_time_embedder = TimestepEmbedder(model_channels)
-        self.flow_latent_proj = nn.Linear(dino_channels, model_channels)
-        
+        self.flow_latent_proj = nn.Linear(token_dim, model_channels)   # token_dim → model_ch
+
         self.flow_blocks = nn.ModuleList([
             ModCrossAttentionBlock(
                 channels=model_channels,
@@ -83,7 +98,7 @@ class BaselineRLAWM(nn.Module):
         ])
 
         self.flow_norm_out = nn.LayerNorm(model_channels)
-        self.flow_out_proj = nn.Linear(model_channels, dino_channels)
+        self.flow_out_proj = nn.Linear(model_channels, token_dim)      # model_ch → token_dim
 
         self._initialize_weights()
 
@@ -106,34 +121,60 @@ class BaselineRLAWM(nn.Module):
             
         return h # (B, P, model_channels)
 
-    def forward_flow(self, cond_queries: Tensor, noisy_latent: Tensor, flow_t: Tensor) -> Tensor:
-        flow_h = self.flow_latent_proj(noisy_latent)
-        t_emb = self.flow_time_embedder(flow_t.float() * 1000)
-        
+    def forward_flow(
+        self,
+        cond_queries: Tensor,   # (B, P, model_channels) — from forward_cond
+        noisy_latent: Tensor,   # (B, num_latent_tokens, token_dim) — compact latent space
+        flow_t: Tensor,         # (B,)
+    ) -> Tensor:
+        """Predict velocity in compact latent token space."""
+        flow_h = self.flow_latent_proj(noisy_latent.float())   # (B, N, model_ch)
+        t_emb = self.flow_time_embedder(flow_t.float() * 1000) # (B, model_ch)
+
         for block in self.flow_blocks:
             flow_h = block(flow_h, mod=t_emb, cond=cond_queries)
-            
-        flow_h = self.flow_norm_out(flow_h)
-        return self.flow_out_proj(flow_h)
 
-    def forward(self, xt_history: Tensor, action_tokens: Tensor, noisy_latent: Tensor, flow_t: Tensor) -> Tensor:
+        flow_h = self.flow_norm_out(flow_h)
+        return self.flow_out_proj(flow_h)   # (B, N, token_dim)
+
+    def forward(
+        self,
+        xt_history: Tensor,
+        action_tokens: Tensor,
+        noisy_latent: Tensor,   # (B, num_latent_tokens, token_dim)
+        flow_t: Tensor,
+    ) -> Tensor:
         cond = self.forward_cond(xt_history, action_tokens)
         return self.forward_flow(cond, noisy_latent, flow_t)
 
     @torch.no_grad()
-    def step(self, xt_history: Tensor, action_tokens: Tensor, num_steps: int = 5) -> Tensor:
+    def step(
+        self,
+        xt_history: Tensor,
+        action_tokens: Tensor,
+        num_steps: int = 5,
+    ) -> Tensor:
+        """Inference rollout — returns predicted latent tokens.
+
+        Mirrors the V2A-WM ``step()`` interface.  Returns
+        ``(B, num_latent_tokens, token_dim)``; caller decodes via
+        ``DeltaDecoder`` and adds ``F_t`` to recover ``F_{t+1}``.
+        """
         B = xt_history.shape[0]
         device = xt_history.device
-        
+
         cond = self.forward_cond(xt_history, action_tokens)
-        
-        x = torch.randn(B, self.num_patches, self.dino_channels, device=device, dtype=self.dtype)
+
+        # Sample in compact latent space
+        x = torch.randn(
+            B, self.num_latent_tokens, self.token_dim,
+            device=device, dtype=self.dtype,
+        )
         dt = 1.0 / num_steps
-        
+
         for i in range(num_steps):
             t = torch.ones(B, device=device) * (i / num_steps)
             v = self.forward_flow(cond, x, t)
             x = x + v * dt
-            
-        F_t = xt_history[:, -1, :, :]
-        return F_t + x
+
+        return x.float()  # (B, num_latent_tokens, token_dim)

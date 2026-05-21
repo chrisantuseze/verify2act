@@ -26,5 +26,9 @@ content: |
       assembled; do not include them in the new plan.
     - Do not output sub-skill steps. Output nut names only.
 
-  Output format — output ONLY a JSON object with a single key "plan", no other text:
-    {"plan": ["nut_label_1", "nut_label_2", ...]}
+  Output format:
+    - If you are asked to propose a single plan, output ONLY a JSON object with a single key "plan":
+      {"plan": ["nut_label_1", "nut_label_2", ...]}
+    - If you are asked to propose multiple distinct and diverse candidate plans, output ONLY a JSON object with a key "plans" mapping to a list of plans:
+      {"plans": [["nut_label_a", "nut_label_b", ...], ["nut_label_b", "nut_label_a", ...], ...]}
+    - Respond with valid JSON only, no other text or markdown fences besides the JSON block.

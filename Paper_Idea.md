@@ -15,17 +15,30 @@
 
 ## Proposed Hybrid Approach & Novelties
 
-This architecture bridges Semantic Reasoning and Latent Physics by utilizing a VLM purely for action proposal, and a highly specialized Flow Matching dynamics model for physical simulation and evaluation.
+This architecture bridges Semantic Reasoning and Latent Physics by utilizing a VLM purely for action proposal, and a highly specialized two-stage Flow Matching dynamics model for physical simulation and evaluation.
 
 ### 1. Semantic Action Proposal
 Keep the VLM in the loop **only for high‑level language grounding**. The VLM receives the current RGB observation and the goal description and proposes a **small set of plausible candidate actions** (e.g., $K=3$). This acts as an intelligent heuristic that prunes the search tree.
 
-### 2. Specialized Latent Dynamics Engine
-Instead of generic video-prediction dynamics, we design a custom **Flow Matching model** predicting Residual Latent Actions ($\Delta F$) in DINOv2 space, specialized for robotic manipulation:
-- **Cross-Attention Action Grounding:** Instead of concatenation, DINO patch features cross-attend to the CLIP tokens of the proposed text action. This strictly grounds the language instruction to the physical object patches.
-- **History Context:** The dynamics model receives a short temporal window (e.g., $t-2, t-1, t$) instead of a single frame, providing short-term memory to handle severe occlusions (like an object disappearing inside a hole or gripper).
-- **Multi-Scale Spatial Resolution:** Merging shallow (geometric) and deep (semantic) layers from the DINO backbone to achieve the sub-patch precision required for tight-tolerance assembly tasks.
-- **Sparsity Regularization (Drift Prevention):** An L1 penalty explicitly applied to non-manipulated patches during training, mathematically anchoring the static background and preventing compounding errors over long horizons.
+### 2. Two-Stage Specialized Latent Dynamics Engine
+Instead of generic video-prediction dynamics, we design a two-stage system that mirrors and extends the RLA-WM architecture:
+
+**Stage 1 — Bottleneck Encoder Pre-training:**
+A `DeltaEncoder` (perceiver-style `SimpleTokenTransformer`) is trained to compress the raw DINO feature difference $F_{t+1} - F_t \in \mathbb{R}^{256 \times 768}$ into a compact latent token set $z \in \mathbb{R}^{16 \times 64}$. A paired `DeltaDecoder` reconstructs $\Delta F$ from $z$ under an MSE loss. After pre-training, the encoder is **frozen** for Stage 2. This stage uses only adjacent frame pairs — no action text, no temporal history.
+
+**Stage 2 — Flow Matching in Compact Latent Space:**
+The frozen `DeltaEncoder` produces target codes $z_{gt}$ for each training transition. A conditional flow-matching model learns to transport Gaussian noise to $z_{gt}$ in the low-dimensional $\mathbb{R}^{16 \times 64}$ space, conditioned on:
+- **Temporal History Context:** $[F_{t-2}, F_{t-1}, F_t]$ with causal masking and learnable `[START]` tokens — the unique novelty relative to RLA-WM, which conditions only on the single current frame $F_t$.
+- **Cross-Attention Action Grounding:** The temporal history DINO tokens cross-attend to the CLIP token sequence of the proposed text action. This provides language grounding at the conditioning stage. RLA-WM by contrast uses a single action vector (task embedding + qpos GRU output) passed as a modulation signal to self-attention — it does **not** cross-attend to a language token sequence.
+- **Sparsity Regularization (Drift Prevention):** A global latent-activity penalty on static patches, applied via the raw DINO residual.
+
+**Key difference vs. RLA-WM:**
+| | RLA-WM | Ours |
+|---|---|---|
+| Conditioning input | Single frame $F_t$ | History $[F_{t-2}, F_{t-1}, F_t]$ |
+| Action conditioning | Single vector (task ID + qpos GRU) via self-attn modulation | CLIP token sequence via cross-attention |
+| Flow space | $\mathbb{R}^{N_{\text{lat}} \times 64}$ | $\mathbb{R}^{16 \times 64}$ (same concept) |
+| Timestep sampling | logit-Normal | logit-Normal (adopted) |
 
 ### 3. Zero-Shot Latent Critic & Dynamic Rollout
 - **Objective Evaluation:** We compute the cosine similarity between the predicted terminal latent state and the latent goal representation using a Dual-Head Contrastive Critic.
@@ -49,9 +62,9 @@ Vision Transformers (ViViT, TimeSformer): Sequence-based vision models almost al
 By implementing attention masking, you are essentially upgrading the temporal processing of your world model from a "CNN-style hack" to a proper "Transformer-style sequence modeling" approach.
 
 ## Contributions
-1. **Decoupling Semantic Reasoning from Physical Simulation:** Demonstrates that a VLM does not need to “reflect” on generated pixels. Semantics are handled by the VLM (Proposal), and physics by the latent model (Evaluation).
+1. **Decoupling Semantic Reasoning from Physical Simulation:** Demonstrates that a VLM does not need to "reflect" on generated pixels. Semantics are handled by the VLM (Proposal), and physics by the latent model (Evaluation).
 2. **VLM‑Guided Latent Search:** Uses the VLM as a high‑level heuristic to solve the search-space explosion problem in continuous latent world models, enabling tractable planning for long‑horizon manipulation.
-3. **Specialized Manipulation Dynamics:** Introduces architectural upgrades to residual flow-matching (Cross-Attention grounding, Sparsity loss, History context) that explicitly solve occlusion and drift in robotic assembly tasks.
+3. **Two-Stage Specialized Manipulation Dynamics:** Adopts and extends RLA-WM's two-stage design (bottleneck encoder → flow matching). Stage 1 compresses $\Delta F$ into compact latent tokens; Stage 2 flow-matches in that low-dimensional space conditioned on temporal history and cross-attention action grounding — both absent from RLA-WM.
 4. **Causal Autoregressive History Alignment:** Replaces the standard but mathematically flawed first-frame duplication hack at episode boundaries with a clean causal attention masking mechanism and a learnable sequence-initiator (`[START]`) token, maintaining true physical momentum priors across the temporal context window.
 5. **Unified, Ghost-Free Framework:** Outperforms pure latent models and pure VLM pipelines by perfectly combining common-sense reasoning with hallucination-free, deterministic physical prediction.
 

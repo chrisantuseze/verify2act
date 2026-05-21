@@ -15,6 +15,8 @@ horizon: 4
 # Behaviors
 plan:
   - "back-right round nut"
+plans:
+  - ["back-right round nut"]
 
 # Reflect (not used for this example)
 analysis: Null

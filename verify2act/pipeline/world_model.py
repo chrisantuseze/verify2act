@@ -433,6 +433,11 @@ class LatentWorldModel(WorldModelBase):
             A metric indicating model uncertainty (currently 0.0).
         """
         if self._history is None:
+            if current_image_np is None:
+                raise ValueError(
+                    "LatentWorldModel.imagine() called with current_image_np=None but history "
+                    "is not initialized. Call initialize_history() or set_history() first."
+                )
             self.initialize_history(current_image_np)
 
         with torch.no_grad():
