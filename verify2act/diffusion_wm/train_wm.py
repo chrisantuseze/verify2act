@@ -268,41 +268,59 @@ def main():
     accelerator.print(f"Noise offset:     {args.noise_offset if args.noise_offset > 0 else 'disabled'}")
 
     accelerator.print("\nLoading datasets...")
-    train_ds = WMTransitionDataset(
-        dataset_dir=args.dataset_dir,
-        image_size=args.resolution,
-        split="train",
-        val_frac=args.val_frac,
-        seed=args.seed,
-        transitions_file=args.transitions_file,
-    )
-    val_ds = WMTransitionDataset(
-        dataset_dir=args.dataset_dir,
-        image_size=args.resolution,
-        split="val",
-        val_frac=args.val_frac,
-        seed=args.seed,
-        transitions_file=args.transitions_file,
-    )
-    accelerator.print(f"Train samples: {len(train_ds)}")
-    accelerator.print(f"Val samples:   {len(val_ds)}")
+    if args.dataset_type == "calvin":
+        from verify2act.data_loader_calvin import build_calvin_wm_datasets
+        train_ds, val_ds = build_calvin_wm_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=args.val_frac,
+            seed=args.seed,
+            image_size=args.resolution,
+        )
+        accelerator.print(f"CALVIN Dataset loaded. Train: {len(train_ds)}, Val: {len(val_ds)}")
+    else:
+        train_ds = WMTransitionDataset(
+            dataset_dir=args.dataset_dir,
+            image_size=args.resolution,
+            split="train",
+            val_frac=args.val_frac,
+            seed=args.seed,
+            transitions_file=args.transitions_file,
+        )
+        val_ds = WMTransitionDataset(
+            dataset_dir=args.dataset_dir,
+            image_size=args.resolution,
+            split="val",
+            val_frac=args.val_frac,
+            seed=args.seed,
+            transitions_file=args.transitions_file,
+        )
+        accelerator.print(f"RoboSuite Dataset loaded. Train: {len(train_ds)}, Val: {len(val_ds)}")
 
-    _sample_weights = train_ds.sample_weights()
-    _sampler = WeightedRandomSampler(
-        weights=_sample_weights,
-        num_samples=len(_sample_weights),
-        replacement=True,
-    )
-    accelerator.print(f"WeightedRandomSampler: {len(_sample_weights)} samples, 3 buckets balanced")
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.train_batch_size,
-        # sampler=_sampler,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-        drop_last=True,
-    )
+    if args.dataset_type != "calvin":
+        _sample_weights = train_ds.sample_weights()
+        _sampler = WeightedRandomSampler(
+            weights=_sample_weights,
+            num_samples=len(_sample_weights),
+            replacement=True,
+        )
+        accelerator.print(f"WeightedRandomSampler: {len(_sample_weights)} samples, 3 buckets balanced")
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=args.train_batch_size,
+            sampler=_sampler,
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=True,
+        )
+    else:
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=args.train_batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=torch.cuda.is_available(),
+            drop_last=True,
+        )
     val_loader = DataLoader(
         val_ds,
         batch_size=args.train_batch_size,
@@ -746,6 +764,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train UNet LoRA for Verify2Act world model")
 
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"],
+                        help="Type of dataset loader to use")
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl",
                         help="JSONL filename inside dataset-dir (e.g. 'transitions.jsonl' or "
                              "'transitions_subskill.jsonl').")
@@ -773,21 +793,29 @@ def parse_args():
     parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default=4)
 
-    parser.add_argument("--train-batch-size", type=int, default=2)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
-    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--train-batch-size", type=int, default=3)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=2)
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--adam-weight-decay", type=float, default=1e-2)
-    parser.add_argument("--max-steps", type=int, default=10000)
+    parser.add_argument("--max-steps", type=int, default=20000)
     parser.add_argument("--warmup-steps", type=int, default=500)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
 
-    parser.add_argument("--lora-rank", type=int, default=64) #16
-    parser.add_argument("--lora-alpha", type=int, default=32) #32
+    parser.add_argument("--lora-rank", type=int, default=32)
+    parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument(
         "--lora-target-ff",
+        dest="lora_target_ff",
         action="store_true",
-        help="Extend LoRA to FF layers (ff.net.0.proj, ff.net.2) in addition to QKV/out.",
+        default=True,
+        help="Extend LoRA to FF layers (ff.net.0.proj, ff.net.2) in addition to QKV/out (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-lora-target-ff",
+        dest="lora_target_ff",
+        action="store_false",
+        help="Disable extending LoRA to FF layers.",
     )
     parser.add_argument(
         "--lora-target-conv",
@@ -822,11 +850,11 @@ def parse_args():
                         help="Experiment tracker: tensorboard (default), wandb, or none.")
     parser.add_argument("--wandb-project", type=str, default="verify2act-wm",
                         help="W&B project name (only used when --tracker=wandb).")
-    parser.add_argument("--conditioning-dropout-prob", type=float, default=0.05,
+    parser.add_argument("--conditioning-dropout-prob", type=float, default=0.15,
                         help="IP2P-style 3-region conditioning dropout probability. Set 0 to disable.")
     parser.add_argument("--noise-offset", type=float, default=0.05,
                         help="Noise offset magnitude added during training. Set 0 to disable.")
-    parser.add_argument("--change-mask-weight", type=float, default=1.0,
+    parser.add_argument("--change-mask-weight", type=float, default=2.0,
                         help="Spatial loss weight multiplier for changed pixels. 1.0=disabled; e.g. 5.0 puts 5x more "
                              "gradient on pixels that differ between image_t and image_t1, focusing capacity on the "
                              "edited region rather than the static background.")

@@ -413,7 +413,16 @@ def _build_critic(
     else:
         state_dict = ckpt
 
-    critic = DINOv2DualHeadCritic(pretrained=False).to(device)
+    dino_channels = 1024  # default fallback
+    if isinstance(ckpt, dict) and "args" in ckpt and "dino_channels" in ckpt["args"]:
+        dino_channels = ckpt["args"]["dino_channels"]
+    else:
+        for key in ["head1.weight", "head1.0.weight"]:
+            if key in state_dict:
+                dino_channels = state_dict[key].shape[1]
+                break
+
+    critic = DINOv2DualHeadCritic(pretrained=False, dino_channels=dino_channels).to(device)
     missing, unexpected = critic.load_state_dict(state_dict, strict=False)
     if missing:
         logger.warning(

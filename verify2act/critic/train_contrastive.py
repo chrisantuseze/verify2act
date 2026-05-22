@@ -377,28 +377,8 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Cache Setup ───────────────────────────────────────────────────────────
+    # ── Cache Setup (Disabled for online training) ────────────────────────────
     cached_dino_dir = None
-    if args.use_cached_dino:
-        cached_dino_dir = args.cached_dino_dir or str(Path(args.dataset_dir) / "dino_features")
-        print(f"Enabling cached DINOv2 features. Cache directory: {cached_dino_dir}")
-        if args.dataset_type == "calvin":
-            from verify2act.critic.cache_utils import ensure_calvin_cache_complete
-            ensure_calvin_cache_complete(
-                dataset_dir=args.dataset_dir,
-                cache_dir=cached_dino_dir,
-                device=args.device,
-                batch_size=64,
-            )
-        else:
-            from verify2act.critic.cache_utils import ensure_cache_complete
-            ensure_cache_complete(
-                dataset_dir=args.dataset_dir,
-                transitions_file=args.transitions_file,
-                cache_dir=cached_dino_dir,
-                device=args.device,
-                batch_size=64,
-            )
 
     # ── Datasets ──────────────────────────────────────────────────────────────
     if args.dataset_type == "calvin":
@@ -446,21 +426,24 @@ def main():
     val_ds_for_eval = val_ds   # keep reference for evaluate()
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    load_backbone = not args.use_cached_dino
-    model = DINOv2DualHeadCritic(pretrained=True, load_backbone=load_backbone).to(device)
+    model = DINOv2DualHeadCritic(
+        pretrained=True,
+        load_backbone=True,
+        dino_channels=args.dino_channels,
+    ).to(device)
     n_total     = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model: {n_total:,} total params | {n_trainable:,} trainable "
-          f"(projection + log-var heads; backbone {'frozen' if load_backbone else 'not loaded'})")
+          f"(projection + log-var heads; backbone frozen initially)")
 
     criterion = InfoNCELoss(temperature=args.temperature)
 
     # ── Optimizer factory ──────────────────────────────────────────────────────
     def _make_optimizer_scheduler(phase: int):
-        if phase == 1 or args.use_cached_dino:
+        if phase == 1:
             params = [p for p in model.parameters() if p.requires_grad]
             opt = AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
-            n_epochs = args.epochs if args.use_cached_dino else args.freeze_backbone_epochs
+            n_epochs = args.freeze_backbone_epochs
         else:
             opt = AdamW(
                 [
@@ -506,7 +489,7 @@ def main():
     for epoch in range(1, args.epochs + 1):
 
         # Phase transition
-        if not args.use_cached_dino and epoch == args.freeze_backbone_epochs + 1:
+        if epoch == args.freeze_backbone_epochs + 1:
             print(f"\n[Epoch {epoch}] Unfreezing backbone (backbone_lr={args.backbone_lr:.1e})")
             model.unfreeze_backbone()
             optimizer, scheduler = _make_optimizer_scheduler(phase=2)
@@ -533,7 +516,7 @@ def main():
                     kl_weight=epoch_kl_weight,
                     lang_goal_weight=args.lang_goal_weight,
                     use_inbatch=True, amp_enabled=amp_enabled,
-                    use_cached=args.use_cached_dino,
+                    use_cached=False,
                 )
 
             if loss.requires_grad is False or loss.item() == 0.0:
@@ -571,7 +554,7 @@ def main():
         val_metrics = evaluate(
             model, val_ds_for_eval, device,
             n_samples=args.val_samples,
-            use_cached=args.use_cached_dino,
+            use_cached=False,
         )
         train_loss = float(np.mean(totals)) if totals else float("nan")
         record = {
@@ -637,10 +620,8 @@ def parse_args():
     p.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     p.add_argument("--image-size",       type=int, default=224,
                    help="Resize target for DINOv2 (must be divisible by 14; 224 recommended)")
-    p.add_argument("--use-cached-dino",  action="store_true",
-                   help="Precompute and load DINOv2 features from disk to bypass backbone in training")
-    p.add_argument("--cached-dino-dir",  type=str, default=None,
-                   help="Directory path to precompute/load cached DINOv2 features (defaults to dataset_dir/dino_features)")
+    p.add_argument("--dino-channels",    type=int, default=1024, choices=[768, 1024],
+                   help="Backbone output channel dimension (768 for ViT-B, 1024 for ViT-L)")
     p.add_argument("--mode0-prob",       type=float, default=0.5,
                    help="Fraction of batch items that are mode-0 (goal proximity) pairs")
     p.add_argument("--val-frac",         type=float, default=0.1)

@@ -60,6 +60,30 @@ def train(args):
     accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[])
     device = accelerator.device
 
+    # ── Automatic Cache Checking & Generation ─────────────────────────────────
+    if not args.no_cache:
+        if accelerator.is_local_main_process:
+            from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
+            
+            if args.cache_dir is None:
+                # Default to saving in the parent of output_dir (e.g. output/v2a_wm/calvin/dino_features)
+                cache_dir = str(Path(args.output_dir).parent / "dino_features")
+            else:
+                cache_dir = args.cache_dir
+                
+            if args.dataset_type == "calvin":
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, co_locate=False, device=str(device))
+            else:
+                ensure_cache_complete(
+                    args.dataset_dir,
+                    transitions_file=args.transitions_file,
+                    cache_dir=cache_dir,
+                    co_locate=False,
+                    history_len=args.history_len,
+                    device=str(device)
+                )
+        accelerator.wait_for_everyone()
+
     # ── Dataset ──────────────────────────────────────────────────────────────
     if args.dataset_type == "calvin":
         from verify2act.data_loader_calvin import build_calvin_datasets
@@ -69,6 +93,8 @@ def train(args):
             image_size=args.image_size,
             history_len=args.history_len,
             seed=args.seed,
+            use_cache=not args.no_cache,
+            cached_dino_dir=cache_dir if not args.no_cache else None,
         )
     else:
         from verify2act.latent_wm.train_dynamics import LatentDynamicsDataset
@@ -77,6 +103,8 @@ def train(args):
             transitions_file=args.transitions_file,
             history_len=args.history_len,
             image_size=args.image_size,
+            use_cache=not args.no_cache,
+            cached_dino_dir=cache_dir if not args.no_cache else None
         )
         train_size = int((1.0 - args.val_frac) * len(dataset))
         val_size = len(dataset) - train_size
@@ -172,11 +200,14 @@ def train(args):
                 history_imgs = history_imgs.to(device)
                 target_img   = target_img.to(device)
 
-            # Feature extraction (no grad — extractor is frozen)
             with torch.no_grad():
-                F_history = extractor.extract_dino(history_imgs)  # (B, H, P, C)
+                if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
+                    F_history = history_imgs
+                    F_t1 = target_img
+                else:
+                    F_history = extractor.extract_dino(history_imgs)  # (B, H, P, C)
+                    F_t1 = extractor.extract_dino(target_img)          # (B, P, C)
                 F_t  = F_history[:, -1, :, :]                      # (B, P, C)
-                F_t1 = extractor.extract_dino(target_img)          # (B, P, C)
                 residual_target = F_t1 - F_t                        # (B, P, C)
 
             # Encode → decode
@@ -221,9 +252,13 @@ def train(args):
                     history_imgs = history_imgs.to(device)
                     target_img   = target_img.to(device)
 
-                F_history = extractor.extract_dino(history_imgs)
+                if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
+                    F_history = history_imgs
+                    F_t1 = target_img
+                else:
+                    F_history = extractor.extract_dino(history_imgs)
+                    F_t1 = extractor.extract_dino(target_img)
                 F_t  = F_history[:, -1, :, :]
-                F_t1 = extractor.extract_dino(target_img)
                 residual_target = F_t1 - F_t
 
                 unwrapped_enc = accelerator.unwrap_model(encoder)
@@ -288,7 +323,7 @@ def parse_args():
     p.add_argument("--history-len",      type=int,   default=3,
                    help="Only used to load the dataset; encoder sees only F_t and F_{t+1}.")
     # Encoder / decoder architecture
-    p.add_argument("--dino-channels",      type=int, default=768)
+    p.add_argument("--dino-channels",      type=int, default=1024)
     p.add_argument("--model-channels",     type=int, default=512)
     p.add_argument("--token-dim",          type=int, default=64)
     p.add_argument("--num-latent-tokens",  type=int, default=16)
@@ -305,6 +340,10 @@ def parse_args():
     p.add_argument("--resume-from",      type=str,   default=None)
     p.add_argument("--output-dir",       type=str,
                    default="verify2act/output/delta_encoder")
+    p.add_argument("--no-cache", action="store_true", default=False,
+                   help="Disable using pre-computed DINOv2 feature cache")
+    p.add_argument("--cache-dir", type=str, default=None,
+                   help="Centralized directory to save DINO cache. If None, uses args.output_dir/../dino_features")
     return p.parse_args()
 
 

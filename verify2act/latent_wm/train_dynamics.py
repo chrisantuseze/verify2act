@@ -44,9 +44,13 @@ class LatentDynamicsDataset(Dataset):
         transitions_file: str = "transitions.jsonl",
         history_len: int = 3,
         image_size: int = 224,
+        use_cache: bool = True,
+        cached_dino_dir: str = None,
     ):
         self.root = Path(dataset_dir)
         self.history_len = history_len
+        self.use_cache = use_cache
+        self.cached_dino_dir = Path(cached_dino_dir) if cached_dino_dir is not None else None
         
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
@@ -114,14 +118,41 @@ class LatentDynamicsDataset(Dataset):
         img = Image.open(self.root / relpath).convert("RGB")
         return self.transform(img)
 
+    def _load_image_or_feature(self, relpath: str) -> Tuple[torch.Tensor, bool]:
+        """Loads cached dino feature if use_cache and it exists; otherwise loads raw image."""
+        if self.use_cache:
+            if self.cached_dino_dir is not None:
+                feat_name = relpath.replace("/", "_") + ".pt"
+                feat_path = self.cached_dino_dir / feat_name
+            else:
+                full_path = self.root / relpath
+                feat_path = full_path.parent / (full_path.stem + "_dino.pt")
+            if feat_path.exists():
+                try:
+                    feat = torch.load(feat_path, map_location="cpu")
+                    return feat.float(), True
+                except Exception:
+                    pass
+        return self._load_image(relpath), False
+
     def __getitem__(self, idx):
         sample = self.samples[idx]
 
-        history_imgs   = [self._load_image(p) for p in sample["history_paths"]]
-        history_tensor = torch.stack(history_imgs)                                  # (H, 3, H, W)
-        history_mask   = torch.tensor(sample["history_mask"], dtype=torch.bool)    # (H,) True=valid
-        target_tensor  = self._load_image(sample["target_path"])                   # (3, H, W)
+        history_items = [self._load_image_or_feature(p) for p in sample["history_paths"]]
+        target_item, target_is_feat = self._load_image_or_feature(sample["target_path"])
 
+        history_imgs = [item[0] for item in history_items]
+        history_are_feats = [item[1] for item in history_items]
+
+        # If there's a mix or they are all raw images, force raw image fallback
+        if not (all(history_are_feats) and target_is_feat):
+            history_tensor = torch.stack([self._load_image(p) for p in sample["history_paths"]])
+            target_tensor = self._load_image(sample["target_path"])
+        else:
+            history_tensor = torch.stack(history_imgs)
+            target_tensor = target_item
+
+        history_mask = torch.tensor(sample["history_mask"], dtype=torch.bool)
         return history_tensor, target_tensor, sample["action_text"], history_mask
 
 
@@ -129,12 +160,14 @@ class LatentDynamicsDataset(Dataset):
 
 class FeatureExtractor(nn.Module):
     """Wraps DINOv2 and CLIP to extract features on the fly during training."""
-    def __init__(self, device):
+    def __init__(self, device, dino_channels=1024):
         super().__init__()
         self.device = device
+        self.dino_channels = dino_channels
         
-        print("Loading frozen DINOv2 backbone...")
-        self.dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14", pretrained=True).to(device)
+        model_name = "dinov2_vitl14" if dino_channels == 1024 else "dinov2_vitb14"
+        print(f"Loading frozen DINOv2 {model_name} backbone ({dino_channels}-ch)...")
+        self.dino = torch.hub.load("facebookresearch/dinov2", model_name, pretrained=True).to(device)
         self.dino.eval()
         for p in self.dino.parameters():
             p.requires_grad = False
@@ -157,7 +190,7 @@ class FeatureExtractor(nn.Module):
             imgs = imgs.view(-1, *orig_shape[2:])
             
         feats = self.dino.forward_features(imgs)["x_norm_patchtokens"]
-        
+        # ViT-L/14 outputs 1024-ch features; ViT-B/14 outputs 768-ch.
         if len(orig_shape) == 5:
             feats = feats.view(orig_shape[0], orig_shape[1], feats.shape[1], feats.shape[2])
         return feats
@@ -186,8 +219,29 @@ def train(args):
     num_epochs = args.num_epochs
     lr = args.lr
     sparsity_weight = args.sparsity_weight
-    dataset_dir = args.dataset_dir # Adjust as needed
-    
+    # ── Automatic Cache Checking & Generation ─────────────────────────────────
+    if not args.no_cache:
+        if accelerator.is_local_main_process:
+            from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
+            
+            if args.cache_dir is None:
+                cache_dir = str(Path(args.output_dir).parent / "dino_features")
+            else:
+                cache_dir = args.cache_dir
+                
+            if args.dataset_type == "calvin":
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, co_locate=False, device=str(device))
+            else:
+                ensure_cache_complete(
+                    args.dataset_dir,
+                    transitions_file=args.transitions_file,
+                    cache_dir=cache_dir,
+                    co_locate=False,
+                    history_len=args.history_len,
+                    device=str(device)
+                )
+        accelerator.wait_for_everyone()
+
     # 1. Dataset & DataLoader
     if args.dataset_type == "calvin":
         from verify2act.data_loader_calvin import CalvinTransitionDataset
@@ -199,7 +253,9 @@ def train(args):
             val_frac=args.val_frac,
             image_size=args.image_size,
             history_len=args.history_len,
-            seed=args.seed
+            seed=args.seed,
+            use_cache=not args.no_cache,
+            cached_dino_dir=cache_dir if not args.no_cache else None
         )
         if accelerator.is_local_main_process:
             print(f"CALVIN Dataset loaded. Train: {len(train_dataset)}, Val: {len(val_dataset)}")
@@ -208,7 +264,9 @@ def train(args):
             dataset_dir=args.dataset_dir, 
             transitions_file=args.transitions_file, 
             history_len=args.history_len, 
-            image_size=args.image_size
+            image_size=args.image_size,
+            use_cache=not args.no_cache,
+            cached_dino_dir=cache_dir if not args.no_cache else None
         )
         # Split into train/val
         train_size = int((1.0 - args.val_frac) * len(dataset))
@@ -221,13 +279,18 @@ def train(args):
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
     
     # 2. Models
-    extractor = FeatureExtractor(device)
+    # Latent normalization constant — matches RLA-WM's latent_scalar_normalization=10.0.
+    # Encoder latents are divided by this before flow interpolation so their scale
+    # matches the unit-variance Gaussian noise.  Denormalised back after sampling.
+    LATENT_SCALE = 10.0
+
+    extractor = FeatureExtractor(device, dino_channels=args.dino_channels)
 
     # ── Frozen DeltaEncoder (Stage 1 checkpoint) ──────────────────────────────
     # Compresses F_{t+1} - F_t into compact latent tokens before flow matching,
     # mirroring RLA-WM's two-stage design.
     delta_encoder = DeltaEncoder(
-        dino_channels=768,
+        dino_channels=args.dino_channels,
         model_channels=args.enc_model_channels,
         token_dim=args.token_dim,
         num_latent_tokens=args.num_latent_tokens,
@@ -257,7 +320,7 @@ def train(args):
     # Flow stage operates in the compact latent token space (token_dim);
     # conditioning stage still processes full temporal history (dino_channels).
     model = LatentDynamicsModel(
-        dino_channels=768,
+        dino_channels=args.dino_channels,
         clip_channels=512,
         history_len=args.history_len,
         num_patches=256,
@@ -337,37 +400,46 @@ def train(args):
 
             # --- Feature Extraction (frozen backbone, no grad) ---
             with torch.no_grad():
-                # Conditioning history: [F_{t-H+1}, ..., F_t]
-                F_history = extractor.extract_dino(history_imgs)  # (B, H, 256, 768)
+                # Check if history_imgs holds pre-computed DINOv2 features [B, H, 256, 1024]
+                if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
+                    F_history = history_imgs
+                    F_t1 = target_img
+                else:
+                    F_history = extractor.extract_dino(history_imgs)  # (B, H, 256, 768)
+                    F_t1 = extractor.extract_dino(target_img)         # (B, 256, 768)
                 F_t  = F_history[:, -1, :, :]                     # (B, 256, 768)
-                # Target next frame features
-                F_t1 = extractor.extract_dino(target_img)         # (B, 256, 768)
                 # CLIP action tokens for cross-attention grounding
                 A_clip = extractor.extract_clip(action_texts)     # (B, seq_len, 512)
 
                 # --- Stage 1: Encode F_{t+1} - F_t into compact latent tokens ---
                 # This is the key alignment with RLA-WM: the frozen DeltaEncoder
-                # compresses the 256x768 DINO difference into num_latent_tokens x
+                # compresses the 256x1024 DINO difference into num_latent_tokens x
                 # token_dim compact codes before flow matching.
-                residual_raw = F_t1 - F_t                         # (B, 256, 768)
+                residual_raw = F_t1 - F_t                         # (B, 256, 1024)
                 gt_tokens = delta_encoder(residual_raw)           # (B, N, token_dim)
 
             # --- Stage 2: Flow Matching in compact latent token space ---
-            # 1. Sample flow timesteps via logitNormal distribution.
+            # 1. Normalize latents into flow space. (#1)
+            # Encoder latents can have std >> 1.  Dividing by LATENT_SCALE brings
+            # them close to unit-variance so the linear interpolation
+            #   x_t = (1-t)*noise + t*x_0
+            # is numerically stable across all t.  Mirrors RLA-WM's
+            # latent_scalar_normalization=10.0 in _normalize_latent_tokens().
+            x_0 = gt_tokens / LATENT_SCALE
+
+            # 2. Sample flow timesteps via logitNormal distribution.
             # Concentrates training on t≈0.5 (hardest part of trajectory)
             # rather than wasting equal budget on trivial t≈0 / t≈1 endpoints.
             # Same technique used by SD3, Flux, and RLA-WM.
             t = torch.sigmoid(torch.randn(B, device=device))
 
-            # 2. Sample noise in token space
-            noise = torch.randn_like(gt_tokens)
-
-            # 3. Construct noisy latent: x_t = (1-t)*noise + t*gt_tokens
+            # 3. Sample noise and construct noisy latent: x_t = (1-t)*noise + t*x_0
+            noise = torch.randn_like(x_0)
             t_expand = t.view(B, 1, 1)
-            noisy_latent = (1 - t_expand) * noise + t_expand * gt_tokens
+            noisy_latent = (1 - t_expand) * noise + t_expand * x_0
 
-            # 4. Velocity target in token space
-            velocity_target = gt_tokens - noise
+            # 4. Velocity target in normalized latent space: v* = x_0 - noise
+            velocity_target = x_0 - noise
 
             # 5. Forward pass — conditioning uses full history, flow uses token space
             unwrapped_model = accelerator.unwrap_model(model)
@@ -442,19 +514,27 @@ def train(args):
 
                 B = target_img.shape[0]
 
-                F_history  = extractor.extract_dino(history_imgs)
+                # Check if history_imgs holds pre-computed DINOv2 features [B, H, 256, 1024]
+                if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
+                    F_history = history_imgs
+                    F_t1 = target_img
+                else:
+                    F_history = extractor.extract_dino(history_imgs)
+                    F_t1 = extractor.extract_dino(target_img)
                 F_t        = F_history[:, -1, :, :]
-                F_t1       = extractor.extract_dino(target_img)
                 A_clip     = extractor.extract_clip(action_texts)
 
                 residual_raw  = F_t1 - F_t
                 gt_tokens     = delta_encoder(residual_raw)            # (B, N, token_dim)
 
+                # Normalize into flow space — same as training loop (#1)
+                x_0           = gt_tokens / LATENT_SCALE
+
                 t          = torch.sigmoid(torch.randn(B, device=device))
-                noise      = torch.randn_like(gt_tokens)
+                noise      = torch.randn_like(x_0)
                 t_expand   = t.view(B, 1, 1)
-                noisy_latent    = (1 - t_expand) * noise + t_expand * gt_tokens
-                velocity_target = gt_tokens - noise
+                noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
+                velocity_target = x_0 - noise
 
                 unwrapped_model = accelerator.unwrap_model(model)
                 velocity_pred   = unwrapped_model.forward(
@@ -521,6 +601,8 @@ def parse_args():
     parser.add_argument("--image-size", type=int, default=224, help="Image size for DINOv2 input")
     parser.add_argument("--history-len", type=int, default=3,
                         help="Number of past frames to use as conditioning history")
+    parser.add_argument("--dino-channels", type=int, default=1024,
+                        help="DINO feature dimension (768 for ViT-B, 1024 for ViT-L)")
 
     # Frozen DeltaEncoder (Stage 1)
     parser.add_argument("--encoder-ckpt", type=str, default=None,
@@ -553,6 +635,14 @@ def parse_args():
         "--causal-masking", action="store_true", default=False,
         help="Use Transformer-native causal attention masking + learnable [START] tokens for "
              "early-episode history padding."
+    )
+    parser.add_argument(
+        "--no-cache", action="store_true", default=False,
+        help="Disable using pre-computed DINOv2 feature cache"
+    )
+    parser.add_argument(
+        "--cache-dir", type=str, default=None,
+        help="Centralized directory to save DINO cache. If None, uses args.output_dir/dino_features"
     )
 
     return parser.parse_args()

@@ -25,7 +25,8 @@ def visualize(args):
         dataset_dir=args.dataset_dir,
         transitions_file=args.transitions_file,
         history_len=args.history_len,
-        image_size=args.image_size
+        image_size=args.image_size,
+        use_cache=False,
     )
     print(f"Dataset loaded with {len(dataset)} samples.")
 

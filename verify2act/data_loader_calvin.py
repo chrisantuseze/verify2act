@@ -29,9 +29,13 @@ class CalvinTransitionDataset(Dataset):
         split: str = "train",
         val_frac: float = 0.1,
         seed: int = 42,
+        use_cache: bool = True,
+        cached_dino_dir: str = None,
     ):
         self.root = Path(dataset_dir)
         self.history_len = history_len
+        self.use_cache = use_cache
+        self.cached_dino_dir = Path(cached_dino_dir) if cached_dino_dir is not None else None
         
         # Load language annotations
         lang_ann_path = self.root / "lang_annotations" / "auto_lang_ann.npy"
@@ -67,6 +71,22 @@ class CalvinTransitionDataset(Dataset):
     def __len__(self):
         return len(self.transitions)
 
+    def _load_image_or_feature(self, episode_idx: int) -> Tuple[torch.Tensor, bool]:
+        if self.use_cache:
+            if getattr(self, 'cached_dino_dir', None) is not None:
+                feat_name = f"episode_{episode_idx:07d}.pt"
+                feat_path = self.cached_dino_dir / feat_name
+            else:
+                ep_path = self.root / f"episode_{episode_idx:07d}.npz"
+                feat_path = ep_path.parent / (ep_path.stem + "_dino.pt")
+            if feat_path.exists():
+                try:
+                    feat = torch.load(feat_path, map_location="cpu")
+                    return feat.float(), True
+                except Exception:
+                    pass
+        return self._load_image(episode_idx), False
+
     def __getitem__(self, idx):
         (start_idx, end_idx), action_text = self.transitions[idx]
 
@@ -78,16 +98,27 @@ class CalvinTransitionDataset(Dataset):
             frame_idx = start_idx - j
             is_real = frame_idx >= 0
             history_mask.append(is_real)
-            history_imgs.append(self._load_image(max(0, frame_idx)))
+            history_imgs.append(self._load_image_or_feature(max(0, frame_idx)))
 
-        history_tensor = torch.stack(history_imgs)                      # [H, 3, H, W]
+        history_tensors = [item[0] for item in history_imgs]
+        history_are_feats = [item[1] for item in history_imgs]
+        
+        image_t1, t1_is_feat = self._load_image_or_feature(end_idx)
+
+        # Fallback logic if any are not cached:
+        if not (all(history_are_feats) and t1_is_feat):
+            history_tensor = torch.stack([self._load_image(max(0, start_idx - j)) for j in range(self.history_len - 1, -1, -1)])
+            image_t1_final = self._load_image(end_idx)
+        else:
+            history_tensor = torch.stack(history_tensors)
+            image_t1_final = image_t1
+
         history_mask   = torch.tensor(history_mask, dtype=torch.bool)  # [H] True=valid
-        image_t1 = self._load_image(end_idx)
 
         return {
             "history_imgs": history_tensor,
             "history_mask": history_mask,
-            "image_t1":     image_t1,
+            "image_t1":     image_t1_final,
             "action_text":  action_text,
         }
 
@@ -115,6 +146,8 @@ def build_calvin_datasets(
     seed: int = 42,
     image_size: int = 224,
     history_len: int = 3,
+    use_cache: bool = True,
+    cached_dino_dir: str = None,
 ) -> Tuple[CalvinTransitionDataset, CalvinTransitionDataset]:
     """Build train and val datasets for CALVIN."""
     train_ds = CalvinTransitionDataset(
@@ -124,6 +157,8 @@ def build_calvin_datasets(
         split="train",
         val_frac=val_frac,
         seed=seed,
+        use_cache=use_cache,
+        cached_dino_dir=cached_dino_dir,
     )
     val_ds = CalvinTransitionDataset(
         dataset_dir=dataset_dir,
@@ -132,6 +167,8 @@ def build_calvin_datasets(
         split="val",
         val_frac=val_frac,
         seed=seed,
+        use_cache=use_cache,
+        cached_dino_dir=cached_dino_dir,
     )
     return train_ds, val_ds
 
@@ -301,4 +338,113 @@ def build_calvin_contrastive_datasets(
         cached_dino_dir=cached_dino_dir,
     )
     return train_ds, val_ds
+
+
+class CalvinWMTransitionDataset(Dataset):
+    """Transitions from the CALVIN benchmark for Diffusion World Model training.
+
+    Parses `auto_lang_ann.npy` to extract start and end indices of sub-goals.
+    Each sample returns:
+      image_t:  [3, H, W] in [-1, 1] (state at the start of the instruction)
+      image_t1: [3, H, W] in [-1, 1] (state at the end of the instruction)
+      action_text: str (the language instruction)
+    """
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        image_size: int = 512,
+        split: str = "train",
+        val_frac: float = 0.1,
+        seed: int = 42,
+    ):
+        self.root = Path(dataset_dir)
+        
+        # Load language annotations
+        lang_ann_path = self.root / "lang_annotations" / "auto_lang_ann.npy"
+        if not lang_ann_path.exists():
+            lang_ann_path = self.root / "auto_lang_ann.npy"
+        
+        if not lang_ann_path.exists():
+            raise FileNotFoundError(f"Could not find auto_lang_ann.npy in {self.root}")
+
+        annotations = np.load(lang_ann_path, allow_pickle=True).item()
+        indices = annotations["info"]["indx"]
+        texts = annotations["language"]["ann"]
+
+        # Each element is (start_idx, end_idx, text)
+        self.transitions = list(zip(indices, texts))
+        
+        rng = np.random.RandomState(seed)
+        rng.shuffle(self.transitions)
+        
+        n_val = max(1, int(len(self.transitions) * val_frac))
+        if split == "val":
+            self.transitions = self.transitions[:n_val]
+        else:
+            self.transitions = self.transitions[n_val:]
+
+        self.transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            # Normalization to [-1, 1] as expected by InstructPix2Pix / VAE
+            transforms.Normalize([0.5] * 3, [0.5] * 3),
+        ])
+
+    def __len__(self):
+        return len(self.transitions)
+
+    def __getitem__(self, idx):
+        (start_idx, end_idx), action_text = self.transitions[idx]
+
+        image_t = self._load_image(start_idx)
+        image_t1 = self._load_image(end_idx)
+
+        return {
+            "image_t": image_t,
+            "image_t1": image_t1,
+            "action_text": action_text,
+        }
+
+    def _load_image(self, episode_idx: int) -> torch.Tensor:
+        ep_path = self.root / f"episode_{episode_idx:07d}.npz"
+        if not ep_path.exists():
+            return torch.zeros((3, 512, 512))
+            
+        try:
+            data = np.load(ep_path, allow_pickle=True)
+            img_np = data["rgb_static"]
+            if isinstance(img_np, bytes):
+                return torch.zeros((3, 512, 512))
+            
+            # Convert to PIL Image
+            img = Image.fromarray(img_np).convert("RGB")
+            return self.transform(img)
+        except Exception:
+            return torch.zeros((3, 512, 512))
+
+
+def build_calvin_wm_datasets(
+    dataset_dir: str,
+    val_frac: float = 0.1,
+    seed: int = 42,
+    image_size: int = 512,
+) -> Tuple[CalvinWMTransitionDataset, CalvinWMTransitionDataset]:
+    """Build train and val datasets for CALVIN Diffusion World Model."""
+    train_ds = CalvinWMTransitionDataset(
+        dataset_dir=dataset_dir,
+        image_size=image_size,
+        split="train",
+        val_frac=val_frac,
+        seed=seed,
+    )
+    val_ds = CalvinWMTransitionDataset(
+        dataset_dir=dataset_dir,
+        image_size=image_size,
+        split="val",
+        val_frac=val_frac,
+        seed=seed,
+    )
+    return train_ds, val_ds
+
 

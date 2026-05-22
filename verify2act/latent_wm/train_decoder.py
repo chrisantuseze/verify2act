@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import torch
 import torch.nn.functional as F
@@ -11,7 +12,7 @@ from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
 def train_decoder(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # 1. Dataset & DataLoader
@@ -24,13 +25,15 @@ def train_decoder(args):
             image_size=args.image_size,
             history_len=1,
             seed=args.seed,
+            use_cache=False,
         )
     else:
         dataset = LatentDynamicsDataset(
             dataset_dir=args.dataset_dir,
             transitions_file=args.transitions_file,
             history_len=1, # We only need the target image for decoder training
-            image_size=args.image_size
+            image_size=args.image_size,
+            use_cache=False,
         )
         
         # Split into train/val
@@ -45,10 +48,10 @@ def train_decoder(args):
     print(f"Dataset loaded. Train: {train_size}, Val: {val_size}")
 
     # 2. Models
-    extractor = FeatureExtractor(device)
+    extractor = FeatureExtractor(device, dino_channels=args.dino_channels)
     
     visualizer = FeatureDecoder(
-        dino_channels=768,
+        dino_channels=args.dino_channels,
         model_channels=256
     ).to(device)
 
@@ -60,6 +63,11 @@ def train_decoder(args):
     optimizer = torch.optim.AdamW(visualizer.parameters(), lr=args.lr)
 
     # 3. Training Loop
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(os.path.join(args.output_dir, "config.json"), "w") as f:
+        json.dump(vars(args), f, indent=2)
+    print(f"Config saved to {args.output_dir}/config.json")
+
     best_val_loss = float('inf')
     
     for epoch in range(args.num_epochs):
@@ -174,6 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--lpips-weight", type=float, default=0.5)
     parser.add_argument("--checkpoint-freq", type=int, default=5)
+    parser.add_argument("--dino-channels", type=int, default=1024)
     
     os.environ["HF_HOME"] = str(Path.home() / ".cache" / "huggingface")
     

@@ -9,6 +9,11 @@ from dynamics import LatentDynamicsModel
 from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from delta_encoder import DeltaDecoder
+
 def visualize(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -19,7 +24,8 @@ def visualize(args):
         dataset_dir=args.dataset_dir,
         transitions_file=args.transitions_file,
         history_len=args.history_len,
-        image_size=args.image_size
+        image_size=args.image_size,
+        use_cache=False,
     )
     print(f"Dataset loaded with {len(dataset)} samples.")
 
@@ -29,7 +35,7 @@ def visualize(args):
     # 3. Load World Model
     print(f"Loading Latent Dynamics Model from {args.wm_ckpt}...")
     wm = LatentDynamicsModel(
-        dino_channels=768,
+        dino_channels=1024,  # ViT-L/14 (#8)
         clip_channels=512,
         history_len=args.history_len,
         num_patches=256,
@@ -42,9 +48,30 @@ def visualize(args):
         print(f"Warning: WM checkpoint not found at {args.wm_ckpt}. Using random weights.")
     wm.eval()
 
-    # 4. Load Visualizer (Decoder)
+    # 4a. Load Stage 1 DeltaDecoder (maps compact latent tokens → ΔF) (#3)
+    # This is f_dec from the paper: it bridges wm.step() output back to DINO
+    # feature space so the pixel renderer receives (B, 256, 1024) features.
+    print(f"Loading DeltaDecoder from {args.encoder_ckpt}...")
+    delta_decoder = DeltaDecoder(
+        token_dim=args.token_dim,
+        dino_channels=1024,  # ViT-L/14 (#8)
+        num_patches=256,
+    ).to(device)
+    if args.encoder_ckpt and os.path.exists(args.encoder_ckpt):
+        try:
+            ckpt = torch.load(args.encoder_ckpt, map_location=device)
+            dec_sd = ckpt.get("decoder", ckpt)  # support full or decoder-only ckpt
+            delta_decoder.load_state_dict(dec_sd)
+            print("DeltaDecoder weights loaded successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to load DeltaDecoder weights: {e}. \u0394F reconstruction will be random.")
+    else:
+        print("Warning: No encoder_ckpt provided — DeltaDecoder will use random weights.")
+    delta_decoder.eval()
+
+    # 4b. Load Visualizer (FeatureDecoder: DINO features → RGB pixels)
     print(f"Loading Visualizer from {args.decoder_ckpt}...")
-    decoder = FeatureDecoder(dino_channels=768, model_channels=256).to(device)
+    decoder = FeatureDecoder(dino_channels=1024, model_channels=256).to(device)  # ViT-L/14 (#8)
     
     if args.decoder_ckpt and os.path.exists(args.decoder_ckpt):
         try:
@@ -82,14 +109,22 @@ def visualize(args):
             print(f"  Action: '{action_text}'")
 
             # Extract features
-            F_history = extractor.extract_dino(history_imgs) # (1, H, 256, 768)
-            F_target = extractor.extract_dino(target_img)    # (1, 256, 768)
+            F_history = extractor.extract_dino(history_imgs) # (1, H, 256, 1024)
+            F_target = extractor.extract_dino(target_img)    # (1, 256, 1024)
             A_clip = extractor.extract_clip([action_text])   # (1, seq_len, 512)
 
-            # Predict next step features using ODE solver (Euler, 5 steps)
-            F_pred = wm.step(F_history, A_clip, num_steps=5, history_mask=history_mask) # (1, 256, 768)
+            # Run ODE: returns NORMALIZED compact latent tokens (B, N, token_dim)
+            # step() already denormalizes (*latent_scale) before returning.
+            pred_latent = wm.step(F_history, A_clip, num_steps=5, history_mask=history_mask)  # (1, N, token_dim)
 
-            # Decode features back to images
+            # (#3) Decode compact tokens → ΔF (feature residual in DINO space)
+            delta_F_pred = delta_decoder(pred_latent)          # (1, 256, 1024)
+
+            # Reconstruct next state by adding residual to current visual state
+            F_t = F_history[:, -1, :, :]                      # (1, 256, 1024)
+            F_pred = F_t + delta_F_pred                        # (1, 256, 1024)
+
+            # Decode fully-reconstructed DINO features → RGB pixels
             pred_rgb = decoder.decode(F_pred)             # (1, 3, H, W)
             target_rgb = decoder.decode(F_target)         # (1, 3, H, W)
 
@@ -128,7 +163,9 @@ if __name__ == "__main__":
     parser.add_argument("--history-len", type=int, default=3)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--wm-ckpt", type=str, default="verify2act/output/latent_wm/latent_dynamics_best.pt", help="Path to trained World Model checkpoint")
-    parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm decoder checkpoint (e.g. runs/xxx.pt)")
+    parser.add_argument("--encoder-ckpt", type=str, default="", help="Path to encoder+decoder checkpoint from train_encoder.py (for DeltaDecoder)")
+    parser.add_argument("--token-dim", type=int, default=64, help="Compact latent token dim (must match checkpoint)")
+    parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm DINO-to-image decoder checkpoint (e.g. runs/xxx.pt)")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/latent_wm/visualizations")
     parser.add_argument("--num-samples", type=int, default=5, help="Number of samples to visualize")
     parser.add_argument(

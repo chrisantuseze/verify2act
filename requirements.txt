@@ -21,3 +21,4 @@ safetensors>=0.7.0
 tqdm
 jaxtyping
 einops
+openai-clip

@@ -91,14 +91,16 @@ class DINOv2DualHeadCritic(nn.Module):
     HEAD_DIM      = 256   # projection head output dimension
     CLIP_TEXT_DIM = 512   # CLIP ViT-B/32 text embedding dimension
 
-    def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None, load_backbone: bool = True):
+    def __init__(self, pretrained: bool = True, head_hidden: Optional[int] = None, load_backbone: bool = True, dino_channels: int = 1024):
         super().__init__()
+        self.dino_channels = dino_channels
 
         # ── Backbone ──────────────────────────────────────────────────────────
         if load_backbone:
+            backbone_name = "dinov2_vitl14" if self.dino_channels == 1024 else "dinov2_vitb14"
             self.backbone = torch.hub.load(
                 "facebookresearch/dinov2",
-                "dinov2_vitb14",
+                backbone_name,
                 pretrained=pretrained,
             )
         else:
@@ -117,9 +119,9 @@ class DINOv2DualHeadCritic(nn.Module):
         # ── Projection heads ──────────────────────────────────────────────────
         def _make_proj_head(hidden: Optional[int]) -> nn.Module:
             if hidden is None:
-                return nn.Linear(self.EMBED_DIM, self.HEAD_DIM, bias=False)
+                return nn.Linear(self.dino_channels, self.HEAD_DIM, bias=False)
             return nn.Sequential(
-                nn.Linear(self.EMBED_DIM, hidden),
+                nn.Linear(self.dino_channels, hidden),
                 nn.GELU(),
                 nn.Linear(hidden, self.HEAD_DIM, bias=False),
             )
@@ -133,19 +135,19 @@ class DINOv2DualHeadCritic(nn.Module):
         # against DINOv2 predicted terminal states via cosine similarity.
         # This is the only component that bridges the CLIP ↔ DINOv2 spaces.
         self.clip_goal_proj = nn.Sequential(
-            nn.Linear(self.CLIP_TEXT_DIM, self.EMBED_DIM),
+            nn.Linear(self.CLIP_TEXT_DIM, self.dino_channels),
             nn.GELU(),
-            nn.Linear(self.EMBED_DIM, self.HEAD_DIM, bias=False),
+            nn.Linear(self.dino_channels, self.HEAD_DIM, bias=False),
         )
 
         # ── Log-variance heads (probabilistic embeddings) ─────────────────
-        # Output log σ² in the backbone embedding space [B, 768].
+        # Output log σ² in the backbone embedding space [B, dino_channels].
         # Final linear initialised to zero → log_var≈0, σ≈1 at init.
         def _make_logvar_head() -> nn.Module:
             mlp = nn.Sequential(
-                nn.Linear(self.EMBED_DIM, 256),
+                nn.Linear(self.dino_channels, 256),
                 nn.GELU(),
-                nn.Linear(256, self.EMBED_DIM),
+                nn.Linear(256, self.dino_channels),
             )
             nn.init.zeros_(mlp[-1].weight)
             nn.init.zeros_(mlp[-1].bias)

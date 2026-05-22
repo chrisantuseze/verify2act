@@ -47,7 +47,7 @@ class LatentDynamicsModel(nn.Module):
 
     def __init__(
         self,
-        dino_channels: int = 768,       # DINO patch feature dim (cond stage input)
+        dino_channels: int = 1024,      # DINOv2 ViT-L/14 — matches RLA-WM (#8)
         clip_channels: int = 512,       # CLIP text embedding dim
         model_channels: int = 1024,     # Conditioning transformer internal dim
         num_patches: int = 256,         # Number of DINO patches (e.g. 16×16)
@@ -60,6 +60,8 @@ class LatentDynamicsModel(nn.Module):
         # ── Compact latent space (DeltaEncoder output) ──────────────────────
         token_dim: int = 64,            # Dim of each compact latent token
         num_latent_tokens: int = 16,    # Number of compact latent tokens
+        # ── Latent normalization (#1) ────────────────────────────────────────
+        latent_scale: float = 10.0,     # Matches RLA-WM latent_scalar_normalization
     ):
         super().__init__()
         self.dino_channels = dino_channels
@@ -69,6 +71,7 @@ class LatentDynamicsModel(nn.Module):
         self.num_patches = num_patches
         self.token_dim = token_dim
         self.num_latent_tokens = num_latent_tokens
+        self.latent_scale = float(latent_scale)  # (#1) stored for step() denorm
         self.dtype = torch.float16 if use_fp16 else torch.float32
 
         # ── Stage 1: Conditioning Transformer ────────────────────────────────
@@ -267,6 +270,8 @@ class LatentDynamicsModel(nn.Module):
             v = self.forward_flow(cond, x, t)
             x = x + v * dt
 
-        # Return the predicted latent tokens.  Caller decodes via DeltaDecoder.
-        return x.float()
+        # Denormalize: ODE integrated in scaled-down space (÷ latent_scale),
+        # so multiply back to get tokens in the original DeltaEncoder output space.
+        # The caller (DeltaDecoder / visualize_wm) expects raw encoder-scale tokens.
+        return (x * self.latent_scale).float()
 

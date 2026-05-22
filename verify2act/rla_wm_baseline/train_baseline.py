@@ -57,7 +57,8 @@ def train(args):
         dataset_dir=args.dataset_dir, 
         transitions_file=args.transitions_file, 
         history_len=args.history_len, 
-        image_size=args.image_size
+        image_size=args.image_size,
+        use_cache=False,
     )
     
     # Split into train/val

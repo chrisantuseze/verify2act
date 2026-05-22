@@ -213,22 +213,31 @@ def main():
     # ── Datasets ────────────────────────────────────────────────────────────────
 
     accelerator.print("\nLoading datasets...")
-    train_ds = WMTransitionDataset(
-        dataset_dir=args.dataset_dir,
-        image_size=args.resolution,
-        split="train",
-        val_frac=args.val_frac,
-        seed=args.seed,
-    )
-    val_ds = WMTransitionDataset(
-        dataset_dir=args.dataset_dir,
-        image_size=args.resolution,
-        split="val",
-        val_frac=args.val_frac,
-        seed=args.seed,
-    )
-    accelerator.print(f"Train samples: {len(train_ds)}")
-    accelerator.print(f"Val samples:   {len(val_ds)}")
+    if args.dataset_type == "calvin":
+        from verify2act.data_loader_calvin import build_calvin_wm_datasets
+        train_ds, val_ds = build_calvin_wm_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=args.val_frac,
+            seed=args.seed,
+            image_size=args.resolution,
+        )
+        accelerator.print(f"CALVIN Dataset loaded. Train: {len(train_ds)}, Val: {len(val_ds)}")
+    else:
+        train_ds = WMTransitionDataset(
+            dataset_dir=args.dataset_dir,
+            image_size=args.resolution,
+            split="train",
+            val_frac=args.val_frac,
+            seed=args.seed,
+        )
+        val_ds = WMTransitionDataset(
+            dataset_dir=args.dataset_dir,
+            image_size=args.resolution,
+            split="val",
+            val_frac=args.val_frac,
+            seed=args.seed,
+        )
+        accelerator.print(f"RoboSuite Dataset loaded. Train: {len(train_ds)}, Val: {len(val_ds)}")
 
     train_loader = DataLoader(
         train_ds,
@@ -468,6 +477,8 @@ def parse_args():
 
     parser.add_argument("--dataset-dir", type=str,
                         default="robosuite/data_capture_wm/dataset/nut_assembly")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"],
+                        help="Type of dataset loader to use")
     parser.add_argument("--output-dir", type=str,
                         default="verify2act/output/decoder")
     parser.add_argument("--pretrained-model", type=str, default="timbrooks/instruct-pix2pix",
