@@ -18,10 +18,10 @@ conda activate verify2act
 python verify2act/diffusion_wm/train_wm.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/diffusion_wm/nut_assembly \
+  --output-dir verify2act/output/diffusion_wm/nut_assembly/wm \
   --max-steps 20000 \
   --eval-every 1000 \
-  --train-batch-size 3 \
+  --train-batch-size 16 \
   --gradient-accumulation-steps 2 \
   --learning-rate 5e-5 \
   --lora-rank 32 \
@@ -40,10 +40,10 @@ python verify2act/diffusion_wm/train_wm.py \
 python verify2act/diffusion_wm/train_wm.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/diffusion_wm/calvin \
+  --output-dir verify2act/output/diffusion_wm/calvin/wm \
   --max-steps 20000 \
   --eval-every 1000 \
-  --train-batch-size 3 \
+  --train-batch-size 16 \
   --gradient-accumulation-steps 2 \
   --learning-rate 5e-5 \
   --lora-rank 32 \
@@ -63,10 +63,10 @@ python verify2act/diffusion_wm/train_wm.py \
 python verify2act/diffusion_wm/train_decoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir  verify2act/output/diffusion_wm/robosuite/decoder \
+  --output-dir  verify2act/output/diffusion_wm/nut_assembly/decoder \
   --max-steps 5000 \
   --eval-every 500 \
-  --batch-size 2 \
+  --batch-size 8 \
   --mixed-precision fp16 \
   --device cuda
 
@@ -77,7 +77,7 @@ python verify2act/diffusion_wm/train_decoder.py \
   --output-dir  verify2act/output/diffusion_wm/calvin/decoder \
   --max-steps 5000 \
   --eval-every 500 \
-  --batch-size 2 \
+  --batch-size 8 \
   --mixed-precision fp16 \
   --device cuda
 

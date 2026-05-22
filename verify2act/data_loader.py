@@ -42,9 +42,23 @@ class WMTransitionDataset(Dataset):
         val_eps = set(episodes[:n_val])
 
         if split == "val":
-            self.rows = [r for r in rows if r["episode_id"] in val_eps]
+            split_rows = [r for r in rows if r["episode_id"] in val_eps]
         else:
-            self.rows = [r for r in rows if r["episode_id"] not in val_eps]
+            split_rows = [r for r in rows if r["episode_id"] not in val_eps]
+
+        # Filter out rows with missing image files
+        filtered_rows = []
+        for r in split_rows:
+            missing = False
+            for k in ["image_t", "image_t1"]:
+                relpath = r.get(k, "")
+                if not relpath or not (self.root / relpath).exists():
+                    print(f"Warning: Skipping row with missing {k}: {relpath} (episode {r.get('episode_id', '?')})")
+                    missing = True
+                    break
+            if not missing:
+                filtered_rows.append(r)
+        self.rows = filtered_rows
 
         self.transform = transforms.Compose([
             transforms.Resize((image_size, image_size)),
