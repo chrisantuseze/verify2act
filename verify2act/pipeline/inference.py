@@ -236,24 +236,18 @@ def run_episode(
     if not isinstance(critic, DINOv2DualHeadCritic):
         raise TypeError("run_episode expects DINOv2DualHeadCritic")
 
-    # ── Reset environment + render goal ─────────────────────────────────────
+    # ── Reset environment ───────────────────────────────────────────────────
     obs = env_wrapper.reset()
 
-    # Hard-reset rebuilds the MuJoCo model; flush stale renderer cache before
-    # goal rendering so NutAssemblyGoalRenderer allocates a fresh Renderer.
-    # goal_renderer.flush_renderers()
-    # goal_image_np = goal_renderer.render_goal()
-    # if goal_image_np is None:
-    #     raise RuntimeError(
-    #         "NutAssemblyGoalRenderer.render_goal() returned None after env reset."
-    #     )
+    # Working with language goal, not image goal
+    goal_image_np = None
 
-    # # Sync the on-screen viewer to the settled T=0 state.
-    # env_wrapper._settle_and_sync_viewer(n_steps=0)
-         
-    # goal_img_224 = preprocess_image_for_critic(goal_image_np).to(torch_device)
-    # with torch.no_grad():
-    #     emb_goal = critic.encode(goal_img_224)  # ProbEmbedding
+    # Sync the on-screen viewer to the settled T=0 state.
+    try:
+        env_wrapper._settle_and_sync_viewer(n_steps=0)
+    except Exception as e:
+        logger.warning("Could not sync viewer: %s", e)
+            
     obj_labels = env_wrapper.get_obj_labels()
     task_instruction = env_wrapper.get_task_instruction()
     print(f"Task instruction: {task_instruction}")
@@ -261,7 +255,7 @@ def run_episode(
 
     trace = EpisodeTrace()
 
-    if out_path:
+    if out_path and goal_image_np is not None:
         _save_image(goal_image_np, out_path, "goal.png")
 
     # ── Main loop: one iteration per real timestep ─────────────────────
@@ -441,12 +435,20 @@ def _build_world_model(args: argparse.Namespace):
 
     if mode == "v2a_wm":
         from verify2act.pipeline.world_model import LatentWorldModel
-        wm = LatentWorldModel(device=args.device, dynamics_weights_path=args.latent_wm_ckpt)
+        wm = LatentWorldModel(
+            device=args.device, 
+            dynamics_weights_path=args.latent_wm_ckpt,
+            encoder_ckpt=args.encoder_ckpt,
+        )
         return wm
         
     if mode == "rla_wm":
         from verify2act.pipeline.world_model import RLAWorldModel
-        wm = RLAWorldModel(device=args.device, dynamics_weights_path=args.latent_wm_ckpt)
+        wm = RLAWorldModel(
+            device=args.device, 
+            dynamics_weights_path=args.latent_wm_ckpt,
+            encoder_ckpt=args.encoder_ckpt,
+        )
         return wm
 
     if mode == "diffusion":
@@ -513,6 +515,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/best/unet_lora")
     parser.add_argument("--wm-decoder-dir", default="verify2act/output/decoder")
     parser.add_argument("--latent-wm-ckpt", default=None, help="Path to LatentDynamicsModel checkpoint")
+    parser.add_argument("--encoder-ckpt", default=None, help="Path to pre-trained DeltaEncoder checkpoint (encoder_only_best.pt)")
     parser.add_argument("--beam-width", type=int, default=3)
     parser.add_argument("--wm-steps", type=int, default=30)
     parser.add_argument("--wm-image-guidance", type=float, default=2.8)

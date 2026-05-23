@@ -12,6 +12,7 @@ if str(latent_wm_path) not in sys.path:
 
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 from visualizer import FeatureDecoder
+from delta_encoder import DeltaDecoder
 
 from dynamics import BaselineRLAWM
 
@@ -36,7 +37,7 @@ def visualize(args):
     # 3. Load World Model
     print(f"Loading Baseline RLA-WM from {args.wm_ckpt}...")
     wm = BaselineRLAWM(
-        dino_channels=768,
+        dino_channels=args.dino_channels,
         clip_channels=512,
         history_len=args.history_len,
         num_patches=256,
@@ -49,9 +50,28 @@ def visualize(args):
         print(f"Warning: WM checkpoint not found at {args.wm_ckpt}. Using random weights.")
     wm.eval()
 
-    # 4. Load Visualizer (Decoder)
+    # 4a. Load Stage 1 DeltaDecoder (maps compact latent tokens → ΔF)
+    print(f"Loading DeltaDecoder from {args.encoder_ckpt}...")
+    delta_decoder = DeltaDecoder(
+        token_dim=64,
+        dino_channels=args.dino_channels,
+        num_patches=256,
+    ).to(device)
+    if args.encoder_ckpt and os.path.exists(args.encoder_ckpt):
+        try:
+            ckpt = torch.load(args.encoder_ckpt, map_location=device)
+            dec_sd = ckpt.get("decoder", ckpt)  # support full or decoder-only ckpt
+            delta_decoder.load_state_dict(dec_sd)
+            print("DeltaDecoder weights loaded successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to load DeltaDecoder weights: {e}. ΔF reconstruction will be random.")
+    else:
+        print("Warning: No encoder_ckpt provided — DeltaDecoder will use random weights.")
+    delta_decoder.eval()
+
+    # 4b. Load Visualizer (Decoder)
     print(f"Loading Visualizer from {args.decoder_ckpt}...")
-    visualizer = FeatureDecoder(dino_channels=768, model_channels=256).to(device)
+    visualizer = FeatureDecoder(dino_channels=args.dino_channels, model_channels=256).to(device)
     
     if args.decoder_ckpt and os.path.exists(args.decoder_ckpt):
         try:
@@ -89,7 +109,14 @@ def visualize(args):
             A_clip = extractor.extract_clip([action_text])   
 
             # Predict next step features using ODE solver (Euler, 5 steps)
-            F_pred = wm.step(F_history, A_clip, num_steps=5)
+            pred_latent = wm.step(F_history, A_clip, num_steps=5)
+
+            # Decode compact tokens to DINO difference (feature residual)
+            delta_F_pred = delta_decoder(pred_latent)          # (1, 256, dino_channels)
+
+            # Reconstruct predicted next state by adding residual to current visual state
+            F_t = F_history[:, -1, :, :]                      # (1, 256, dino_channels)
+            F_pred = F_t + delta_F_pred                        # (1, 256, dino_channels)
 
             # Decode features back to images
             pred_rgb = visualizer.decode(F_pred)             
@@ -124,6 +151,8 @@ if __name__ == "__main__":
     parser.add_argument("--history-len", type=int, default=3)
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--wm-ckpt", type=str, default="verify2act/output/rla_wm/latent_dynamics_best.pt", help="Path to trained World Model checkpoint")
+    parser.add_argument("--dino-channels", type=int, default=1024, help="DINO feature dimension (768 for ViT-B, 1024 for ViT-L)")
+    parser.add_argument("--encoder-ckpt", type=str, default="", help="Path to encoder+decoder checkpoint from train_encoder.py (for DeltaDecoder)")
     parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm decoder checkpoint (e.g. runs/xxx.pt)")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/rla_wm/visualizations")
     parser.add_argument("--num-samples", type=int, default=5, help="Number of samples to visualize")

@@ -36,7 +36,7 @@ class BaselineRLAWM(nn.Module):
     """
     def __init__(
         self,
-        dino_channels: int = 768,
+        dino_channels: int = 1024,
         clip_channels: int = 512,
         model_channels: int = 1024,
         num_patches: int = 256,
@@ -49,6 +49,8 @@ class BaselineRLAWM(nn.Module):
         # ── Compact latent space (shared with main V2A-WM, from DeltaEncoder) ──
         token_dim: int = 64,
         num_latent_tokens: int = 16,
+        # ── Latent normalization (#1) ────────────────────────────────────────
+        latent_scale: float = 10.0,
     ):
         super().__init__()
         self.dino_channels = dino_channels
@@ -57,6 +59,7 @@ class BaselineRLAWM(nn.Module):
         self.num_patches = num_patches
         self.token_dim = token_dim
         self.num_latent_tokens = num_latent_tokens
+        self.latent_scale = float(latent_scale)
         self.dtype = torch.float16 if use_fp16 else torch.float32
 
         # 1. Projections
@@ -177,4 +180,6 @@ class BaselineRLAWM(nn.Module):
             v = self.forward_flow(cond, x, t)
             x = x + v * dt
 
-        return x.float()  # (B, num_latent_tokens, token_dim)
+        # Denormalize: ODE integrated in scaled-down space (÷ latent_scale),
+        # so multiply back to get tokens in the original DeltaEncoder output space.
+        return (x * self.latent_scale).float()

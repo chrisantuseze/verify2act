@@ -16,7 +16,7 @@ import logging
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Tuple
 
 import numpy as np
 import torch
@@ -379,24 +379,54 @@ class LatentWorldModel(WorldModelBase):
         self,
         device: str = "cuda",
         dynamics_weights_path: Optional[str] = None,
+        encoder_ckpt: Optional[str] = None,
         history_len: int = 3,
+        dino_channels: int = 1024,
+        token_dim: int = 64,
+        num_patches: int = 256,
     ) -> None:
         from verify2act.latent_wm.dynamics import LatentDynamicsModel
         from verify2act.latent_wm.train_dynamics import FeatureExtractor
+        from verify2act.latent_wm.delta_encoder import DeltaDecoder
 
         self.device = torch.device(device)
         self.history_len = history_len
 
         logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")
-        self.extractor = FeatureExtractor(self.device)
+        self.extractor = FeatureExtractor(self.device, dino_channels=dino_channels)
 
         logger.info("Initializing Latent Dynamics Core...")
-        self.dynamics = LatentDynamicsModel(history_len=history_len).to(self.device)
+        self.dynamics = LatentDynamicsModel(
+            dino_channels=dino_channels,
+            history_len=history_len,
+            token_dim=token_dim,
+            num_patches=num_patches,
+        ).to(self.device)
         self.dynamics.eval()
 
         if dynamics_weights_path:
             logger.info("Loading LatentDynamicsModel weights from %s", dynamics_weights_path)
             self.dynamics.load_state_dict(torch.load(dynamics_weights_path, map_location=self.device))
+
+        # Load DeltaDecoder for mapping compact tokens -> DINO feature differences
+        self.dino_channels = dino_channels
+        self.delta_decoder = DeltaDecoder(
+            token_dim=token_dim,
+            dino_channels=dino_channels,
+            num_patches=num_patches,
+        ).to(self.device)
+        
+        if encoder_ckpt:
+            logger.info("Loading DeltaDecoder weights from %s", encoder_ckpt)
+            try:
+                ckpt = torch.load(encoder_ckpt, map_location=self.device)
+                dec_sd = ckpt.get("decoder", ckpt)
+                self.delta_decoder.load_state_dict(dec_sd)
+            except Exception as e:
+                logger.warning("Could not load DeltaDecoder weights: %s. Using random weights.", e)
+        else:
+            logger.warning("No encoder_ckpt provided for DeltaDecoder — ΔF reconstruction will be random.")
+        self.delta_decoder.eval()
 
         self._history: Optional[torch.Tensor] = None
 
@@ -408,7 +438,7 @@ class LatentWorldModel(WorldModelBase):
         tensor = tensor.unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            F_start = self.extractor.extract_dino(tensor)  # (1, 256, 768)
+            F_start = self.extractor.extract_dino(tensor)  # (1, 256, dino_channels)
         self._history = F_start.unsqueeze(1).repeat(1, self.history_len, 1, 1)
 
     def set_history(self, history: torch.Tensor) -> None:
@@ -428,7 +458,7 @@ class LatentWorldModel(WorldModelBase):
         Returns
         -------
         F_next : torch.Tensor
-            The predicted next latent state (1, 256, 768).
+            The predicted next DINO feature state (1, 256, dino_channels).
         uncertainty : float
             A metric indicating model uncertainty (currently 0.0).
         """
@@ -442,7 +472,15 @@ class LatentWorldModel(WorldModelBase):
 
         with torch.no_grad():
             action_emb = self.extractor.extract_clip([action_text])
-            F_next = self.dynamics.step(self._history, action_emb, num_steps=5)
+            # dynamics.step returns predicted compact latent tokens (1, num_latent_tokens, token_dim)
+            pred_latent = self.dynamics.step(self._history, action_emb, num_steps=5)
+
+            # Decode compact tokens -> DINO feature difference
+            delta_F = self.delta_decoder(pred_latent)          # (1, 256, dino_channels)
+
+            # Reconstruct next DINO state: F_{t+1} = F_t + delta_F
+            F_t = self._history[:, -1, :, :]                   # (1, 256, dino_channels)
+            F_next = F_t + delta_F                             # (1, 256, dino_channels)
 
             # Update history sliding window
             self._history = torch.cat([self._history[:, 1:, :, :], F_next.unsqueeze(1)], dim=1)
@@ -461,24 +499,56 @@ class RLAWorldModel(LatentWorldModel):
         self,
         device: str = "cuda",
         dynamics_weights_path: Optional[str] = None,
+        encoder_ckpt: Optional[str] = None,
         history_len: int = 3,
+        dino_channels: int = 1024,
+        token_dim: int = 64,
+        num_patches: int = 256,
+        num_latent_tokens: int = 16,
     ) -> None:
         from verify2act.rla_wm_baseline.dynamics import BaselineRLAWM
         from verify2act.latent_wm.train_dynamics import FeatureExtractor
+        from verify2act.latent_wm.delta_encoder import DeltaDecoder
         
         super(LatentWorldModel, self).__init__()
         self.device = torch.device(device)
         self.history_len = history_len
 
         logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")
-        self.extractor = FeatureExtractor(self.device)
+        self.extractor = FeatureExtractor(self.device, dino_channels=dino_channels)
 
         logger.info("Initializing Baseline RLA Dynamics Core...")
-        self.dynamics = BaselineRLAWM(history_len=history_len).to(self.device)
+        self.dynamics = BaselineRLAWM(
+            dino_channels=dino_channels,
+            history_len=history_len,
+            token_dim=token_dim,
+            num_latent_tokens=num_latent_tokens,
+            num_patches=num_patches,
+        ).to(self.device)
         self.dynamics.eval()
 
         if dynamics_weights_path:
             logger.info("Loading BaselineRLAWM weights from %s", dynamics_weights_path)
             self.dynamics.load_state_dict(torch.load(dynamics_weights_path, map_location=self.device))
+
+        # Load DeltaDecoder for mapping compact tokens -> DINO feature differences
+        self.dino_channels = dino_channels
+        self.delta_decoder = DeltaDecoder(
+            token_dim=token_dim,
+            dino_channels=dino_channels,
+            num_patches=num_patches,
+        ).to(self.device)
+        
+        if encoder_ckpt:
+            logger.info("Loading DeltaDecoder weights from %s", encoder_ckpt)
+            try:
+                ckpt = torch.load(encoder_ckpt, map_location=self.device)
+                dec_sd = ckpt.get("decoder", ckpt)
+                self.delta_decoder.load_state_dict(dec_sd)
+            except Exception as e:
+                logger.warning("Could not load DeltaDecoder weights: %s. Using random weights.", e)
+        else:
+            logger.warning("No encoder_ckpt provided for DeltaDecoder — ΔF reconstruction will be random.")
+        self.delta_decoder.eval()
 
         self._history: Optional[torch.Tensor] = None

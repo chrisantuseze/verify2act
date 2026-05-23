@@ -169,11 +169,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/encoder_vitl \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder_vitl/ckpt/encoder_only_best.pt \
   --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
 
 
 ######## CALVIN ########
@@ -198,11 +198,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --output-dir verify2act/output/v2a_wm/calvin/wm \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_vitl/ckpt/encoder_only_best.pt \
   --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/calvin/task_ABC_D/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 # Filter Calvin dataset
 python3 verify2act/utils/filter_calvin_dataset.py \
