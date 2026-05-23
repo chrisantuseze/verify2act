@@ -239,9 +239,6 @@ def run_episode(
     # ── Reset environment ───────────────────────────────────────────────────
     obs = env_wrapper.reset()
 
-    # Working with language goal, not image goal
-    goal_image_np = None
-
     # Sync the on-screen viewer to the settled T=0 state.
     try:
         env_wrapper._settle_and_sync_viewer(n_steps=0)
@@ -249,14 +246,11 @@ def run_episode(
         logger.warning("Could not sync viewer: %s", e)
             
     obj_labels = env_wrapper.get_obj_labels()
-    task_instruction = env_wrapper.get_task_instruction()
-    print(f"Task instruction: {task_instruction}")
+    language_goal = env_wrapper.get_task_instruction()
+    print(f"Language goal: {language_goal}")
     history: List[str] = []
 
     trace = EpisodeTrace()
-
-    if out_path and goal_image_np is not None:
-        _save_image(goal_image_np, out_path, "goal.png")
 
     # ── Main loop: one iteration per real timestep ─────────────────────
     for t in range(max_steps):
@@ -275,11 +269,10 @@ def run_episode(
             print(f"t={t}  Generating plan with BeamSearchPlanner (Mode: {wm_mode})...")
             res = beam_planner.plan(
                 current_image_np=current_image_np,
-                goal_image_np=goal_image_np,
                 history=history,
                 obj_labels=obj_labels,
                 horizon=horizon,
-                task_instruction=task_instruction,
+                language_goal=language_goal,
                 timestep=t,
                 output_dir=out_path,
                 decoder=decoder,
@@ -295,8 +288,11 @@ def run_episode(
         else:
             print(f"t={t}  Generating plan with VLM (Mode: {wm_mode})...")
             plan = planner.propose(
-                current_image_np, goal_image_np, history, obj_labels, horizon,
-                task_instruction=task_instruction,
+                current_image_np=current_image_np,
+                history=history,
+                obj_labels=obj_labels,
+                horizon=horizon,
+                language_goal=language_goal,
             )
             step_record.plan = list(plan)
             logger.info("t=%d  Proposed plan: %s", t, plan)
@@ -529,7 +525,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--max-replans", type=int, default=2)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--output-dir", default="verify2act/output/inference_run")
+    parser.add_argument("--output-dir", default="verify2act/output/inference_run/v2a_wm/calvin")
 
     # Nut assembly params
     parser.add_argument("--num-round", type=int, default=6)
@@ -600,7 +596,7 @@ def main() -> int:
     decoder = None
     if args.wm_mode in ["v2a_wm", "rla_wm"]:
         # Load decoder for visual reflection
-        from verify2act.latent_wm.visualizer import FeatureDecoder
+        from verify2act.latent_wm.decoder import FeatureDecoder
         logger.info("Loading FeatureDecoder for visual reflection...")
         decoder = FeatureDecoder().to(device)
         decoder.eval()

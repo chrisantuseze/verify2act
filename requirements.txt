@@ -22,3 +22,4 @@ tqdm
 jaxtyping
 einops
 openai-clip
+gym

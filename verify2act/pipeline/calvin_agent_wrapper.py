@@ -87,11 +87,15 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         
         self.current_subgoal: str = ""
         self.plan_queue: List[str] = []
+        self._step_count = 0
+        self.subgoal_step_count = 0
 
     def reset(self):
         """Called at the beginning of each new evaluation sequence."""
         self.current_subgoal = ""
         self.plan_queue = []
+        self._step_count = 0
+        self.subgoal_step_count = 0
         if hasattr(self.vlm_planner, "reset_history"):
             self.vlm_planner.reset_history()
 
@@ -111,15 +115,38 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
             logger.info(f"New CALVIN Goal Received: {goal}")
             self.current_subgoal = goal
             self.plan_queue = [goal]  # Initially, the plan is just to execute the goal directly
+            self.subgoal_step_count = 0
 
-        # 2. Pop the current sub-goal we are trying to achieve
+        self._step_count = getattr(self, "_step_count", 0) + 1
+        self.subgoal_step_count = getattr(self, "subgoal_step_count", 0) + 1
+
+        # 2. Track subgoal transitions
         active_instruction = self.plan_queue[0] if self.plan_queue else self.current_subgoal
+        
+        max_subgoal_steps = 72
+        is_completed = False
+        if len(self.plan_queue) > 1:
+            if self.subgoal_step_count >= max_subgoal_steps:
+                logger.info(f"Sub-goal '{active_instruction}' step budget ({max_subgoal_steps}) reached.")
+                is_completed = True
+            elif self.subgoal_step_count >= 10 and self.subgoal_step_count % 15 == 0:
+                # Periodically run VLM verification on live observation
+                img_np = obs['rgb_obs']['rgb_static']
+                vlm_verification = self.vlm_planner.verify_goal(img_np, active_instruction)
+                if vlm_verification.get("achieved", False):
+                    logger.info(f"VLM verified sub-goal '{active_instruction}' as achieved.")
+                    is_completed = True
+                    
+        if is_completed and len(self.plan_queue) > 1:
+            logger.info(f"Sub-goal '{active_instruction}' completed (steps={self.subgoal_step_count}). Transitioning to next sub-goal.")
+            self.plan_queue.pop(0)
+            active_instruction = self.plan_queue[0] if self.plan_queue else self.current_subgoal
+            self.subgoal_step_count = 0
 
         # 3. We only run the Verify2Act imagination phase periodically or at the start of a new sub-goal.
         # For simplicity in this wrapper, let's assume we verify the first step of a new instruction.
         # In a full implementation, you might verify every N steps or when the policy's confidence drops.
         
-        # FIXME: Add logic to decide WHEN to imagine and verify.
         # For now, we just pass the instruction to the low-level policy.
         action = self.low_level_policy.step(obs, active_instruction)
         
@@ -129,8 +156,7 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         # Define a frequency to verify (e.g., step 0 and every 10 steps)
         # We assume `obs['rgb_obs']['rgb_static']` gives the numpy image.
         
-        should_verify = getattr(self, "_step_count", 0) % 10 == 0
-        self._step_count = getattr(self, "_step_count", 0) + 1
+        should_verify = self._step_count % 10 == 0
 
         if should_verify:
             # 1. Get current state image
@@ -192,10 +218,9 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                     "failure_pattern": decision.reason,
                 }
                 
-                # Ask VLM to revise the plan
                 reflect_result = self.vlm_planner.reflect(
                     current_image_np=img_np,
-                    goal_image_np=img_np,   # no pixel goal image; text goal is used by the critic
+                    language_goal=self.current_subgoal,
                     history=self.plan_queue,
                     obj_labels=[],
                     full_plan=self.plan_queue,
@@ -207,7 +232,6 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                         "failed_highlevel_action": active_instruction,
                         "failure_pattern": reason,
                     },
-                    task_instruction=self.current_subgoal,
                 )
                 
                 new_plan = reflect_result.get("revised_plan", self.plan_queue)
@@ -215,6 +239,7 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                     self.plan_queue = new_plan
                     logger.info(f"VLM Proposed new decomposed plan: {self.plan_queue}")
                     active_instruction = self.plan_queue[0]
+                    self.subgoal_step_count = 0
                     # Update action based on new active instruction
                     action = self.low_level_policy.step(obs, active_instruction)
         

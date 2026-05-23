@@ -388,11 +388,10 @@ class PromptManager:
     def build_propose_messages(
         self,
         current_image_np: np.ndarray,
-        goal_image_np: np.ndarray,
+        language_goal: str,
         history: List[str],
         obj_labels: List[str],
         horizon: int,
-        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
         num_candidates: int = 1,
     ) -> List[Dict[str, Any]]:
@@ -425,12 +424,10 @@ class PromptManager:
             plan_req = "List the available nuts in the order they should be assembled."
 
         user_content = [
-            _text_block("### Goal state (target configuration)"),
-            _img_block(goal_image_np),
+            _text_block(f"### Goal state (language instruction)\n{language_goal}"),
             _text_block("### Current state (robot's current observation)"),
             _img_block(current_image_np),
             _text_block(
-                f"### Task instruction\n{task_instruction}\n\n"
                 f"### Assembled nuts (history)\n{history_str}\n\n"
                 f"### Planning request\n"
                 f"{plan_req}\n"
@@ -444,12 +441,11 @@ class PromptManager:
     def build_reflect_messages(
         self,
         current_image_np: np.ndarray,
-        goal_image_np: np.ndarray,
+        language_goal: str,
         history: List[str],
         obj_labels: List[str],
         full_plan: List[str],
         ctx: Dict[str, Any],
-        task_instruction: str = "Assemble the target nuts onto their matching pegs.",
         use_examples: bool = True,
     ) -> List[Dict[str, Any]]:
         """Build the full message list for a ``reflect`` call to GPT-4o.
@@ -500,10 +496,9 @@ class PromptManager:
         # gradcam_np = np.array(ctx["gradcam_overlay"])
 
         user_content = [
-            # 1. Task images
-            _text_block("### 1. Task images"),
-            _text_block("Goal state (target configuration):"),
-            _img_block(goal_image_np),
+            # 1. Task context
+            _text_block("### 1. Task context"),
+            _text_block(f"Goal state (language instruction):\n{language_goal}"),
             _text_block("Current real state (robot's current observation):"),
             _img_block(current_image_np),
             # 2. Execution history
@@ -535,7 +530,6 @@ class PromptManager:
             # 6. Replanning instruction
             _text_block(
                 f"### 6. Replanning instruction\n"
-                f"Task: {task_instruction}\n"
                 f"Identify the root cause of the failure. Revise the nut assembly "
                 f"ordering to avoid repeating the failure.\n"
                 f"Available nuts: {obj_str}\n\n"
