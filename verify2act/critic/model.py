@@ -1,4 +1,4 @@
-from typing import NamedTuple, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -312,6 +312,26 @@ class DINOv2DualHeadCritic(nn.Module):
             tokens = self._clip_tokenizer([text], truncate=True).to(device)
             clip_emb = self._clip_model.encode_text(tokens).float()   # [1, 512]
         return F.normalize(self.clip_goal_proj(clip_emb), dim=-1)     # [1, HEAD_DIM]
+
+    def encode_text_goals(self, texts: List[str]) -> torch.Tensor:
+        """Encode a list of language goal strings into a HEAD_DIM embedding via CLIP + clip_goal_proj in a single batch.
+
+        Parameters
+        ----------
+        texts : List[str]  natural language goals
+
+        Returns
+        -------
+        goal_embs : [N, HEAD_DIM]  L2-normalised text-goal embeddings
+        """
+        if not texts:
+            return torch.empty(0, self.HEAD_DIM, device=next(self.parameters()).device)
+        device = next(self.parameters()).device
+        self._load_clip(device)
+        with torch.no_grad():
+            tokens = self._clip_tokenizer(texts, truncate=True).to(device)
+            clip_emb = self._clip_model.encode_text(tokens).float()   # [N, 512]
+        return F.normalize(self.clip_goal_proj(clip_emb), dim=-1)     # [N, HEAD_DIM]
 
     def goal_sim_from_text(
         self,

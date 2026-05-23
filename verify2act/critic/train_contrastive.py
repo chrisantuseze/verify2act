@@ -76,11 +76,9 @@ def _compute_lang_gp_loss(
             emb_goal = model.encode(positive[has_lang])   # ProbEmbedding
         visual_proj = model.project(emb_goal.mu, head=1)   # [n, HEAD_DIM]
 
-    # Encode language goals through CLIP + clip_goal_proj
+    # Encode language goals through CLIP + clip_goal_proj (batched)
     valid_texts = [lang_goals[i] for i, v in enumerate(has_lang.tolist()) if v]
-    lang_proj = torch.stack(
-        [model.encode_text_goal(t) for t in valid_texts], dim=0
-    ).squeeze(1)   # [n, HEAD_DIM]
+    lang_proj = model.encode_text_goals(valid_texts)   # [n, HEAD_DIM]
 
     # Symmetric MSE alignment loss between the two projections
     loss = F.mse_loss(lang_proj, visual_proj.detach())
@@ -256,6 +254,44 @@ def train_step_with_lang(
     return loss, lgp, ltc, loss_lang.item(), n0, n1
 
 
+ # ── Optimizer factory ──────────────────────────────────────────────────────
+def _make_optimizer_scheduler(args, model, phase: int):
+    if phase == 1:
+        params = [p for p in model.parameters() if p.requires_grad]
+        opt = AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
+        n_epochs = args.freeze_backbone_epochs
+    else:
+        opt = AdamW(
+            [
+                {"params": model.backbone.parameters() if model.backbone is not None else [], "lr": args.backbone_lr},
+                {
+                    "params": list(model.head1.parameters()) +
+                                list(model.head2.parameters()) +
+                                list(model.clip_goal_proj.parameters()) +
+                                list(model.log_var_head1.parameters()) +
+                                list(model.log_var_head2.parameters()),
+                    "lr": args.learning_rate,
+                },
+            ],
+            weight_decay=args.weight_decay,
+        )
+        n_epochs = args.epochs - args.freeze_backbone_epochs
+
+    warmup = min(args.warmup_epochs, n_epochs) if phase == 1 else 0
+    eta_min = (args.backbone_lr if phase == 2 else args.learning_rate) * 0.01
+
+    if warmup > 0:
+        cosine = CosineAnnealingLR(opt, T_max=max(1, n_epochs - warmup), eta_min=eta_min)
+        sched = SequentialLR(
+            opt,
+            schedulers=[LinearLR(opt, 0.01, 1.0, warmup), cosine],
+            milestones=[warmup],
+        )
+    else:
+        sched = CosineAnnealingLR(opt, T_max=max(1, n_epochs), eta_min=eta_min)
+
+    return opt, sched
+    
 # ── Validation ─────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
@@ -266,6 +302,7 @@ def evaluate(
     n_samples: int = 500,
     uncertainty_mc_samples: int = 10,
     use_cached: bool = False,
+    num_workers: int = 4,
 ) -> Dict[str, float]:
     """Compute AUROC and uncertainty metrics for goal proximity and temporal consistency.
 
@@ -287,47 +324,68 @@ def evaluate(
     tc_uncertainties: List[float] = []
 
     # Force evaluation over a fixed random sample of each mode
-    mode0_indices = [i for i in range(min(n_samples * 4, len(val_ds)))]
     collected = {"gp": 0, "tc": 0}
     target_per_mode = n_samples // 2
 
-    for idx in mode0_indices:
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=32,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        shuffle=False,
+    )
+
+    for batch in val_loader:
         if collected["gp"] >= target_per_mode and collected["tc"] >= target_per_mode:
             break
-        item = val_ds[idx]
-        mode = item["mode"].item()
 
-        anchor   = item["anchor"].unsqueeze(0).to(device)
-        positive = item["positive"].unsqueeze(0).to(device)
-        negative = item["negative"].unsqueeze(0).to(device)
+        modes = batch["mode"]
+        for i in range(len(modes)):
+            mode = int(modes[i].item())
+            if mode == 0 and collected["gp"] < target_per_mode:
+                anchor   = batch["anchor"][i].unsqueeze(0).to(device)
+                positive = batch["positive"][i].unsqueeze(0).to(device)
+                negative = batch["negative"][i].unsqueeze(0).to(device)
 
-        if use_cached:
-            emb_a = model.encode_features(anchor)
-            emb_p = model.encode_features(positive)
-            emb_n = model.encode_features(negative)
-        else:
-            emb_a = model.encode(anchor)
-            emb_p = model.encode(positive)
-            emb_n = model.encode(negative)
+                if use_cached:
+                    emb_a = model.encode_features(anchor)
+                    emb_p = model.encode_features(positive)
+                    emb_n = model.encode_features(negative)
+                else:
+                    emb_a = model.encode(anchor)
+                    emb_p = model.encode(positive)
+                    emb_n = model.encode(negative)
 
-        if mode == 0 and collected["gp"] < target_per_mode:
-            # Deterministic similarity for AUROC
-            pos_sim = model.goal_sim(emb_a, emb_p).item()
-            neg_sim = model.goal_sim(emb_a, emb_n).item()
-            gp_pos_sims.append(pos_sim)
-            gp_neg_sims.append(neg_sim)
-            # MC uncertainty: std of positive similarity
-            _, std_pos = model.goal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
-            gp_uncertainties.append(std_pos.item())
-            collected["gp"] += 1
-        elif mode == 1 and collected["tc"] < target_per_mode:
-            pos_sim = model.temporal_sim(emb_a, emb_p).item()
-            neg_sim = model.temporal_sim(emb_a, emb_n).item()
-            tc_pos_sims.append(pos_sim)
-            tc_neg_sims.append(neg_sim)
-            _, std_pos = model.temporal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
-            tc_uncertainties.append(std_pos.item())
-            collected["tc"] += 1
+                # Deterministic similarity for AUROC
+                pos_sim = model.goal_sim(emb_a, emb_p).item()
+                neg_sim = model.goal_sim(emb_a, emb_n).item()
+                gp_pos_sims.append(pos_sim)
+                gp_neg_sims.append(neg_sim)
+                # MC uncertainty: std of positive similarity
+                _, std_pos = model.goal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+                gp_uncertainties.append(std_pos.item())
+                collected["gp"] += 1
+            elif mode == 1 and collected["tc"] < target_per_mode:
+                anchor   = batch["anchor"][i].unsqueeze(0).to(device)
+                positive = batch["positive"][i].unsqueeze(0).to(device)
+                negative = batch["negative"][i].unsqueeze(0).to(device)
+
+                if use_cached:
+                    emb_a = model.encode_features(anchor)
+                    emb_p = model.encode_features(positive)
+                    emb_n = model.encode_features(negative)
+                else:
+                    emb_a = model.encode(anchor)
+                    emb_p = model.encode(positive)
+                    emb_n = model.encode(negative)
+
+                pos_sim = model.temporal_sim(emb_a, emb_p).item()
+                neg_sim = model.temporal_sim(emb_a, emb_n).item()
+                tc_pos_sims.append(pos_sim)
+                tc_neg_sims.append(neg_sim)
+                _, std_pos = model.temporal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+                tc_uncertainties.append(std_pos.item())
+                collected["tc"] += 1
 
     def _auroc(pos: List[float], neg: List[float]) -> float:
         if not pos or not neg:
@@ -422,6 +480,8 @@ def main():
         num_workers=args.num_workers,
         pin_memory=device.type == "cuda",
         drop_last=True,     # required for stable InfoNCE in-batch negatives
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
     )
     val_ds_for_eval = val_ds   # keep reference for evaluate()
 
@@ -437,62 +497,86 @@ def main():
           f"(projection + log-var heads; backbone frozen initially)")
 
     criterion = InfoNCELoss(temperature=args.temperature)
+    optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=1)
 
-    # ── Optimizer factory ──────────────────────────────────────────────────────
-    def _make_optimizer_scheduler(phase: int):
-        if phase == 1:
-            params = [p for p in model.parameters() if p.requires_grad]
-            opt = AdamW(params, lr=args.learning_rate, weight_decay=args.weight_decay)
-            n_epochs = args.freeze_backbone_epochs
+    best_val = -1.0
+    start_epoch = 0
+    history = []
+
+    if args.resume_from:
+        resume_path = Path(args.resume_from)
+        if resume_path.exists():
+            print(f"Resuming from checkpoint: {resume_path}")
+            checkpoint = torch.load(resume_path, map_location=device)
+            # Support both full dict checkpoints and plain state_dicts
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["model_state_dict"])
+                if "epoch" in checkpoint:
+                    start_epoch = checkpoint["epoch"]
+                else:
+                    import re
+                    match = re.search(r"ep(\d+)\.pt$", str(resume_path))
+                    if match:
+                        start_epoch = int(match.group(1))
+
+                if "val_auroc_gp" in checkpoint and "val_auroc_tc" in checkpoint:
+                    best_val = (checkpoint["val_auroc_gp"] + checkpoint["val_auroc_tc"]) / 2.0
+
+                if start_epoch >= args.freeze_backbone_epochs:
+                    print(f"Resuming in Phase 2: Unfreezing backbone before restoring optimizer")
+                    model.unfreeze_backbone()
+                    optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
+                else:
+                    optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=1)
+
+                if "optimizer_state_dict" in checkpoint:
+                    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                if "scheduler_state_dict" in checkpoint:
+                    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            else:
+                model.load_state_dict(checkpoint)
+                # Try to extract epoch from filename if it matches format
+                import re
+                match = re.search(r"ep(\d+)\.pt$", str(resume_path))
+                if match:
+                    start_epoch = int(match.group(1))
+
+                if start_epoch >= args.freeze_backbone_epochs:
+                    print(f"Resuming in Phase 2: Unfreezing backbone")
+                    model.unfreeze_backbone()
+                    optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
+                    for _ in range(start_epoch - args.freeze_backbone_epochs):
+                        scheduler.step()
+                else:
+                    optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=1)
+                    for _ in range(start_epoch):
+                        scheduler.step()
+            
+            # Try to load existing history if resuming
+            history_path = out_dir / "train_history.json"
+            if history_path.exists():
+                try:
+                    with open(history_path, "r") as f:
+                        history = json.load(f)
+                    # Keep only records up to start_epoch
+                    history = [r for r in history if r.get("epoch", 0) <= start_epoch]
+                except Exception:
+                    pass
         else:
-            opt = AdamW(
-                [
-                    {"params": model.backbone.parameters() if model.backbone is not None else [], "lr": args.backbone_lr},
-                    {
-                        "params": list(model.head1.parameters()) +
-                                  list(model.head2.parameters()) +
-                                  list(model.clip_goal_proj.parameters()) +
-                                  list(model.log_var_head1.parameters()) +
-                                  list(model.log_var_head2.parameters()),
-                        "lr": args.learning_rate,
-                    },
-                ],
-                weight_decay=args.weight_decay,
-            )
-            n_epochs = args.epochs - args.freeze_backbone_epochs
-
-        warmup = min(args.warmup_epochs, n_epochs) if phase == 1 else 0
-        eta_min = (args.backbone_lr if phase == 2 else args.learning_rate) * 0.01
-
-        if warmup > 0:
-            cosine = CosineAnnealingLR(opt, T_max=max(1, n_epochs - warmup), eta_min=eta_min)
-            sched = SequentialLR(
-                opt,
-                schedulers=[LinearLR(opt, 0.01, 1.0, warmup), cosine],
-                milestones=[warmup],
-            )
-        else:
-            sched = CosineAnnealingLR(opt, T_max=max(1, n_epochs), eta_min=eta_min)
-
-        return opt, sched
-
-    optimizer, scheduler = _make_optimizer_scheduler(phase=1)
+            print(f"Warning: Checkpoint {resume_path} not found. Starting from scratch.")
 
     tracker = _init_tracker(args.tracker, out_dir, vars(args).copy())
     scaler  = torch.amp.GradScaler('cuda', enabled=(device.type == "cuda" and args.mixed_precision != "no"))
     amp_enabled = device.type == "cuda" and args.mixed_precision != "no"
 
-    best_val = -1.0
-    history  = []
-
     # ── Training loop ──────────────────────────────────────────────────────────
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch + 1, args.epochs + 1):
 
         # Phase transition
-        if epoch == args.freeze_backbone_epochs + 1:
+        if epoch == args.freeze_backbone_epochs + 1 and start_epoch < args.freeze_backbone_epochs:
             print(f"\n[Epoch {epoch}] Unfreezing backbone (backbone_lr={args.backbone_lr:.1e})")
             model.unfreeze_backbone()
-            optimizer, scheduler = _make_optimizer_scheduler(phase=2)
+            optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
 
         # Cosine KL weight annealing/warmup
         warmup_epochs = max(1, int(args.epochs * 0.3))
@@ -555,6 +639,7 @@ def main():
             model, val_ds_for_eval, device,
             n_samples=args.val_samples,
             use_cached=False,
+            num_workers=args.num_workers,
         )
         train_loss = float(np.mean(totals)) if totals else float("nan")
         record = {
@@ -586,6 +671,8 @@ def main():
         mean_val = val_metrics["mean_val"]
         ckpt = {
             "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
             "epoch":            epoch,
             "val_auroc_gp":     val_metrics["auroc_gp"],
             "val_auroc_tc":     val_metrics["auroc_tc"],
@@ -633,6 +720,8 @@ def parse_args():
     # Training
     p.add_argument("--batch-size",    type=int,   default=32)
     p.add_argument("--num-workers",   type=int,   default=4)
+    p.add_argument("--prefetch-factor", type=int, default=2,
+                   help="Number of batches loaded in advance by each worker")
     p.add_argument("--epochs",        type=int,   default=30)
     p.add_argument("--learning-rate", type=float, default=1e-3,
                    help="Head LR throughout; also backbone LR during phase 1 (no effect, frozen)")
@@ -667,6 +756,8 @@ def parse_args():
 
     # Output
     p.add_argument("--output-dir", type=str, default="verify2act/output/contrastive")
+    p.add_argument("--resume-from", type=str, default=None,
+                   help="Path to critic model checkpoint to resume from")
     p.add_argument("--seed",       type=int, default=42)
     p.add_argument("--device",     type=str, default="cuda", choices=["cuda", "cuda:1", "cpu"])
     p.add_argument("--mixed-precision", type=str, default="bf16",
