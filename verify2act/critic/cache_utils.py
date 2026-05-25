@@ -126,7 +126,14 @@ def ensure_cache_complete(
                 imgs_list.append(xform(img))
                 valid_chunk.append(p)
             except Exception as e:
-                print(f"\n⚠️ Error loading image {img_path}: {e}. Skipping.")
+                print(f"\n⚠️ Error loading image {img_path}: {e}. Saving zero feature to maintain batch shape.")
+                if co_locate:
+                    feat_path = img_path.parent / (img_path.stem + "_dino.pt")
+                else:
+                    feat_name = p.replace("/", "_") + ".pt"
+                    feat_path = cache_root / feat_name
+                zero_feat = torch.zeros((256, dino_channels), dtype=torch.float16)
+                torch.save(zero_feat, feat_path)
                 continue
 
         if not imgs_list:
@@ -215,7 +222,14 @@ def ensure_calvin_cache_complete(
                 imgs_list.append(xform(img))
                 valid_chunk.append(npz_path)
             except Exception as e:
-                print(f"\n⚠️ Error loading image from {npz_path}: {e}. Skipping.")
+                print(f"\n⚠️ Error loading image from {npz_path}: {e}. Saving zero feature to maintain batch shape.")
+                if co_locate:
+                    feat_path = npz_path.parent / (npz_path.stem + "_dino.pt")
+                else:
+                    feat_name = npz_path.name.replace(".npz", ".pt")
+                    feat_path = cache_root / feat_name
+                zero_feat = torch.zeros((256, dino_channels), dtype=torch.float16)
+                torch.save(zero_feat, feat_path)
                 continue
 
         if not imgs_list:
