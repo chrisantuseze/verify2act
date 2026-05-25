@@ -645,7 +645,10 @@ def parse_args():
         help="Centralized directory to save DINO cache. If None, uses args.output_dir/dino_features"
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.causal_masking:
+        args.history_len = 1
+    return args
 
 
 if __name__ == "__main__":

@@ -112,10 +112,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/wm \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 20 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
   --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
+CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 # ==============================================================================
 # VISUALIZATION
 # ==============================================================================
@@ -132,7 +133,7 @@ python verify2act/latent_wm/visualize_wm.py \
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --wm-ckpt verify2act/output/v2a_wm/calvin/wm_causal/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
   --num-samples 5

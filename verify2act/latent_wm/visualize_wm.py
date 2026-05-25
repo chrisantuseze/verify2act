@@ -1,7 +1,6 @@
 import argparse
 import os
 import torch
-from pathlib import Path
 from torchvision.utils import save_image
 import torch.nn.functional as F
 
@@ -15,14 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from delta_encoder import DeltaDecoder
 
 def visualize(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # 1. Load Dataset
     print(f"Loading dataset from {args.dataset_dir}...")
     if args.dataset_type == "calvin":
         import sys
-        from pathlib import Path
         root_dir = Path(__file__).resolve().parent.parent.parent
         if str(root_dir) not in sys.path:
             sys.path.insert(0, str(root_dir))
@@ -109,6 +107,8 @@ def visualize(args):
         print(f"Warning: Decoder checkpoint not found at {args.decoder_ckpt}. Output images will look like noise.")
     decoder.eval()
 
+    task_name = "calvin" if args.dataset_type == "calvin" else "nut_assembly"
+    args.output_dir = os.path.join(args.output_dir, task_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 5. Inference & Visualization Loop
@@ -188,11 +188,11 @@ if __name__ == "__main__":
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     parser.add_argument("--history-len", type=int, default=3)
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--wm-ckpt", type=str, default="verify2act/output/latent_wm/latent_dynamics_best.pt", help="Path to trained World Model checkpoint")
+    parser.add_argument("--wm-ckpt", type=str, default="verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt", help="Path to trained World Model checkpoint")
     parser.add_argument("--encoder-ckpt", type=str, default="", help="Path to encoder+decoder checkpoint from train_encoder.py (for DeltaDecoder)")
     parser.add_argument("--token-dim", type=int, default=64, help="Compact latent token dim (must match checkpoint)")
     parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm DINO-to-image decoder checkpoint (e.g. runs/xxx.pt)")
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/latent_wm/visualizations")
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/visualizations")
     parser.add_argument("--num-samples", type=int, default=5, help="Number of samples to visualize")
     parser.add_argument(
         "--causal-masking", action="store_true", default=False,
