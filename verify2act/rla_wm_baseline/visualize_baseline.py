@@ -107,6 +107,8 @@ def visualize(args):
         print(f"Warning: Decoder checkpoint not found at {args.decoder_ckpt}. Output images will look like noise.")
     visualizer.eval()
 
+    task_name = "calvin" if args.dataset_type == "calvin" else "nut_assembly"
+    args.output_dir = os.path.join(args.output_dir, task_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 5. Inference & Visualization Loop
