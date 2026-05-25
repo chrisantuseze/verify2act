@@ -468,25 +468,120 @@ class DINOv2DualHeadCritic(nn.Module):
         sims = torch.stack(sims, dim=0)   # [n_samples, B]
         return sims.mean(dim=0), sims.std(dim=0)
 
+    def ddp_train_forward(
+        self,
+        all_imgs: torch.Tensor,
+        mask0: torch.Tensor,
+        mask1: torch.Tensor,
+        has_lang_mask: Optional[torch.Tensor] = None,
+        valid_texts: Optional[List[str]] = None,
+        use_cached: bool = False,
+    ):
+        """Unified, DDP-safe forward pass for the contrastive and alignment training step."""
+        # 1. Encode all images
+        if use_cached:
+            all_pe = self.encode_features(all_imgs)
+        else:
+            all_pe = self.encode(all_imgs)
+            
+        B = all_imgs.size(0) // 3
+        # Split mean embeddings
+        mu_anchor   = all_pe.mu[:B]
+        mu_positive = all_pe.mu[B:2*B]
+        mu_negative = all_pe.mu[2*B:]
+        # Split log-variances per head
+        lv1_anchor   = all_pe.log_var1[:B]
+        lv1_positive = all_pe.log_var1[B:2*B]
+        lv1_negative = all_pe.log_var1[2*B:]
+        lv2_anchor   = all_pe.log_var2[:B]
+        lv2_positive = all_pe.log_var2[B:2*B]
+        lv2_negative = all_pe.log_var2[2*B:]
+        
+        n_gp = int(mask0.sum().item())
+        n_tc = int(mask1.sum().item())
+        
+        # 2. Head 1 Projections
+        a0, p0, n0, visual_proj = None, None, None, None
+        use_lang = has_lang_mask is not None and int(has_lang_mask.sum().item()) >= 1
+        
+        if n_gp > 1 or use_lang:
+            head1_inputs = []
+            if n_gp > 1:
+                z_a0 = self.sample_embed(mu_anchor[mask0],   lv1_anchor[mask0])
+                z_p0 = self.sample_embed(mu_positive[mask0], lv1_positive[mask0])
+                z_n0 = self.sample_embed(mu_negative[mask0], lv1_negative[mask0])
+                head1_inputs.extend([z_a0, z_p0, z_n0])
+            if use_lang:
+                head1_inputs.append(mu_positive[has_lang_mask])
+                
+            head1_inputs_cat = torch.cat(head1_inputs, dim=0)
+            head1_proj_cat = self.project(head1_inputs_cat, head=1)
+            
+            offset = 0
+            if n_gp > 1:
+                a0 = head1_proj_cat[offset : offset + n_gp]
+                offset += n_gp
+                p0 = head1_proj_cat[offset : offset + n_gp]
+                offset += n_gp
+                n0 = head1_proj_cat[offset : offset + n_gp]
+                offset += n_gp
+            if use_lang:
+                n_lang = int(has_lang_mask.sum().item())
+                visual_proj = head1_proj_cat[offset : offset + n_lang]
+                
+        # 3. Head 2 Projections
+        a1, p1, n1 = None, None, None
+        if n_tc > 1:
+            z_a1 = self.sample_embed(mu_anchor[mask1],   lv2_anchor[mask1])
+            z_p1 = self.sample_embed(mu_positive[mask1], lv2_positive[mask1])
+            z_n1 = self.sample_embed(mu_negative[mask1], lv2_negative[mask1])
+            
+            head2_inputs_cat = torch.cat([z_a1, z_p1, z_n1], dim=0)
+            head2_proj_cat = self.project(head2_inputs_cat, head=2)
+            
+            a1 = head2_proj_cat[0 : n_tc]
+            p1 = head2_proj_cat[n_tc : 2*n_tc]
+            n1 = head2_proj_cat[2*n_tc :]
+            
+        # 4. Language Goal Projections
+        lang_proj = None
+        if use_lang and valid_texts is not None:
+            lang_proj = self.encode_text_goals(valid_texts)
+            
+        return {
+            "a0": a0, "p0": p0, "n0": n0,
+            "a1": a1, "p1": p1, "n1": n1,
+            "visual_proj": visual_proj,
+            "lang_proj": lang_proj,
+            "lv1_anchor": lv1_anchor, "lv1_positive": lv1_positive, "lv1_negative": lv1_negative,
+            "lv2_anchor": lv2_anchor, "lv2_positive": lv2_positive, "lv2_negative": lv2_negative,
+        }
+
     def forward(
         self,
-        img_query: torch.Tensor,
-        img_key: torch.Tensor,
-        head: int = 1,
-    ) -> torch.Tensor:
-        """Convenience: encode two images and return deterministic cosine similarity.
-
-        Parameters
-        ----------
-        img_query, img_key : [B, 3, H, W]  in [-1, 1]
-        head : 1 (goal proximity) or 2 (temporal consistency)
-
-        Returns
-        -------
-        sim : [B]
-        """
-        e_q = self.encode(img_query)
-        e_k = self.encode(img_key)
-        fn = self.goal_sim if head == 1 else self.temporal_sim
-        return fn(e_q, e_k)
+        *args,
+        mode: str = "default",
+        **kwargs,
+    ):
+        if mode == "default":
+            img_query, img_key = args[0], args[1]
+            head = kwargs.get("head", 1)
+            e_q = self.encode(img_query)
+            e_k = self.encode(img_key)
+            fn = self.goal_sim if head == 1 else self.temporal_sim
+            return fn(e_q, e_k)
+        elif mode == "encode":
+            return self.encode(*args, **kwargs)
+        elif mode == "encode_features":
+            return self.encode_features(*args, **kwargs)
+        elif mode == "project":
+            return self.project(*args, **kwargs)
+        elif mode == "encode_text_goals":
+            return self.encode_text_goals(*args, **kwargs)
+        elif mode == "kl_loss":
+            return self.kl_loss(*args, **kwargs)
+        elif mode == "ddp_train_step":
+            return self.ddp_train_forward(*args, **kwargs)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
 

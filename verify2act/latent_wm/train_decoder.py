@@ -62,6 +62,29 @@ def train_decoder(args):
 
     optimizer = torch.optim.AdamW(visualizer.parameters(), lr=args.lr)
 
+    start_epoch = 0
+    if args.resume_from:
+        if os.path.exists(args.resume_from):
+            print(f"Resuming from checkpoint: {args.resume_from}")
+            checkpoint = torch.load(args.resume_from, map_location=device)
+            # Support both full dict checkpoints and plain state_dicts
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                visualizer.decoder.load_state_dict(checkpoint["model_state_dict"])
+                if "optimizer_state_dict" in checkpoint:
+                    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                if "epoch" in checkpoint:
+                    start_epoch = checkpoint["epoch"]
+            else:
+                visualizer.decoder.load_state_dict(checkpoint)
+                # Try to extract epoch from filename if it matches format
+                import re
+                match = re.search(r"ep(\d+)\.pt$", args.resume_from)
+                if match:
+                    start_epoch = int(match.group(1))
+            print(f"Resumed from {args.resume_from} (epoch {start_epoch})")
+        else:
+            print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
+
     # 3. Training Loop
     os.makedirs(args.output_dir, exist_ok=True)
     with open(os.path.join(args.output_dir, "config.json"), "w") as f:
@@ -70,7 +93,7 @@ def train_decoder(args):
 
     best_val_loss = float('inf')
     
-    for epoch in range(args.num_epochs):
+    for epoch in range(start_epoch, args.num_epochs):
         visualizer.train()
         train_loss = 0.0
         
@@ -182,6 +205,8 @@ if __name__ == "__main__":
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--lpips-weight", type=float, default=0.5)
     parser.add_argument("--checkpoint-freq", type=int, default=5)
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Path to decoder checkpoint to resume from")
     parser.add_argument("--dino-channels", type=int, default=1024)
     
     os.environ["HF_HOME"] = str(Path.home() / ".cache" / "huggingface")

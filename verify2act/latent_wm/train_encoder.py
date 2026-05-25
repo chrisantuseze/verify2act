@@ -154,14 +154,18 @@ def train(args):
     )
 
     start_epoch = 0
-    if args.resume_from and os.path.exists(args.resume_from):
-        ckpt = torch.load(args.resume_from, map_location=device)
-        encoder.load_state_dict(ckpt["encoder"])
-        decoder.load_state_dict(ckpt["decoder"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        start_epoch = ckpt.get("epoch", 0)
-        if accelerator.is_local_main_process:
-            print(f"Resumed from {args.resume_from} (epoch {start_epoch})")
+    if args.resume_from:
+        if os.path.exists(args.resume_from):
+            ckpt = torch.load(args.resume_from, map_location=device)
+            encoder.load_state_dict(ckpt["encoder"])
+            decoder.load_state_dict(ckpt["decoder"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            start_epoch = ckpt.get("epoch", 0)
+            if accelerator.is_local_main_process:
+                print(f"Resumed from {args.resume_from} (epoch {start_epoch})")
+        else:
+            if accelerator.is_local_main_process:
+                print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
 
     encoder, decoder, optimizer, train_dl, val_dl = accelerator.prepare(
         encoder, decoder, optimizer, train_dl, val_dl

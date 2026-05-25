@@ -27,6 +27,8 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
+from accelerate.utils import set_seed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # project root
 
@@ -35,65 +37,120 @@ from verify2act.critic.model import DINOv2DualHeadCritic
 from verify2act.data_loader import build_contrastive_datasets, ContrastivePairDataset
 
 
-# ── CLIP language-goal alignment loss ─────────────────────────────────────────
+# ── Unified Training Step (DDP and Multi-GPU safe) ───────────────────────────
 
-def _compute_lang_gp_loss(
+def train_step_with_lang(
     model: DINOv2DualHeadCritic,
     batch: Dict,
+    criterion: InfoNCELoss,
     device: torch.device,
+    lambda1: float,
+    lambda2: float,
+    kl_weight: float,
+    lang_goal_weight: float,
+    use_inbatch: bool,
     amp_enabled: bool,
     use_cached: bool = False,
-) -> torch.Tensor:
-    """Align clip_goal_proj(CLIP(text)) with head1(DINOv2(goal_frame)).
+) -> Tuple[torch.Tensor, float, float, float, int, int]:
+    """Single forward pass for all heads to compute contrastive and alignment losses.
 
-    For each GP-mode sample in the batch, the positive frame is the goal
-    frame (close-to-goal), so we train clip_goal_proj to produce an
-    embedding close to head1(goal_frame) when given the task's text label.
-
-    Requires batch to contain a ``lang_goal`` list of strings and a binary
-    ``has_lang_goal`` mask indicating which samples have a valid text goal.
-    Falls back to a zero loss if the dataset does not include text goals.
+    To support PyTorch DistributedDataParallel (DDP) safely, this function delegates
+    the entire forward pass to model(..., mode="ddp_train_step"), ensuring each parameter
+    group undergoes exactly one DDP forward pass per training step.
     """
-    lang_goals: list = batch.get("lang_goal", [])
+    anchor   = batch["anchor"].to(device)    # [B, 3, H, W]
+    positive = batch["positive"].to(device)
+    negative = batch["negative"].to(device)
+    modes    = batch["mode"].to(device)       # [B]  0 or 1
+
+    mask0 = (modes == 0)   # goal proximity
+    mask1 = (modes == 1)   # temporal consistency
+
+    # Check for valid text goals for Head 1 alignment loss
+    lang_goals = batch.get("lang_goal", [])
     has_lang = batch.get("has_lang_goal", None)
-    modes = batch["mode"].to(device)
-    mask0 = (modes == 0)   # goal proximity pairs
+    
+    use_lang_loss = False
+    has_lang_mask = None
+    valid_texts = None
+    if lang_goal_weight > 0.0 and lang_goals and has_lang is not None:
+        has_lang_mask = has_lang.to(device).bool() & mask0
+        n_lang = int(has_lang_mask.sum().item())
+        if n_lang >= 1:
+            use_lang_loss = True
+            valid_texts = [lang_goals[i] for i, v in enumerate(has_lang_mask.tolist()) if v]
 
-    if not lang_goals or has_lang is None:
-        return torch.tensor(0.0, device=device)
+    # Combine images for batched visual processing
+    all_imgs = torch.cat([anchor, positive, negative], dim=0)   # [3B, 3, H, W] or [3B, 256, 768]
 
-    has_lang = has_lang.to(device).bool() & mask0
-    if has_lang.sum() < 1:
-        return torch.tensor(0.0, device=device)
+    # Single unified DDP forward pass
+    outputs = model(
+        all_imgs,
+        mask0,
+        mask1,
+        has_lang_mask=has_lang_mask,
+        valid_texts=valid_texts,
+        use_cached=use_cached,
+        mode="ddp_train_step",
+    )
 
-    positive = batch["positive"].to(device)   # [B, 3, H, W] goal frames
+    total_loss = torch.tensor(0.0, device=device)
+    loss_gp_val = 0.0
+    loss_tc_val = 0.0
+    loss_lang_val = 0.0
+    n_gp = int(mask0.sum().item())
+    n_tc = int(mask1.sum().item())
 
-    # Encode positive (goal) frames through DINOv2 + head1
-    with torch.amp.autocast('cuda', enabled=amp_enabled):
-        if use_cached:
-            emb_goal = model.encode_features(positive[has_lang])
-        else:
-            emb_goal = model.encode(positive[has_lang])   # ProbEmbedding
-        visual_proj = model.project(emb_goal.mu, head=1)   # [n, HEAD_DIM]
+    # ── Head 1: Goal Proximity (GP) Loss ──────────────────────────────────────
+    if n_gp > 1:
+        a0 = outputs["a0"]
+        p0 = outputs["p0"]
+        n0 = outputs["n0"]
+        loss_gp = criterion(a0, p0, n0, use_inbatch_negatives=use_inbatch, symmetric=True)
+        
+        lv1_anchor = outputs["lv1_anchor"]
+        lv1_positive = outputs["lv1_positive"]
+        lv1_negative = outputs["lv1_negative"]
+        
+        kl_gp = (
+            DINOv2DualHeadCritic.kl_loss(lv1_anchor[mask0])
+            + DINOv2DualHeadCritic.kl_loss(lv1_positive[mask0])
+            + DINOv2DualHeadCritic.kl_loss(lv1_negative[mask0])
+        ) / 3.0
+        total_loss = total_loss + lambda1 * loss_gp + kl_weight * kl_gp
+        loss_gp_val = loss_gp.item()
 
-    # Encode language goals through CLIP + clip_goal_proj (batched)
-    valid_texts = [lang_goals[i] for i, v in enumerate(has_lang.tolist()) if v]
-    lang_proj = model.encode_text_goals(valid_texts)   # [n, HEAD_DIM]
+    # ── Language Alignment Loss ──────────────────────────────────────────────
+    if use_lang_loss:
+        visual_proj = outputs["visual_proj"]
+        lang_proj = outputs["lang_proj"]
+        loss_lang = F.mse_loss(lang_proj, visual_proj.detach())
+        total_loss = total_loss + lang_goal_weight * loss_lang
+        loss_lang_val = loss_lang.item()
 
-    # Symmetric MSE alignment loss between the two projections
-    loss = F.mse_loss(lang_proj, visual_proj.detach())
-    return loss
+    # ── Head 2: Temporal Consistency (TC) Loss ────────────────────────────────
+    if n_tc > 1:
+        a1 = outputs["a1"]
+        p1 = outputs["p1"]
+        n1 = outputs["n1"]
+        loss_tc = criterion(a1, p1, n1, use_inbatch_negatives=use_inbatch)
+        
+        lv2_anchor = outputs["lv2_anchor"]
+        lv2_positive = outputs["lv2_positive"]
+        lv2_negative = outputs["lv2_negative"]
+        
+        kl_tc = (
+            DINOv2DualHeadCritic.kl_loss(lv2_anchor[mask1])
+            + DINOv2DualHeadCritic.kl_loss(lv2_positive[mask1])
+            + DINOv2DualHeadCritic.kl_loss(lv2_negative[mask1])
+        ) / 3.0
+        total_loss = total_loss + lambda2 * loss_tc + kl_weight * kl_tc
+        loss_tc_val = loss_tc.item()
+
+    return total_loss, loss_gp_val, loss_tc_val, loss_lang_val, n_gp, n_tc
 
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
-
-def set_seed(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
 
 def _init_tracker(tracker: str, output_dir: Path, config: dict):
     if tracker == "tensorboard":
@@ -127,131 +184,6 @@ def _init_tracker(tracker: str, output_dir: Path, config: dict):
         def log(self, metrics: dict, step: int): pass
         def close(self): pass
     return _Noop()
-
-
-# ── Training step ──────────────────────────────────────────────────────────────
-
-def _train_step(
-    model: DINOv2DualHeadCritic,
-    batch: Dict,
-    criterion: InfoNCELoss,
-    device: torch.device,
-    lambda1: float,
-    lambda2: float,
-    kl_weight: float,
-    use_inbatch: bool,
-    amp_enabled: bool,
-    use_cached: bool = False,
-) -> Tuple[torch.Tensor, float, float, int, int]:
-    """Forward + loss for one mixed batch. Returns (loss, loss_gp, loss_tc, n_gp, n_tc).
-
-    For probabilistic embeddings, each triplet is projected from a *sampled*
-    embedding z = μ + ε·exp(0.5·log_var) via the reparameterization trick.
-    A KL regulariser pulls each head's log-variance toward 0 (σ→ 1).
-    """
-    anchor   = batch["anchor"].to(device)    # [B, 3, H, W]
-    positive = batch["positive"].to(device)
-    negative = batch["negative"].to(device)
-    modes    = batch["mode"].to(device)       # [B]  0 or 1
-
-    mask0 = (modes == 0)   # goal proximity
-    mask1 = (modes == 1)   # temporal consistency
-
-    # Encode all images/features in one fused batch for efficiency
-    all_imgs = torch.cat([anchor, positive, negative], dim=0)   # [3B, 3, H, W] or [3B, 256, 768]
-    with torch.amp.autocast('cuda', enabled=amp_enabled):
-        if use_cached:
-            all_pe = model.encode_features(all_imgs)
-        else:
-            all_pe = model.encode(all_imgs)   # ProbEmbedding: .mu/.log_var1/.log_var2 each [3B, 768]
-
-    B = anchor.size(0)
-    # Split mean embeddings
-    mu_anchor   = all_pe.mu[:B]
-    mu_positive = all_pe.mu[B:2*B]
-    mu_negative = all_pe.mu[2*B:]
-    # Split log-variances per head
-    lv1_anchor   = all_pe.log_var1[:B]
-    lv1_positive = all_pe.log_var1[B:2*B]
-    lv1_negative = all_pe.log_var1[2*B:]
-    lv2_anchor   = all_pe.log_var2[:B]
-    lv2_positive = all_pe.log_var2[B:2*B]
-    lv2_negative = all_pe.log_var2[2*B:]
-
-    total_loss = torch.tensor(0.0, device=device)
-    loss_gp_val = 0.0
-    loss_tc_val = 0.0
-    n_gp = mask0.sum().item()
-    n_tc = mask1.sum().item()
-
-    # ── Head 1: goal proximity ────────────────────────────────────────────────
-    if n_gp > 1:   # InfoNCE needs > 1 sample for in-batch negatives
-        # Sample embeddings via reparameterization trick
-        z_a0 = model.sample_embed(mu_anchor[mask0],   lv1_anchor[mask0])
-        z_p0 = model.sample_embed(mu_positive[mask0], lv1_positive[mask0])
-        z_n0 = model.sample_embed(mu_negative[mask0], lv1_negative[mask0])
-        a0 = model.project(z_a0, head=1)
-        p0 = model.project(z_p0, head=1)
-        n0 = model.project(z_n0, head=1)
-        loss_gp = criterion(a0, p0, n0, use_inbatch_negatives=use_inbatch, symmetric=True)
-        # KL regulariser: pull log_var1 toward 0 for GP samples
-        kl_gp = (
-            model.kl_loss(lv1_anchor[mask0])
-            + model.kl_loss(lv1_positive[mask0])
-            + model.kl_loss(lv1_negative[mask0])
-        ) / 3.0
-        total_loss = total_loss + lambda1 * loss_gp + kl_weight * kl_gp
-        loss_gp_val = loss_gp.item()
-
-    # ── Head 2: temporal consistency ──────────────────────────────────────────
-    if n_tc > 1:
-        z_a1 = model.sample_embed(mu_anchor[mask1],   lv2_anchor[mask1])
-        z_p1 = model.sample_embed(mu_positive[mask1], lv2_positive[mask1])
-        z_n1 = model.sample_embed(mu_negative[mask1], lv2_negative[mask1])
-        a1 = model.project(z_a1, head=2)
-        p1 = model.project(z_p1, head=2)
-        n1 = model.project(z_n1, head=2)
-        loss_tc = criterion(a1, p1, n1, use_inbatch_negatives=use_inbatch)
-        kl_tc = (
-            model.kl_loss(lv2_anchor[mask1])
-            + model.kl_loss(lv2_positive[mask1])
-            + model.kl_loss(lv2_negative[mask1])
-        ) / 3.0
-        total_loss = total_loss + lambda2 * loss_tc + kl_weight * kl_tc
-        loss_tc_val = loss_tc.item()
-
-    return total_loss, loss_gp_val, loss_tc_val, int(n_gp), int(n_tc)
-
-
-# ── Main training step wrapper (adds lang-GP loss) ────────────────────────────
-
-def train_step_with_lang(
-    model: DINOv2DualHeadCritic,
-    batch: Dict,
-    criterion: InfoNCELoss,
-    device: torch.device,
-    lambda1: float,
-    lambda2: float,
-    kl_weight: float,
-    lang_goal_weight: float,
-    use_inbatch: bool,
-    amp_enabled: bool,
-    use_cached: bool = False,
-) -> Tuple[torch.Tensor, float, float, float, int, int]:
-    """Wrapper around _train_step that adds the optional CLIP-GP alignment loss.
-
-    Returns (total_loss, loss_gp, loss_tc, loss_lang_gp, n_gp, n_tc).
-    """
-    loss, lgp, ltc, n0, n1 = _train_step(
-        model, batch, criterion, device,
-        lambda1, lambda2, kl_weight, use_inbatch, amp_enabled,
-        use_cached=use_cached,
-    )
-    loss_lang = torch.tensor(0.0, device=device)
-    if lang_goal_weight > 0.0:
-        loss_lang = _compute_lang_gp_loss(model, batch, device, amp_enabled, use_cached=use_cached)
-        loss = loss + lang_goal_weight * loss_lang
-    return loss, lgp, ltc, loss_lang.item(), n0, n1
 
 
  # ── Optimizer factory ──────────────────────────────────────────────────────
@@ -299,6 +231,7 @@ def evaluate(
     model: DINOv2DualHeadCritic,
     val_ds: ContrastivePairDataset,
     device: torch.device,
+    accelerator: Accelerator = None,
     n_samples: int = 500,
     uncertainty_mc_samples: int = 10,
     use_cached: bool = False,
@@ -314,7 +247,8 @@ def evaluate(
     Uncertainty metrics (mean_unc_gp, mean_unc_tc) use uncertainty_mc_samples
     MC draws from the probabilistic embedding.
     """
-    model.eval()
+    raw_model = accelerator.unwrap_model(model) if accelerator is not None else model
+    raw_model.eval()
 
     gp_pos_sims: List[float] = []
     gp_neg_sims: List[float] = []
@@ -348,21 +282,21 @@ def evaluate(
                 negative = batch["negative"][i].unsqueeze(0).to(device)
 
                 if use_cached:
-                    emb_a = model.encode_features(anchor)
-                    emb_p = model.encode_features(positive)
-                    emb_n = model.encode_features(negative)
+                    emb_a = raw_model.encode_features(anchor)
+                    emb_p = raw_model.encode_features(positive)
+                    emb_n = raw_model.encode_features(negative)
                 else:
-                    emb_a = model.encode(anchor)
-                    emb_p = model.encode(positive)
-                    emb_n = model.encode(negative)
+                    emb_a = raw_model.encode(anchor)
+                    emb_p = raw_model.encode(positive)
+                    emb_n = raw_model.encode(negative)
 
                 # Deterministic similarity for AUROC
-                pos_sim = model.goal_sim(emb_a, emb_p).item()
-                neg_sim = model.goal_sim(emb_a, emb_n).item()
+                pos_sim = raw_model.goal_sim(emb_a, emb_p).item()
+                neg_sim = raw_model.goal_sim(emb_a, emb_n).item()
                 gp_pos_sims.append(pos_sim)
                 gp_neg_sims.append(neg_sim)
                 # MC uncertainty: std of positive similarity
-                _, std_pos = model.goal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+                _, std_pos = raw_model.goal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
                 gp_uncertainties.append(std_pos.item())
                 collected["gp"] += 1
             elif mode == 1 and collected["tc"] < target_per_mode:
@@ -371,19 +305,19 @@ def evaluate(
                 negative = batch["negative"][i].unsqueeze(0).to(device)
 
                 if use_cached:
-                    emb_a = model.encode_features(anchor)
-                    emb_p = model.encode_features(positive)
-                    emb_n = model.encode_features(negative)
+                    emb_a = raw_model.encode_features(anchor)
+                    emb_p = raw_model.encode_features(positive)
+                    emb_n = raw_model.encode_features(negative)
                 else:
-                    emb_a = model.encode(anchor)
-                    emb_p = model.encode(positive)
-                    emb_n = model.encode(negative)
+                    emb_a = raw_model.encode(anchor)
+                    emb_p = raw_model.encode(positive)
+                    emb_n = raw_model.encode(negative)
 
-                pos_sim = model.temporal_sim(emb_a, emb_p).item()
-                neg_sim = model.temporal_sim(emb_a, emb_n).item()
+                pos_sim = raw_model.temporal_sim(emb_a, emb_p).item()
+                neg_sim = raw_model.temporal_sim(emb_a, emb_n).item()
                 tc_pos_sims.append(pos_sim)
                 tc_neg_sims.append(neg_sim)
-                _, std_pos = model.temporal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
+                _, std_pos = raw_model.temporal_sim_with_uncertainty(emb_a, emb_p, n_samples=uncertainty_mc_samples)
                 tc_uncertainties.append(std_pos.item())
                 collected["tc"] += 1
 
@@ -428,12 +362,18 @@ def main():
     args = parse_args()
     set_seed(args.seed)
 
-    device = torch.device(args.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("--device cuda requested but CUDA is unavailable")
+    dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        dataloader_config=dataloader_config,
+        mixed_precision=args.mixed_precision,
+        kwargs_handlers=[ddp_kwargs],
+    )
+    device = accelerator.device
 
     out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if accelerator.is_main_process:
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Cache Setup (Disabled for online training) ────────────────────────────
     cached_dino_dir = None
@@ -449,7 +389,7 @@ def main():
             mode0_prob=args.mode0_prob,
             cached_dino_dir=cached_dino_dir,
         )
-        print(
+        accelerator.print(
             f"Dataset: {len(train_ds)} train pairs / {len(val_ds)} val pairs | "
             f"mode0_prob={args.mode0_prob}  image_size={args.image_size}"
         )
@@ -463,11 +403,11 @@ def main():
             mode0_prob=args.mode0_prob,
             cached_dino_dir=cached_dino_dir,
         )
-        print(
+        accelerator.print(
             f"Dataset: {len(train_ds)} train pairs / {len(val_ds)} val pairs | "
             f"mode0_prob={args.mode0_prob}  image_size={args.image_size}"
         )
-        print(
+        accelerator.print(
             f"  train: {len(train_ds._positive_anchors)} positive anchors, "
             f"{len(train_ds._negative_anchors)} negative anchors, "
             f"{len(train_ds._tc_rows)} TC rows"
@@ -493,7 +433,7 @@ def main():
     ).to(device)
     n_total     = sum(p.numel() for p in model.parameters())
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model: {n_total:,} total params | {n_trainable:,} trainable "
+    accelerator.print(f"Model: {n_total:,} total params | {n_trainable:,} trainable "
           f"(projection + log-var heads; backbone frozen initially)")
 
     criterion = InfoNCELoss(temperature=args.temperature)
@@ -510,7 +450,10 @@ def main():
             checkpoint = torch.load(resume_path, map_location=device)
             # Support both full dict checkpoints and plain state_dicts
             if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                model.load_state_dict(checkpoint["model_state_dict"])
+                # model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+
+                state_dict = {k: v for k, v in checkpoint["model_state_dict"].items() if not k.startswith("_clip_model.")}
+                model.load_state_dict(state_dict)
                 if "epoch" in checkpoint:
                     start_epoch = checkpoint["epoch"]
                 else:
@@ -522,7 +465,7 @@ def main():
                 if "val_auroc_gp" in checkpoint and "val_auroc_tc" in checkpoint:
                     best_val = (checkpoint["val_auroc_gp"] + checkpoint["val_auroc_tc"]) / 2.0
 
-                if start_epoch >= args.freeze_backbone_epochs:
+                if start_epoch > args.freeze_backbone_epochs:
                     print(f"Resuming in Phase 2: Unfreezing backbone before restoring optimizer")
                     model.unfreeze_backbone()
                     optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
@@ -534,14 +477,17 @@ def main():
                 if "scheduler_state_dict" in checkpoint:
                     scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             else:
-                model.load_state_dict(checkpoint)
+                # model.load_state_dict(checkpoint, strict=False)
+
+                state_dict = {k: v for k, v in checkpoint.items() if not k.startswith("_clip_model.")}
+                model.load_state_dict(state_dict)
                 # Try to extract epoch from filename if it matches format
                 import re
                 match = re.search(r"ep(\d+)\.pt$", str(resume_path))
                 if match:
                     start_epoch = int(match.group(1))
 
-                if start_epoch >= args.freeze_backbone_epochs:
+                if start_epoch > args.freeze_backbone_epochs:
                     print(f"Resuming in Phase 2: Unfreezing backbone")
                     model.unfreeze_backbone()
                     optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
@@ -563,20 +509,30 @@ def main():
                 except Exception:
                     pass
         else:
-            print(f"Warning: Checkpoint {resume_path} not found. Starting from scratch.")
+            accelerator.print(f"Warning: Checkpoint {resume_path} not found. Starting from scratch.")
 
-    tracker = _init_tracker(args.tracker, out_dir, vars(args).copy())
-    scaler  = torch.amp.GradScaler('cuda', enabled=(device.type == "cuda" and args.mixed_precision != "no"))
+    if accelerator.is_main_process:
+        tracker = _init_tracker(args.tracker, out_dir, vars(args).copy())
+    else:
+        tracker = _init_tracker("none", out_dir, vars(args).copy())
+
+    # Prepare model, optimizer, train_loader, scheduler under Accelerator
+    model, optimizer, train_loader, scheduler = accelerator.prepare(
+        model, optimizer, train_loader, scheduler
+    )
+
     amp_enabled = device.type == "cuda" and args.mixed_precision != "no"
 
     # ── Training loop ──────────────────────────────────────────────────────────
     for epoch in range(start_epoch + 1, args.epochs + 1):
 
         # Phase transition
-        if epoch == args.freeze_backbone_epochs + 1 and start_epoch < args.freeze_backbone_epochs:
-            print(f"\n[Epoch {epoch}] Unfreezing backbone (backbone_lr={args.backbone_lr:.1e})")
-            model.unfreeze_backbone()
-            optimizer, scheduler = _make_optimizer_scheduler(args, model, phase=2)
+        if epoch == args.freeze_backbone_epochs + 1 and start_epoch <= args.freeze_backbone_epochs:
+            accelerator.print(f"\n[Epoch {epoch}] Unfreezing backbone (backbone_lr={args.backbone_lr:.1e})")
+            unwrapped_model = accelerator.unwrap_model(model)
+            unwrapped_model.unfreeze_backbone()
+            optimizer, scheduler = _make_optimizer_scheduler(args, unwrapped_model, phase=2)
+            model, optimizer, scheduler = accelerator.prepare(unwrapped_model, optimizer, scheduler)
 
         # Cosine KL weight annealing/warmup
         warmup_epochs = max(1, int(args.epochs * 0.3))
@@ -588,7 +544,7 @@ def main():
         model.train()
         losses_gp, losses_tc, totals = [], [], []
 
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True)
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         for batch_idx, batch in enumerate(pbar):
             if args.max_train_batches > 0 and batch_idx >= args.max_train_batches:
                 break
@@ -608,15 +564,14 @@ def main():
 
             # Guard against NaN/inf loss corrupting all model weights
             if torch.isnan(loss) or torch.isinf(loss):
-                print(f"  ⚠️  Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
+                accelerator.print(f"  ⚠️  Skipping batch {batch_idx} due to invalid loss: {loss.item()}")
                 continue
 
             optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            scaler.step(optimizer)
-            scaler.update()
+            accelerator.backward(loss)
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            optimizer.step()
 
             totals.append(loss.item())
             if lgp > 0:
@@ -637,6 +592,7 @@ def main():
         # ── Validation ────────────────────────────────────────────────────────
         val_metrics = evaluate(
             model, val_ds_for_eval, device,
+            accelerator=accelerator,
             n_samples=args.val_samples,
             use_cached=False,
             num_workers=args.num_workers,
@@ -650,7 +606,8 @@ def main():
             **{f"val_{k}": v for k, v in val_metrics.items()},
         }
         history.append(record)
-        print(json.dumps(record, indent=2))
+        if accelerator.is_local_main_process:
+            print(json.dumps(record, indent=2))
 
         tracker.log(
             {
@@ -669,8 +626,9 @@ def main():
 
         # ── Checkpoint ────────────────────────────────────────────────────────
         mean_val = val_metrics["mean_val"]
+        unwrapped_model = accelerator.unwrap_model(model)
         ckpt = {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": unwrapped_model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
             "epoch":            epoch,
@@ -678,22 +636,24 @@ def main():
             "val_auroc_tc":     val_metrics["auroc_tc"],
             "args":             vars(args),
         }
-        # Always save latest
-        torch.save(ckpt, out_dir / "latest_contrastive_critic.pt")
-        # Save best
-        if not np.isnan(mean_val) and mean_val > best_val:
-            best_val = mean_val
-            torch.save(ckpt, out_dir / "best_contrastive_critic.pt")
-            print(f"  ✓ New best: mean_auroc={best_val:.4f}")
+        if accelerator.is_main_process:
+            # Always save latest
+            torch.save(ckpt, out_dir / "latest_contrastive_critic.pt")
+            # Save best
+            if not np.isnan(mean_val) and mean_val > best_val:
+                best_val = mean_val
+                torch.save(ckpt, out_dir / "best_contrastive_critic.pt")
+                accelerator.print(f"  ✓ New best: mean_auroc={best_val:.4f}")
 
     # ── Finalise ──────────────────────────────────────────────────────────────
-    with open(out_dir / "train_history.json", "w") as f:
-        json.dump(history, f, indent=2)
-    with open(out_dir / "train_config.json", "w") as f:
-        json.dump(vars(args), f, indent=2)
+    if accelerator.is_main_process:
+        with open(out_dir / "train_history.json", "w") as f:
+            json.dump(history, f, indent=2)
+        with open(out_dir / "train_config.json", "w") as f:
+            json.dump(vars(args), f, indent=2)
 
     tracker.close()
-    print(f"\nBest checkpoint: {out_dir / 'best_contrastive_critic.pt'}  "
+    accelerator.print(f"\nBest checkpoint: {out_dir / 'best_contrastive_critic.pt'}  "
           f"(mean_auroc={best_val:.4f})")
 
 
