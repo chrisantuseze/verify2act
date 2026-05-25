@@ -65,7 +65,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/rla_wm/calvin/wm \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_vitl/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
   --cache-dir verify2act/output/v2a_wm/calvin/dino_features \
   --num-epochs 20 \
   --batch-size 12 \
@@ -79,8 +79,18 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
 
 # RoboSuite Baseline Visualization
 python verify2act/rla_wm_baseline/visualize_baseline.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --wm-ckpt verify2act/output/rla_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
-  --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder_vitl/latent_decoder_best.pt \
+  --decoder-ckpt verify2act/output/rla_wm/nut_assembly/decoder/latent_decoder_best.pt \
+  --num-samples 5
+
+# Calvin Baseline Visualization
+python verify2act/rla_wm_baseline/visualize_baseline.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --decoder-ckpt verify2act/output/rla_wm/calvin/decoder/latent_decoder_best.pt \
   --num-samples 5
 
 # ==============================================================================
@@ -91,7 +101,7 @@ python verify2act/rla_wm_baseline/visualize_baseline.py \
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder_vitl/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
   --num-round 2 \
   --num-square 1 \
@@ -105,7 +115,7 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_vitl/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --num-round 2 \
   --num-square 1 \
