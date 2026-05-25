@@ -12,10 +12,11 @@ conda env create -f conda_env.yml
 cd /robosuite
 pip install -e .
 
+# calvin
 pip install -e calvin/calvin_env
 
 pip install -e calvin/calvin_models --no-deps
 
-pip install pytorch-lightning
+pip install pytorch-lightning gym pyhash
 
 Note: Activate env before running mjpython ...

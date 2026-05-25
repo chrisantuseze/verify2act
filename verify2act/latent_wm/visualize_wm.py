@@ -20,13 +20,31 @@ def visualize(args):
 
     # 1. Load Dataset
     print(f"Loading dataset from {args.dataset_dir}...")
-    dataset = LatentDynamicsDataset(
-        dataset_dir=args.dataset_dir,
-        transitions_file=args.transitions_file,
-        history_len=args.history_len,
-        image_size=args.image_size,
-        use_cache=False,
-    )
+    if args.dataset_type == "calvin":
+        import sys
+        from pathlib import Path
+        root_dir = Path(__file__).resolve().parent.parent.parent
+        if str(root_dir) not in sys.path:
+            sys.path.insert(0, str(root_dir))
+        from verify2act.data_loader_calvin import build_calvin_datasets
+        train_dataset, val_dataset = build_calvin_datasets(
+            dataset_dir=args.dataset_dir,
+            val_frac=0.1,
+            image_size=args.image_size,
+            history_len=args.history_len,
+            seed=42,
+            use_cache=False,
+            cached_dino_dir=None
+        )
+        dataset = val_dataset  # Use validation set for visualization
+    else:
+        dataset = LatentDynamicsDataset(
+            dataset_dir=args.dataset_dir,
+            transitions_file=args.transitions_file,
+            history_len=args.history_len,
+            image_size=args.image_size,
+            use_cache=False,
+        )
     print(f"Dataset loaded with {len(dataset)} samples.")
 
     # 2. Load Feature Extractor
@@ -99,7 +117,14 @@ def visualize(args):
     with torch.no_grad():
         for i in range(num_samples):
             print(f"Processing sample {i+1}/{num_samples}...")
-            history_imgs, target_img, action_text, history_mask = dataset[i]
+            sample = dataset[i]
+            if args.dataset_type == "calvin":
+                history_imgs = sample["history_imgs"]
+                target_img = sample["image_t1"]
+                action_text = sample["action_text"]
+                history_mask = sample["history_mask"]
+            else:
+                history_imgs, target_img, action_text, history_mask = sample
             
             # Add batch dimension and move to device
             history_imgs = history_imgs.unsqueeze(0).to(device) # (1, H, 3, 224, 224)
@@ -159,6 +184,7 @@ def visualize(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize World Model Predictions")
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"])
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl")
     parser.add_argument("--history-len", type=int, default=3)
     parser.add_argument("--image-size", type=int, default=224)

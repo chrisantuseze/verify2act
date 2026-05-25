@@ -162,5 +162,5 @@ xvfb-run -a python3 verify2act/pipeline/inference_calvin.py \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
   --device cuda
