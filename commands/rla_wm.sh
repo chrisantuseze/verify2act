@@ -52,9 +52,9 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/rla_wm/nut_assembly/wm \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder_vitl/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --cache-dir verify2act/output/v2a_wm/nut_assembly/dino_features \
-  --num-epochs 20 \
+  --num-epochs 50 \
   --batch-size 12 \
   --lr 1e-4 \
   --checkpoint-freq 5
@@ -70,7 +70,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --num-epochs 20 \
   --batch-size 12 \
   --lr 1e-4 \
-  --checkpoint-freq 5
+  --checkpoint-freq 5 \
+  --resume-from verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 # ==============================================================================
 # VISUALIZATION

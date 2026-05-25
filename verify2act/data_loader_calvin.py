@@ -83,8 +83,12 @@ class CalvinTransitionDataset(Dataset):
                 try:
                     feat = torch.load(feat_path, map_location="cpu")
                     return feat.float(), True
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Failed to load {feat_path}: {e}")
+            else:
+                # print(f"Missing cache file: {feat_path}")
+                pass
+            return torch.zeros((256, 1024), dtype=torch.float32), True
         return self._load_image(episode_idx), False
 
     def __getitem__(self, idx):
