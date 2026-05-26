@@ -30,6 +30,15 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --kl-weight 5e-4 \
   --resume-from verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt
 
+python verify2act/critic/train_contrastive.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
+  --output-dir verify2act/output/contrastive/nut_assembly \
+  --epochs 30 \
+  --freeze-backbone-epochs 30 \
+  --learning-rate 1e-4 \
+  --cached-dino-dir "verify2act/output/rla_wm/dino_features/nut_assembly"
+
 # Calvin Critic Training
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=bf16 \
   verify2act/critic/train_contrastive.py \
@@ -43,6 +52,15 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --lambda2 0.8 \
   --kl-weight 5e-4 \
   --resume-from verify2act/output/contrastive/calvin/best_contrastive_critic.pt
+
+python verify2act/critic/train_contrastive.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/contrastive/calvin \
+  --epochs 30 \
+  --freeze-backbone-epochs 30 \
+  --learning-rate 1e-4 \
+  --cached-dino-dir "verify2act/output/rla_wm/dino_features/calvin"
 
 # ==============================================================================
 # LATENT WM TRAINING (v2a_wm - Flow Matching)

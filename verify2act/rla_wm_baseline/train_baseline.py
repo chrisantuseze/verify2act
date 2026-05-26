@@ -66,13 +66,12 @@ def train(args):
                 cache_dir = args.cache_dir
                 
             if args.dataset_type == "calvin":
-                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, co_locate=False, device=str(device))
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, device=str(device))
             else:
                 ensure_cache_complete(
                     args.dataset_dir,
                     transitions_file=args.transitions_file,
                     cache_dir=cache_dir,
-                    co_locate=False,
                     history_len=args.history_len,
                     device=str(device)
                 )

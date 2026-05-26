@@ -375,12 +375,35 @@ def main():
     if accelerator.is_main_process:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Cache Setup (Disabled for online training) ────────────────────────────
-    cached_dino_dir = None
+    # ── Cache Setup ───────────────────────────────────────────────────────────
+    cached_dino_dir = args.cached_dino_dir
+    if cached_dino_dir is not None:
+        if accelerator.is_local_main_process:
+            from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
+            
+            print(f"Checking DINOv2 feature cache completeness in: {cached_dino_dir}")
+            if args.dataset_type == "calvin":
+                ensure_calvin_cache_complete(
+                    args.dataset_dir,
+                    cache_dir=cached_dino_dir,
+                    device=str(device),
+                    dino_channels=args.dino_channels
+                )
+            else:
+                ensure_cache_complete(
+                    args.dataset_dir,
+                    transitions_file=args.transitions_file,
+                    cache_dir=cached_dino_dir,
+                    history_len=1,  # Contrastive critic only needs single-frame DINO features
+                    device=str(device),
+                    dino_channels=args.dino_channels
+                )
+        accelerator.wait_for_everyone()
 
     # ── Datasets ──────────────────────────────────────────────────────────────
     if args.dataset_type == "calvin":
         from verify2act.data_loader_calvin import build_calvin_contrastive_datasets
+
         train_ds, val_ds = build_calvin_contrastive_datasets(
             dataset_dir=args.dataset_dir,
             val_frac=args.val_frac,
@@ -556,7 +579,7 @@ def main():
                     kl_weight=epoch_kl_weight,
                     lang_goal_weight=args.lang_goal_weight,
                     use_inbatch=True, amp_enabled=amp_enabled,
-                    use_cached=False,
+                    use_cached=(args.cached_dino_dir is not None),
                 )
 
             if loss.requires_grad is False or loss.item() == 0.0:
@@ -594,7 +617,7 @@ def main():
             model, val_ds_for_eval, device,
             accelerator=accelerator,
             n_samples=args.val_samples,
-            use_cached=False,
+            use_cached=(args.cached_dino_dir is not None),
             num_workers=args.num_workers,
         )
         train_loss = float(np.mean(totals)) if totals else float("nan")
@@ -725,6 +748,9 @@ def parse_args():
     p.add_argument("--tracker", type=str, default="tensorboard",
                    choices=["tensorboard", "wandb", "none"])
     p.add_argument("--wandb-project", type=str, default="verify2act-contrastive")
+
+    p.add_argument("--cached-dino-dir", type=str, default=None,
+               help="Path to pre-extracted DINOv2 features cache directory")
 
     return p.parse_args()
 

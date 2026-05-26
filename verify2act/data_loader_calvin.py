@@ -125,20 +125,19 @@ class CalvinTransitionDataset(Dataset):
     def _load_image(self, episode_idx: int) -> torch.Tensor:
         ep_path = self.root / f"episode_{episode_idx:07d}.npz"
         if not ep_path.exists():
-            # sometimes the dataset might be split or missing parts
-            return torch.zeros((3, 224, 224))
+            raise FileNotFoundError(f"Episode not found: {ep_path}")
             
         try:
             data = np.load(ep_path, allow_pickle=True)
             img_np = data["rgb_static"]
             if isinstance(img_np, bytes):
-                return torch.zeros((3, 224, 224))
+                raise ValueError(f"Error loading image: {ep_path}")
             
             # Convert to PIL Image
             img = Image.fromarray(img_np).convert("RGB")
             return self.transform(img)
         except Exception:
-            return torch.zeros((3, 224, 224))
+            raise FileNotFoundError(f"Error loading image: {ep_path}")
 
 def build_calvin_datasets(
     dataset_dir: str,
@@ -213,6 +212,17 @@ class CalvinContrastivePairDataset(Dataset):
         return len(self.transitions) * 2
 
     def __getitem__(self, idx):
+        # We retry up to 5000 times because the 'task_ABC_D_filtered' CALVIN subset 
+        # is extremely sparse and many episodes referenced in auto_lang_ann.npy are missing.
+        for _ in range(5000):
+            try:
+                if self.rng.random() < self.mode0_prob:
+                    return self._sample_mode0()
+                return self._sample_mode1()
+            except (FileNotFoundError, ValueError):
+                continue
+        
+        # Fallback to raising if it fails 5000 times
         if self.rng.random() < self.mode0_prob:
             return self._sample_mode0()
         return self._sample_mode1()
@@ -273,22 +283,23 @@ class CalvinContrastivePairDataset(Dataset):
             feat_path = self.cached_dino_dir / feat_name
             if feat_path.exists():
                 return torch.load(feat_path, map_location="cpu").float()
-            return torch.zeros((256, 768))
+
+            raise FileNotFoundError(f"Feature not found: {feat_path}")
                 
         ep_path = self.root / f"episode_{episode_idx:07d}.npz"
         if not ep_path.exists():
-            return torch.zeros((3, 224, 224))
+            raise FileNotFoundError(f"Episode not found: {ep_path}")
             
         try:
             data = np.load(ep_path, allow_pickle=True)
             img_np = data["rgb_static"]
             if isinstance(img_np, bytes):
-                return torch.zeros((3, 224, 224))
+                raise ValueError(f"Error loading image: {ep_path}")
             
             img = Image.fromarray(img_np).convert("RGB")
             return self.transform(img)
         except Exception:
-            return torch.zeros((3, 224, 224))
+            raise FileNotFoundError(f"Error loading image: {ep_path}")
 
 def build_calvin_contrastive_datasets(
     dataset_dir: str,
