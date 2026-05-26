@@ -62,22 +62,21 @@ def train(args):
 
     # ── Automatic Cache Checking & Generation ─────────────────────────────────
     if not args.no_cache:
+        if args.cache_dir is None:
+            # Default to saving in the parent of output_dir (e.g. output/v2a_wm/calvin/dino_features)
+            args.cache_dir = str(Path(args.output_dir).parent / "dino_features")
+            print(f"Cache directory not specified. Using default: {args.cache_dir}")
+
         if accelerator.is_local_main_process:
             from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
             
-            if args.cache_dir is None:
-                # Default to saving in the parent of output_dir (e.g. output/v2a_wm/calvin/dino_features)
-                cache_dir = str(Path(args.output_dir).parent / "dino_features")
-            else:
-                cache_dir = args.cache_dir
-                
             if args.dataset_type == "calvin":
-                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, device=str(device))
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=args.cache_dir, device=str(device))
             else:
                 ensure_cache_complete(
                     args.dataset_dir,
                     transitions_file=args.transitions_file,
-                    cache_dir=cache_dir,
+                    cache_dir=args.cache_dir,
                     history_len=args.history_len,
                     device=str(device)
                 )
@@ -93,7 +92,7 @@ def train(args):
             history_len=args.history_len,
             seed=args.seed,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None,
+            cached_dino_dir=args.cache_dir if not args.no_cache else None,
         )
     else:
         from verify2act.latent_wm.train_dynamics import LatentDynamicsDataset
@@ -103,7 +102,7 @@ def train(args):
             history_len=args.history_len,
             image_size=args.image_size,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None
+            cached_dino_dir=args.cache_dir if not args.no_cache else None
         )
         train_size = int((1.0 - args.val_frac) * len(dataset))
         val_size = len(dataset) - train_size
