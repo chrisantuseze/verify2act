@@ -93,7 +93,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/wm_history_1 \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 --batch-size 32 --lr 1e-3 --checkpoint-freq 5 \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 5 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/wm_history_1/ckpt/latent_dynamics_best.pt
 
 # -------- CALVIN --------
@@ -127,11 +127,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/wm \
+  --output-dir verify2act/output/v2a_wm/calvin/wm_history_1 \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/calvin/wm_history_1/ckpt/latent_dynamics_best.pt
 
 CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 # ==============================================================================

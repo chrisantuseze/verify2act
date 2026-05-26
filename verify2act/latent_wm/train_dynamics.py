@@ -16,7 +16,7 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from accelerate import Accelerator, DataLoaderConfiguration
+from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
 from accelerate.utils import set_seed
 
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -211,8 +211,9 @@ def train(args):
     
     # Disable RNG sync to avoid mt19937 state errors in distributed training
     # dispatch_batches=False is safer for standard datasets
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
-    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[])
+    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[], kwargs_handlers=[ddp_kwargs])
     device = accelerator.device
     # Hyperparameters
     batch_size = args.batch_size
@@ -442,8 +443,7 @@ def train(args):
             velocity_target = x_0 - noise
 
             # 5. Forward pass — conditioning uses full history, flow uses token space
-            unwrapped_model = accelerator.unwrap_model(model)
-            velocity_pred = unwrapped_model.forward(
+            velocity_pred = model(
                 F_history, A_clip, noisy_latent, t, history_mask=history_mask
             )  # (B, N, token_dim)
 
@@ -536,8 +536,7 @@ def train(args):
                 noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
                 velocity_target = x_0 - noise
 
-                unwrapped_model = accelerator.unwrap_model(model)
-                velocity_pred   = unwrapped_model.forward(
+                velocity_pred   = model(
                     F_history, A_clip, noisy_latent, t, history_mask=history_mask
                 )
 
