@@ -54,10 +54,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --output-dir verify2act/output/rla_wm/nut_assembly/wm \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --cache-dir verify2act/output/v2a_wm/nut_assembly/dino_features \
-  --num-epochs 50 \
-  --batch-size 12 \
+  --num-epochs 30 \
+  --batch-size 32 \
   --lr 1e-4 \
-  --checkpoint-freq 5
+  --checkpoint-freq 5 \
+  --resume-from verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
 
 # -------- CALVIN --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
@@ -65,10 +66,10 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/rla_wm/calvin/wm \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/encoder_only_best.pt \
   --cache-dir verify2act/output/v2a_wm/calvin/dino_features \
-  --num-epochs 20 \
-  --batch-size 12 \
+  --num-epochs 50 \
+  --batch-size 32 \
   --lr 1e-4 \
   --checkpoint-freq 5 \
   --resume-from verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt
@@ -81,7 +82,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
 python verify2act/rla_wm_baseline/visualize_baseline.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --wm-ckpt verify2act/output/rla_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
+  --wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/rla_wm/nut_assembly/decoder/latent_decoder_best.pt \
   --num-samples 5
 
@@ -90,6 +92,7 @@ python verify2act/rla_wm_baseline/visualize_baseline.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/rla_wm/calvin/decoder/latent_decoder_best.pt \
   --num-samples 5
 
