@@ -52,9 +52,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/rla_wm/nut_assembly/wm \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --cache-dir verify2act/output/v2a_wm/nut_assembly/dino_features \
-  --num-epochs 30 \
+  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --num-epochs 100 \
   --batch-size 32 \
   --lr 1e-4 \
   --checkpoint-freq 5 \
