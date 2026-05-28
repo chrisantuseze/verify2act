@@ -12,7 +12,7 @@ from decoder import FeatureDecoder
 from train_dynamics import LatentDynamicsDataset, FeatureExtractor
 
 def train_decoder(args):
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # 1. Dataset & DataLoader

@@ -125,7 +125,7 @@ def main() -> int:
     parser.add_argument("--theta-c", type=float, default=0.7, help="Consistency threshold")
     parser.add_argument("--max-replans", type=int, default=2, help="Max replanning rounds per failure")
     parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
-    parser.add_argument("--wm-mode", choices=["v2a_wm", "rla_wm", "diffusion", "vlm_only"], default="v2a_wm", help="World Model mode")
+    parser.add_argument("--wm-mode", choices=["v2a_wm", "rla_wm", "dino_wm", "diffusion", "vlm_only"], default="v2a_wm", help="World Model mode")
     
     # Diffusion world model arguments
     parser.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
@@ -202,6 +202,16 @@ def main() -> int:
             
         logger.info("ReflectVLM (Diffusion mode) selected. Bypassing Critic loading.")
         critic = None
+    elif args.wm_mode == "dino_wm":
+        logger.info("Loading DINO World Model...")
+        from verify2act.pipeline.world_model import DINOWorldModel
+        world_model = DINOWorldModel(
+            device=args.device,
+            dynamics_weights_path=args.latent_wm_ckpt,
+            history_len=args.history_len,
+        )
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
     else:
         logger.info("Loading Latent World Model...")
         world_model = LatentWorldModel(

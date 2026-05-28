@@ -635,6 +635,16 @@ def _build_world_model(args: argparse.Namespace):
         )
         return wm
 
+    if mode == "dino_wm":
+        from verify2act.pipeline.world_model import DINOWorldModel
+        wm = DINOWorldModel(
+            device=args.device, 
+            dynamics_weights_path=args.latent_wm_ckpt,
+            history_len=args.history_len,
+        )
+        return wm
+
+
     if mode == "diffusion":
         decoder_dir = args.wm_decoder_dir
         if decoder_dir is not None:
@@ -694,7 +704,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-max-tokens", type=int, default=512)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
 
-    parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "v2a_wm", "rla_wm", "vlm_only"], default="v2a_wm")
+    parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "v2a_wm", "rla_wm", "dino_wm", "vlm_only"], default="v2a_wm")
     parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
     parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/best/unet_lora")
     parser.add_argument("--wm-decoder-dir", default="verify2act/output/decoder")

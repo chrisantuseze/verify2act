@@ -178,54 +178,122 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
             traj = self.low_level_policy.propose_trajectory(obs, active_instruction)
             
             # 3. Imagine the outcome using the World Model
-            imagined_img_next = self.world_model.imagine(img_np, active_instruction) 
-            if isinstance(imagined_img_next, tuple):
-                # Handle LatentWorldModel which returns (features, image) or similar
-                imagined_img_next = imagined_img_next[1] if len(imagined_img_next) > 1 else imagined_img_next[0]
-            
-            if self.critic is not None:
-                # 4. Check temporal/physical consistency (Critic Head 2)
-                img_224_prev = preprocess_image_for_critic(img_np).to(self.device)
-                img_224_next = preprocess_image_for_critic(imagined_img_next).to(self.device)
-                
-                with torch.no_grad():
-                    emb_prev = self.critic.encode(img_224_prev)
-                    emb_next = self.critic.encode(img_224_next)
-                    mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
-                    
-                decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
+            is_latent_wm = False
+            from verify2act.pipeline.world_model import LatentWorldModel
+            if isinstance(self.world_model, LatentWorldModel):
+                is_latent_wm = True
 
-                # 5. Goal proximity check via language goal (Head 1, CLIP path)
-                with torch.no_grad():
-                    emb_next_pe = self.critic.encode(img_224_next)
-                    mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(
-                        emb_next_pe, active_instruction
-                    )
-                if decision.action != "reflect":
-                    # Only check semantics if physics didn't break
+            if is_latent_wm:
+                if self.world_model.get_history() is None:
+                    self.world_model.initialize_history(img_np)
+                F_next, _ = self.world_model.imagine(None, active_instruction)
+                
+                if self.critic is not None:
+                    # 4. Check temporal/physical consistency (Critic Head 2)
+                    with torch.no_grad():
+                        img_tensor = preprocess_image_for_critic(img_np).to(self.device)
+                        F_prev = self.world_model.extractor.extract_dino(img_tensor)
+                        emb_prev = self.critic.encode_features(F_prev)
+                        emb_next = self.critic.encode_features(F_next)
+                        mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
+                    
+                    from verify2act.critic.inference import CriticDecision, check_rollout_consistency, decide_from_proximity
+                    decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
+
+                    # 5. Goal proximity check via language goal (Head 1, CLIP path)
+                    with torch.no_grad():
+                        mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(
+                            emb_next, active_instruction
+                        )
+                    
+                    if decision.action != "reflect":
+                        # Only check semantics if physics didn't break
+                        if getattr(self, "decoder", None) is not None:
+                            # Decode DINO features to image for VLM planner verification
+                            imagined_img_next = self.decode_dino_features(F_next, self.decoder)
+                            vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
+                            if not vlm_verification["achieved"]:
+                                decision.action = "reflect"
+                                decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
+                        else:
+                            # Fallback if no decoder is present: rely on goal proximity check score
+                            if mean_prox.item() < self.theta_c:
+                                decision.action = "reflect"
+                                decision.reason = f"low_goal_proximity prox={mean_prox.item():.3f}"
+                    
+                    proximity_ok = mean_prox.item() >= self.theta_c
+                    reason = decision.reason if decision.action == "reflect" \
+                        else f"low_goal_proximity prox={mean_prox.item():.3f}"
+                    all_scores = [(mean_tc.item(), mean_prox.item())]
+                else:
+                    # No critic: use VLM-based verification directly (ReflectVLM path) if decoder is available
+                    if getattr(self, "decoder", None) is not None:
+                        imagined_img_next = self.decode_dino_features(F_next, self.decoder)
+                        vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
+                        if not vlm_verification["achieved"]:
+                            decision = check_rollout_consistency(0.0, self.theta_c)  # dummy failure
+                            decision.action = "reflect"
+                            decision.reason = f"Goal not achieved (VLM verified): {vlm_verification.get('reason')}"
+                            proximity_ok = False
+                            reason = decision.reason
+                        else:
+                            decision = check_rollout_consistency(1.0, self.theta_c)  # dummy success
+                            proximity_ok = True
+                            reason = "Goal achieved"
+                    else:
+                        # Fallback if neither critic nor decoder is present
+                        decision = check_rollout_consistency(1.0, self.theta_c)
+                        proximity_ok = True
+                        reason = "No verification (no critic and no decoder)"
+                    all_scores = [(1.0, 1.0)]
+            else:
+                # RGB / Image World Model path
+                imagined_img_next = self.world_model.imagine(img_np, active_instruction) 
+                if isinstance(imagined_img_next, tuple):
+                    imagined_img_next = imagined_img_next[1] if len(imagined_img_next) > 1 else imagined_img_next[0]
+                
+                if self.critic is not None:
+                    # 4. Check temporal/physical consistency (Critic Head 2)
+                    img_224_prev = preprocess_image_for_critic(img_np).to(self.device)
+                    img_224_next = preprocess_image_for_critic(imagined_img_next).to(self.device)
+                    
+                    with torch.no_grad():
+                        emb_prev = self.critic.encode(img_224_prev)
+                        emb_next = self.critic.encode(img_224_next)
+                        mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
+                        
+                    from verify2act.critic.inference import check_rollout_consistency
+                    decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
+
+                    # 5. Goal proximity check via language goal (Head 1, CLIP path)
+                    with torch.no_grad():
+                        emb_next_pe = self.critic.encode(img_224_next)
+                        mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(
+                            emb_next_pe, active_instruction
+                        )
+                    if decision.action != "reflect":
+                        vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
+                        if not vlm_verification["achieved"]:
+                            decision.action = "reflect"
+                            decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
+
+                    proximity_ok = mean_prox.item() >= self.theta_c
+                    reason = decision.reason if decision.action == "reflect" \
+                        else f"low_goal_proximity prox={mean_prox.item():.3f}"
+                    all_scores = [(mean_tc.item(), mean_prox.item())]
+                else:
                     vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
                     if not vlm_verification["achieved"]:
+                        decision = check_rollout_consistency(0.0, self.theta_c)  # dummy failure
                         decision.action = "reflect"
-                        decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
-
-                proximity_ok = mean_prox.item() >= self.theta_c
-                reason = decision.reason if decision.action == "reflect" \
-                    else f"low_goal_proximity prox={mean_prox.item():.3f}"
-                all_scores = [(mean_tc.item(), mean_prox.item())]
-            else:
-                # No critic: use VLM-based verification directly (ReflectVLM path)
-                vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
-                if not vlm_verification["achieved"]:
-                    decision = check_rollout_consistency(0.0, self.theta_c)  # dummy failure
-                    decision.action = "reflect"
-                    decision.reason = f"Goal not achieved (VLM verified): {vlm_verification.get('reason')}"
-                    proximity_ok = False
-                    reason = decision.reason
-                else:
-                    decision = check_rollout_consistency(1.0, self.theta_c)  # dummy success
-                    proximity_ok = True
-                    reason = "Goal achieved"
-                all_scores = [(1.0, 1.0)]
+                        decision.reason = f"Goal not achieved (VLM verified): {vlm_verification.get('reason')}"
+                        proximity_ok = False
+                        reason = decision.reason
+                    else:
+                        decision = check_rollout_consistency(1.0, self.theta_c)  # dummy success
+                        proximity_ok = True
+                        reason = "Goal achieved"
+                    all_scores = [(1.0, 1.0)]
 
             # 6. Reflection — triggered by low temporal consistency OR low goal proximity
             if decision.action == "reflect" or not proximity_ok:
@@ -241,7 +309,7 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                     full_plan=self.plan_queue,
                     ctx={
                         "all_scores": all_scores,
-                        "imagined_state": imagined_img_next,
+                        "imagined_state": imagined_img_next if not is_latent_wm or getattr(self, "decoder", None) is not None else img_np,
                         "failed_step": 0,
                         "failed_action": active_instruction,
                         "failed_highlevel_action": active_instruction,
@@ -270,3 +338,20 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                 self.low_level_policy.model.rollout_step_counter
             )
         return action
+
+    def decode_dino_features(
+        self,
+        dino_features: torch.Tensor,
+        decoder: torch.nn.Module,
+    ) -> np.ndarray:
+        """Decodes predicted DINO features back to an RGB image."""
+        if dino_features.ndim == 2:
+            dino_features = dino_features.unsqueeze(0)
+        with torch.no_grad():
+            rec_img = decoder.decode(dino_features.to(self.device))  # [-1, 1]
+            rec_img = (rec_img + 1.0) / 2.0
+            rec_img = torch.clamp(rec_img, 0.0, 1.0)
+            rec_img = rec_img.squeeze(0).cpu().numpy()  # (3, H, W)
+            rec_img = (rec_img * 255.0).astype(np.uint8)
+            rgb_img = np.transpose(rec_img, (1, 2, 0))  # (H, W, 3)
+            return rgb_img
