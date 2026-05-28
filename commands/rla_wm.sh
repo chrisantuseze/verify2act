@@ -66,8 +66,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/rla_wm/calvin/wm \
   --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --cache-dir verify2act/output/v2a_wm/calvin/dino_features \
-  --num-epochs 50 \
+  --num-epochs 100 \
   --batch-size 32 \
   --lr 1e-4 \
   --checkpoint-freq 5 \
