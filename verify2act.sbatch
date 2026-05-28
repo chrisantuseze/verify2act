@@ -5,7 +5,6 @@
 #SBATCH --ntasks-per-node=12
 #SBATCH --mail-user=chrisantus.eze@okstate.edu
 #SBATCH --mail-type=end
-#SBATCH --gres=gpu:2 
 module load apptainer/1.2.2 cuda/12.1
 export APPTAINER_BIND=$PWD
 
@@ -31,18 +30,18 @@ export APPTAINER_BIND=$PWD
 #   --causal-masking \
 #   --resume-from verify2act/output/v2a_wm/calvin/task_ABC_D/ckpt/latent_dynamics_best.pt
 
-# apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-#   --input-dir calvin/dataset/task_ABC_D/training \
-#   --output-dir calvin/dataset/task_ABC_D_filtered/training \
-#   --history-len 5
+apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+  --input-dir calvin/dataset/task_ABC_D/validation \
+  --output-dir calvin/dataset/task_ABC_D_filtered/validation \
+  --history-len 5
 
-apptainer exec --nv verify2act.sif accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 verify2act/latent_wm/train_dynamics.py \
-  --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
-  --num-epochs 10 \
-  --batch-size 16 \
-  --lr 1e-4 \
-  --causal-masking
+# apptainer exec --nv verify2act.sif accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 verify2act/latent_wm/train_dynamics.py \
+#   --dataset-type calvin \
+#   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+#   --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
+#   --num-epochs 10 \
+#   --batch-size 16 \
+#   --lr 1e-4 \
+#   --causal-masking
 
 # apptainer exec --nv verify2act.sif python3 unzip.py

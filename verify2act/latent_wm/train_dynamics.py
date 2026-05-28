@@ -16,7 +16,7 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from accelerate import Accelerator, DataLoaderConfiguration
+from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
 from accelerate.utils import set_seed
 
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -211,32 +211,33 @@ def train(args):
     
     # Disable RNG sync to avoid mt19937 state errors in distributed training
     # dispatch_batches=False is safer for standard datasets
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
-    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[])
+    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[], kwargs_handlers=[ddp_kwargs])
     device = accelerator.device
     # Hyperparameters
     batch_size = args.batch_size
     num_epochs = args.num_epochs
     lr = args.lr
     sparsity_weight = args.sparsity_weight
+
     # ── Automatic Cache Checking & Generation ─────────────────────────────────
     if not args.no_cache:
+        if args.cache_dir is None:
+            # Default to saving in the parent of output_dir (e.g. output/v2a_wm/calvin/dino_features)
+            args.cache_dir = str(Path(args.output_dir).parent / "dino_features")
+            print(f"Cache directory not specified. Using default: {args.cache_dir}")
+
         if accelerator.is_local_main_process:
             from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
             
-            if args.cache_dir is None:
-                cache_dir = str(Path(args.output_dir).parent / "dino_features")
-            else:
-                cache_dir = args.cache_dir
-                
             if args.dataset_type == "calvin":
-                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, co_locate=False, device=str(device))
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=args.cache_dir, device=str(device))
             else:
                 ensure_cache_complete(
                     args.dataset_dir,
                     transitions_file=args.transitions_file,
-                    cache_dir=cache_dir,
-                    co_locate=False,
+                    cache_dir=args.cache_dir,
                     history_len=args.history_len,
                     device=str(device)
                 )
@@ -255,7 +256,7 @@ def train(args):
             history_len=args.history_len,
             seed=args.seed,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None
+            cached_dino_dir=args.cache_dir if not args.no_cache else None
         )
         if accelerator.is_local_main_process:
             print(f"CALVIN Dataset loaded. Train: {len(train_dataset)}, Val: {len(val_dataset)}")
@@ -266,7 +267,7 @@ def train(args):
             history_len=args.history_len, 
             image_size=args.image_size,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None
+            cached_dino_dir=args.cache_dir if not args.no_cache else None
         )
         # Split into train/val
         train_size = int((1.0 - args.val_frac) * len(dataset))
@@ -442,8 +443,7 @@ def train(args):
             velocity_target = x_0 - noise
 
             # 5. Forward pass — conditioning uses full history, flow uses token space
-            unwrapped_model = accelerator.unwrap_model(model)
-            velocity_pred = unwrapped_model.forward(
+            velocity_pred = model(
                 F_history, A_clip, noisy_latent, t, history_mask=history_mask
             )  # (B, N, token_dim)
 
@@ -536,8 +536,7 @@ def train(args):
                 noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
                 velocity_target = x_0 - noise
 
-                unwrapped_model = accelerator.unwrap_model(model)
-                velocity_pred   = unwrapped_model.forward(
+                velocity_pred   = model(
                     F_history, A_clip, noisy_latent, t, history_mask=history_mask
                 )
 

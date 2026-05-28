@@ -16,7 +16,7 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
-from accelerate import Accelerator, DataLoaderConfiguration
+from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
 from accelerate.utils import set_seed
 
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -41,8 +41,9 @@ def train(args):
     set_seed(args.seed)
     
     # Disable RNG sync to avoid mt19937 state errors in distributed training
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
-    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[])
+    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[], kwargs_handlers=[ddp_kwargs])
     
     batch_size = args.batch_size
     num_epochs = args.num_epochs
@@ -66,13 +67,12 @@ def train(args):
                 cache_dir = args.cache_dir
                 
             if args.dataset_type == "calvin":
-                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, co_locate=False, device=str(device))
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, device=str(device))
             else:
                 ensure_cache_complete(
                     args.dataset_dir,
                     transitions_file=args.transitions_file,
                     cache_dir=cache_dir,
-                    co_locate=False,
                     history_len=args.history_len,
                     device=str(device)
                 )
@@ -238,10 +238,9 @@ def train(args):
             noisy_latent = (1 - t_expand) * noise + t_expand * x_0
             velocity_target = x_0 - noise
 
-            unwrapped_model = accelerator.unwrap_model(model)
             # Baseline forward_cond uses only F_t (last frame) — ignores history
-            cond = unwrapped_model.forward_cond(F_history, A_clip)
-            velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+            cond = model.forward_cond(F_history, A_clip)
+            velocity_pred = model.forward_flow(cond, noisy_latent, t)
 
             loss_cfm = F.mse_loss(velocity_pred, velocity_target)
 
@@ -324,9 +323,8 @@ def train(args):
                 noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
                 velocity_target = x_0 - noise
 
-                unwrapped_model = accelerator.unwrap_model(model)
-                cond          = unwrapped_model.forward_cond(F_history, A_clip)
-                velocity_pred = unwrapped_model.forward_flow(cond, noisy_latent, t)
+                cond          = model.forward_cond(F_history, A_clip)
+                velocity_pred = model.forward_flow(cond, noisy_latent, t)
 
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
 

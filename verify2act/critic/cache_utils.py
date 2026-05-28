@@ -25,15 +25,13 @@ def ensure_cache_complete(
     cache_dir: str = "dino_features",
     device: str = "cuda",
     batch_size: int = 64,
-    co_locate: bool = True,
     history_len: int = 3,
     dino_channels: int = 1024,
 ) -> None:
     """Checks the feature cache directory, and generates missing features if necessary."""
     root = Path(dataset_dir)
     cache_root = Path(cache_dir)
-    if not co_locate:
-        cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     trans_file_path = root / transitions_file
     if not trans_file_path.exists():
@@ -84,12 +82,8 @@ def ensure_cache_complete(
     # 2. Check which features are missing
     missing_paths = []
     for p in sorted(needed_paths):
-        if co_locate:
-            full_path = root / p
-            feat_path = full_path.parent / (full_path.stem + "_dino.pt")
-        else:
-            feat_name = p.replace("/", "_") + ".pt"
-            feat_path = cache_root / feat_name
+        feat_name = p.replace("/", "_") + ".pt"
+        feat_path = cache_root / feat_name
             
         if not feat_path.exists():
             missing_paths.append(p)
@@ -127,11 +121,8 @@ def ensure_cache_complete(
                 valid_chunk.append(p)
             except Exception as e:
                 print(f"\n⚠️ Error loading image {img_path}: {e}. Saving zero feature to maintain batch shape.")
-                if co_locate:
-                    feat_path = img_path.parent / (img_path.stem + "_dino.pt")
-                else:
-                    feat_name = p.replace("/", "_") + ".pt"
-                    feat_path = cache_root / feat_name
+                feat_name = p.replace("/", "_") + ".pt"
+                feat_path = cache_root / feat_name
                 zero_feat = torch.zeros((256, dino_channels), dtype=torch.float16)
                 torch.save(zero_feat, feat_path)
                 continue
@@ -146,12 +137,8 @@ def ensure_cache_complete(
 
         # Save to disk as fp16 (saves 50% disk space)
         for p, feat in zip(valid_chunk, feats):
-            if co_locate:
-                full_path = root / p
-                feat_path = full_path.parent / (full_path.stem + "_dino.pt")
-            else:
-                feat_name = p.replace("/", "_") + ".pt"
-                feat_path = cache_root / feat_name
+            feat_name = p.replace("/", "_") + ".pt"
+            feat_path = cache_root / feat_name
             torch.save(feat.half().cpu(), feat_path)
 
     # 5. Clean up VRAM/RAM completely
@@ -167,14 +154,12 @@ def ensure_calvin_cache_complete(
     cache_dir: str = "dino_features",
     device: str = "cuda",
     batch_size: int = 64,
-    co_locate: bool = True,
     dino_channels: int = 1024,
 ) -> None:
     """Checks the feature cache directory for CALVIN, and generates missing features if necessary."""
     root = Path(dataset_dir)
     cache_root = Path(cache_dir)
-    if not co_locate:
-        cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     # 1. Collect all episode npz files
     npz_files = list(root.glob("episode_*.npz"))
@@ -182,11 +167,8 @@ def ensure_calvin_cache_complete(
     # 2. Check which features are missing
     missing_files = []
     for f in sorted(npz_files):
-        if co_locate:
-            feat_path = f.parent / (f.stem + "_dino.pt")
-        else:
-            feat_name = f.name.replace(".npz", ".pt")
-            feat_path = cache_root / feat_name
+        feat_name = f.name.replace(".npz", ".pt")
+        feat_path = cache_root / feat_name
             
         if not feat_path.exists():
             missing_files.append(f)
@@ -223,11 +205,8 @@ def ensure_calvin_cache_complete(
                 valid_chunk.append(npz_path)
             except Exception as e:
                 print(f"\n⚠️ Error loading image from {npz_path}: {e}. Saving zero feature to maintain batch shape.")
-                if co_locate:
-                    feat_path = npz_path.parent / (npz_path.stem + "_dino.pt")
-                else:
-                    feat_name = npz_path.name.replace(".npz", ".pt")
-                    feat_path = cache_root / feat_name
+                feat_name = npz_path.name.replace(".npz", ".pt")
+                feat_path = cache_root / feat_name
                 zero_feat = torch.zeros((256, dino_channels), dtype=torch.float16)
                 torch.save(zero_feat, feat_path)
                 continue
@@ -241,11 +220,8 @@ def ensure_calvin_cache_complete(
             feats = dino.forward_features(imgs_tensor)["x_norm_patchtokens"]  # [B, 256, 1024]
 
         for npz_path, feat in zip(valid_chunk, feats):
-            if co_locate:
-                feat_path = npz_path.parent / (npz_path.stem + "_dino.pt")
-            else:
-                feat_name = npz_path.name.replace(".npz", ".pt")
-                feat_path = cache_root / feat_name
+            feat_name = npz_path.name.replace(".npz", ".pt")
+            feat_path = cache_root / feat_name
             torch.save(feat.half().cpu(), feat_path)
 
     print("Feature generation complete. Cleaning up DINOv2 from VRAM...")
@@ -276,7 +252,6 @@ if __name__ == "__main__":
             cache_dir=args.cache_dir,
             device=args.device,
             batch_size=args.batch_size,
-            co_locate=not args.no_co_locate,
             dino_channels=args.dino_channels
         )
     else:
@@ -286,7 +261,6 @@ if __name__ == "__main__":
             cache_dir=args.cache_dir,
             device=args.device,
             batch_size=args.batch_size,
-            co_locate=not args.no_co_locate,
             history_len=args.history_len,
             dino_channels=args.dino_channels
         )

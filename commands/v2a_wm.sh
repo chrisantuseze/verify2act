@@ -30,6 +30,15 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --kl-weight 5e-4 \
   --resume-from verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt
 
+python verify2act/critic/train_contrastive.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
+  --output-dir verify2act/output/contrastive/nut_assembly \
+  --epochs 30 \
+  --freeze-backbone-epochs 30 \
+  --learning-rate 1e-4 \
+  --cached-dino-dir "verify2act/output/rla_wm/dino_features/nut_assembly"
+
 # Calvin Critic Training
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=bf16 \
   verify2act/critic/train_contrastive.py \
@@ -44,6 +53,15 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --kl-weight 5e-4 \
   --resume-from verify2act/output/contrastive/calvin/best_contrastive_critic.pt
 
+python verify2act/critic/train_contrastive.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --output-dir verify2act/output/contrastive/calvin \
+  --epochs 30 \
+  --freeze-backbone-epochs 30 \
+  --learning-rate 1e-4 \
+  --cached-dino-dir "verify2act/output/rla_wm/dino_features/calvin"
+
 # ==============================================================================
 # LATENT WM TRAINING (v2a_wm - Flow Matching)
 # ==============================================================================
@@ -51,13 +69,13 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
 # -------- NUT ASSEMBLY (RoboSuite) --------
 
 # Stage 1: Train DeltaEncoder (Bottleneck)
-accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 --main_process_port 29501 \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_encoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
-  --num-epochs 100 --batch-size 16 --lr 1e-4 \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --num-epochs 50 --batch-size 64 --lr 1e-4 \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
 python verify2act/latent_wm/train_decoder.py \
@@ -73,11 +91,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 5 \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity/ckpt/latent_dynamics_best.pt \
-  --sparsity-weight 0.01
+  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --causal-masking \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
 
 # -------- CALVIN --------
 
@@ -110,11 +128,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01 \
+  --output-dir verify2act/output/v2a_wm/calvin/wm \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 150 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
-  --resume-from verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01/ckpt/latent_dynamics_best.pt \
-  --sparsity-weight 0.1
+  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --causal-masking \
+  --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 # ==============================================================================

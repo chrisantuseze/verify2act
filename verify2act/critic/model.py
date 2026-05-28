@@ -561,6 +561,7 @@ class DINOv2DualHeadCritic(nn.Module):
         self,
         *args,
         mode: str = "default",
+        use_cached: bool = False,
         **kwargs,
     ):
         if mode == "default":
@@ -581,7 +582,7 @@ class DINOv2DualHeadCritic(nn.Module):
         elif mode == "kl_loss":
             return self.kl_loss(*args, **kwargs)
         elif mode == "ddp_train_step":
-            return self.ddp_train_forward(*args, **kwargs)
+            return self.ddp_train_forward(*args, use_cached=use_cached, **kwargs)
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
