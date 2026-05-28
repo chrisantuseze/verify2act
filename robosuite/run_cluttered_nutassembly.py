@@ -192,7 +192,7 @@ class HeuristicNutAssemblyPolicy:
     NUT_EEF_ATTACH_THRESH = 0.04  # Max distance (m) between nut and EEF to consider it attached
     
     # Counter thresholds
-    GRASP_DURATION = 25
+    GRASP_DURATION = 35
     RELEASE_DURATION = 20
     ALIGN_DURATION = 40  # For aligning nut over peg
     PRE_GRASP_ALIGN_DURATION = 15  # Min steps to spend aligning orientation before lowering to nut
@@ -202,17 +202,25 @@ class HeuristicNutAssemblyPolicy:
     EEF_STAGNATION_THRESH = 0.0015  # meters (2 mm)
     EEF_STAGNATION_MAX_STEPS = 150 #50
     
-    def __init__(self, env, data_collection_mode: bool = True):
+    def __init__(self, env, data_collection_mode: bool = True, disable_reactive_blocking: bool = False, obs: Optional[dict] = None):
         """
         Initialize the heuristic policy.
         
         Args:
             env: The robosuite environment instance
             data_collection_mode: If True, disable retries for clean training trajectories
+            disable_reactive_blocking: If True, do not reactively clear blockers
+            obs: Initial observation dictionary (prevents duplicate resets)
         """
         self.env = env
-        self.obs = env.reset()
+        if obs is not None:
+            self.obs = obs
+        elif hasattr(env, "_obs") and env._obs is not None:
+            self.obs = env._obs
+        else:
+            self.obs = env.reset()
         self.data_collection_mode = data_collection_mode
+        self.disable_reactive_blocking = disable_reactive_blocking
 
         # Initialize planner (used for precondition checking only in reactive mode)
         self.planner = SymbolicPlanner(env)
@@ -476,7 +484,7 @@ class HeuristicNutAssemblyPolicy:
         print(f"Safe Z height: {self.safe_z_height}")
         print(f"Currently targeting: {self.current_nut} -> peg {self.current_peg_id}\n")
 
-        print(f"\nobs keys: {list(self.obs.keys())}\n")
+        # print(f"\nobs keys: {list(self.obs.keys())}\n")
     
     def _is_current_nut_obstacle(self) -> bool:
         """Check if current nut is an obstacle (different type from target) or target nut.
@@ -1305,7 +1313,7 @@ class HeuristicNutAssemblyPolicy:
         """
         # Check preconditions: is current nut graspable?
         can_execute, blocker = self._check_subtask_preconditions()
-        if not can_execute:
+        if not can_execute and not self.disable_reactive_blocking:
             # Reactively switch to clearing the blocker first
             print(f"⚠️ Switching target: {self.current_nut} blocked by {blocker}")
 

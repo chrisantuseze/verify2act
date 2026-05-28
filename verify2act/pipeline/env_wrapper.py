@@ -69,11 +69,11 @@ def _get_heuristic_policy_class():
     if str(robosuite_dir) not in sys.path:
         sys.path.insert(0, str(robosuite_dir))
 
-    # run_nutassembly.py defines the class at module scope.
+    # run_cluttered_nutassembly.py defines the class at module scope.
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "run_nutassembly", robosuite_dir / "run_nutassembly.py"
+        "run_cluttered_nutassembly", robosuite_dir / "run_cluttered_nutassembly.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -118,6 +118,11 @@ class NutAssemblyEnvWrapper:
         self._last_mj_model = None
 
         self._obs: Optional[Dict] = None
+        # Persistent heuristic policy instance — create lazily and reuse so
+        # the environment is not re-initialized every time a skill runs.
+        self._policy: Optional[Any] = None
+        # Track placed nuts to avoid repeats
+        self.placed: Set[str] = set()
 
     # ── reset ──────────────────────────────────────────────────────────
 
@@ -135,7 +140,10 @@ class NutAssemblyEnvWrapper:
         3. Force the on-screen viewer to refresh to T=0.
         """
         if seed is not None:
-            self.env.seed(seed)
+            if hasattr(self.env, "seed") and callable(self.env.seed):
+                self.env.seed(seed)
+            else:
+                np.random.seed(seed)
         self._obs = self.env.reset()
 
         # Invalidate renderers if MuJoCo rebuilt the model (hard_reset=True).
@@ -147,6 +155,7 @@ class NutAssemblyEnvWrapper:
         # Re-read observations so self._obs reflects the settled T=0 state
         # (env.reset() returns obs from before settling sim steps).
         self._obs = self.env._get_observations(force_update=True)
+        self.placed.clear()
         return self._obs
 
     def _settle_and_sync_viewer(self, n_steps: int = 100, sync_viewer: bool = True) -> None:
@@ -179,21 +188,60 @@ class NutAssemblyEnvWrapper:
         return self._render_rgb()
 
     def get_obj_labels(self) -> List[str]:
-        """Return human-readable labels for the *active* (target) nuts this episode.
+        """Return human-readable labels with unique IDs for all workspace nuts.
 
-        Uses ``_active_nuts()`` so only the relevant nut type for this episode
-        is returned (e.g. only round nuts when ``nut_type_mode='roundnut'``).
+        E.g. ["left round nut (id: RoundNut0)", "right round nut (id: RoundNut1)"]
         """
         labels = []
-        for name in self._active_nuts():
-            nl = name.lower()
-            if "round" in nl:
-                labels.append("round nut")
-            elif "square" in nl:
-                labels.append("square nut")
+        active = self._all_workspace_nuts()
+        round_nuts = [name for name in active if "round" in name.lower()]
+        square_nuts = [name for name in active if "square" in name.lower()]
+        
+        def get_x_pos(name):
+            try:
+                body_id = self.env.sim.model.body_name2id(name)
+                return self.env.sim.data.body_xpos[body_id][0]
+            except Exception:
+                try:
+                    body_id = self.env.sim.model.body_name2id(f"{name}_main")
+                    return self.env.sim.data.body_xpos[body_id][0]
+                except Exception:
+                    return 0.0
+
+        # Sort round/square nuts by x position to generate spatial qualifiers
+        round_nuts = sorted(round_nuts, key=get_x_pos)
+        square_nuts = sorted(square_nuts, key=get_x_pos)
+        
+        def assign_labels(nuts, type_str):
+            if len(nuts) == 1:
+                return [f"{type_str} (id: {nuts[0]})"]
+            elif len(nuts) == 2:
+                return [
+                    f"left {type_str} (id: {nuts[0]})",
+                    f"right {type_str} (id: {nuts[1]})"
+                ]
+            elif len(nuts) == 3:
+                return [
+                    f"left {type_str} (id: {nuts[0]})",
+                    f"middle {type_str} (id: {nuts[1]})",
+                    f"right {type_str} (id: {nuts[2]})"
+                ]
+            elif len(nuts) == 4:
+                return [
+                    f"leftmost {type_str} (id: {nuts[0]})",
+                    f"middle-left {type_str} (id: {nuts[1]})",
+                    f"middle-right {type_str} (id: {nuts[2]})",
+                    f"rightmost {type_str} (id: {nuts[3]})"
+                ]
             else:
-                labels.append(nl.replace("_", " "))
-        return sorted(set(labels))
+                res = []
+                for idx, name in enumerate(nuts):
+                    res.append(f"{type_str} {idx} (id: {name})")
+                return res
+
+        labels.extend(assign_labels(round_nuts, "round nut"))
+        labels.extend(assign_labels(square_nuts, "square nut"))
+        return labels
 
     def get_task_instruction(self) -> str:
         """Return a concise task instruction matching the active nut type this episode."""
@@ -244,6 +292,12 @@ class NutAssemblyEnvWrapper:
 
         return self._nut_names()
 
+    def _all_workspace_nuts(self) -> List[str]:
+        """Return name strings of all round and square nuts present in the environment workspace."""
+        if hasattr(self.env, "round_nut_names") and hasattr(self.env, "square_nut_names"):
+            return list(self.env.round_nut_names) + list(self.env.square_nut_names)
+        return self._active_nuts()
+
     # ── state save / restore (for oracle world model) ──────────────────
 
     def save_state(self) -> Any:
@@ -274,7 +328,21 @@ class NutAssemblyEnvWrapper:
         peg_id = self._peg_id_for_nut(nut_name)
 
         HeuristicPolicy = _get_heuristic_policy_class()
-        policy = HeuristicPolicy(self.env)
+        # Create the policy lazily and reuse across skill executions so the
+        # wrapped env is not re-created/reset when we retry or run multiple
+        # skills. Recreate only if the stored policy references a different
+        # env instance or is not of the expected class.
+        if (
+            self._policy is None
+            or not isinstance(self._policy, HeuristicPolicy)
+        ):
+            self._policy = HeuristicPolicy(
+                self.env,
+                data_collection_mode=False,
+                disable_reactive_blocking=True,
+                obs=self._obs
+            )
+        policy = self._policy
 
         # Force the policy to target the requested nut.
         policy.obs = self._obs
@@ -282,30 +350,56 @@ class NutAssemblyEnvWrapper:
         policy.current_peg_id = peg_id
         policy.nuts_to_place = [nut_name]
         policy.grasp_attempts = 0
+        print(f"Forcing policy target: {policy.current_nut} -> peg {policy.current_peg_id}")
+
+        is_obstacle = self._is_nut_obstacle(nut_name)
 
         # Set the starting stage based on skill.
-        policy.stage = self._initial_stage(skill)
+        policy.stage = self._initial_stage(skill, is_obstacle=is_obstacle)
 
-        terminal_stages = self._terminal_stages(skill)
+        terminal_stages = self._terminal_stages(skill, is_obstacle=is_obstacle)
         skill_completed = False
 
+        prev_stage = policy.stage
+
         for _ in range(max_steps):
-            action, _done = policy.step()
-            self._obs, _reward, env_done, _info = self.env.step(action)
+            try:
+                action, _done = policy.step()
+                self._obs, _reward, env_done, _info = self.env.step(action)
+            except ValueError as exc:
+                # The robosuite horizon was consumed (env.done=True) — usually
+                # because the EEF-stagnation handler burned through many steps
+                # before skill completion.  Treat as a clean skill failure.
+                if "terminated episode" in str(exc):
+                    logger.warning(
+                        "execute_action: env horizon exhausted mid-skill ('%s'). "
+                        "Treating as skill failure.",
+                        skill,
+                    )
+                    break
+                raise
             policy.obs = self._obs
+
+            if policy.stage != prev_stage:
+                logger.debug("Stage transition: %s → %s", prev_stage, policy.stage)
+                prev_stage = policy.stage
 
             if policy.stage in terminal_stages:
                 skill_completed = True
+                print(f"Skill '{skill}' completed at stage '{policy.stage}'")
                 break
 
             # If the state-machine moved to "done" or "skip_nut", stop.
             if policy.stage in ("done", "skip_nut"):
+                if policy.stage == "done":
+                    skill_completed = True
+                print(f"Skill '{skill}' terminated early at stage '{policy.stage}'")
                 break
 
         return self._obs, skill_completed
 
     def execute_nut_assembly(
-        self, nut_name: str, max_steps_per_skill: int = 400
+        self, nut_name: str | dict, max_steps_per_skill: int = 700
     ) -> Tuple[Dict, bool]:
         """Execute a full pick-then-insert assembly for one nut.
 
@@ -314,9 +408,10 @@ class NutAssemblyEnvWrapper:
 
         Parameters
         ----------
-        nut_name : str
+        nut_name : str | dict
             The nut label exactly as provided by the VLM / ``get_obj_labels()``,
-            e.g. ``"left round nut"``.
+            e.g. ``"left round nut"`` or a paired dict
+            ``{"label": "left round nut", "id": "RoundNut0"}``.
         max_steps_per_skill : int
             Maximum environment steps allowed per skill (pick and insert each).
 
@@ -326,9 +421,34 @@ class NutAssemblyEnvWrapper:
             *success* is ``True`` only when both pick **and** insert complete
             their terminal stages within the step budget.
         """
-        _, pick_ok = self.execute_action(f"pick {nut_name}", max_steps=max_steps_per_skill)
-        obs, insert_ok = self.execute_action(f"insert {nut_name}", max_steps=max_steps_per_skill)
-        return obs, pick_ok and insert_ok
+        if isinstance(nut_name, dict):
+            nut_id = nut_name.get("id")      # e.g. "RoundNut0" — used for placed-set
+            nut_label = nut_name.get("label", nut_id)  # human label for world-model / logging
+            nut_query = nut_id                # Use exact ID so _resolve_nut_name matches it perfectly
+        else:
+            nut_label = nut_name
+            nut_query = nut_name
+            nut_id = self._resolve_nut_name(nut_name)  # resolve once for the placed-set
+
+        if nut_id and nut_id in self.placed:
+            print(f"Nut '{nut_id}' is already placed. Skipping execution.")
+            return self._obs, True
+
+        print(f"Nut query: {nut_query}")
+        _, pick_ok = self.execute_action(f"pick {nut_query}", max_steps=max_steps_per_skill)
+        print(f"Pick completed: {pick_ok}")
+
+        if not pick_ok:
+            print(f"Pick failed for nut '{nut_query}'. Aborting insert.")
+            return self._obs, False
+
+        obs, insert_ok = self.execute_action(f"insert {nut_query}", max_steps=max_steps_per_skill)
+        print(f"Insert completed: {insert_ok}")
+
+        success = pick_ok and insert_ok
+        if success and nut_id:
+            self.placed.add(nut_id)
+        return obs, success
 
     # ── internal helpers ───────────────────────────────────────────────
 
@@ -366,29 +486,127 @@ class NutAssemblyEnvWrapper:
         return skill, nut_query
 
     def _resolve_nut_name(self, nut_query: str) -> str:
-        """Map an object query like ``'round nut'`` to the env's nut name
-        (e.g. ``'RoundNut0'``).  Ignores spatial qualifiers (front-left etc.)."""
+        """Map an object query to the env's canonical nut name (e.g. ``'RoundNut0'``).
+
+        Resolution order
+        ----------------
+        1. Case-insensitive exact match against env nut names (handles direct ID
+           inputs like ``'RoundNut0'`` returned by the VLM).
+        2. Spatial qualifier matching (resolves relative terms like ``'left round nut'``).
+        3. Fuzzy type match on ``'round'`` / ``'square'`` substring — but only
+           among *unplaced* nuts so we prefer the next available instance.
+        4. Fuzzy type match among all nuts as final fallback.
+        """
         query_lower = nut_query.lower()
         nut_names = self._nut_names()
+
+        # 1. Case-insensitive exact match (handles env IDs like "RoundNut0")
         for name in nut_names:
-            nl = name.lower()
-            if "round" in query_lower and "round" in nl:
+            if name.lower() == query_lower:
                 return name
-            if "square" in query_lower and "square" in nl:
+
+        # 2. Spatial qualifier matching
+        matched_spatial = self._resolve_spatial_nut(query_lower)
+        if matched_spatial:
+            return matched_spatial
+
+        # 3. Type-based fuzzy match — prefer unplaced nuts so we pick the next available
+        for name in [n for n in nut_names if n not in self.placed]:
+            if self._is_type_match(query_lower, name):
                 return name
+
+        # 4. Fallback: type fuzzy match across all nuts regardless of placed state
+        for name in nut_names:
+            if self._is_type_match(query_lower, name):
+                return name
+
         raise ValueError(
             f"No nut matching '{nut_query}' found. Known nuts: {nut_names}"
         )
 
+    def _resolve_spatial_nut(self, query_lower: str) -> Optional[str]:
+        """Resolve relative spatial qualifiers ('left', 'right', indices) to a canonical nut name."""
+        active = self._active_nuts()
+        round_nuts = [name for name in active if "round" in name.lower()]
+        square_nuts = [name for name in active if "square" in name.lower()]
+
+        def get_x_pos(name):
+            try:
+                body_id = self.env.sim.model.body_name2id(name)
+                return self.env.sim.data.body_xpos[body_id][0]
+            except Exception:
+                try:
+                    body_id = self.env.sim.model.body_name2id(f"{name}_main")
+                    return self.env.sim.data.body_xpos[body_id][0]
+                except Exception:
+                    return 0.0
+
+        # Sort round/square nuts by x position (exactly matching get_obj_labels)
+        round_sorted = sorted(round_nuts, key=get_x_pos)
+        square_sorted = sorted(square_nuts, key=get_x_pos)
+
+        def match_in_list(nuts, type_str):
+            if type_str not in query_lower:
+                return None
+            if len(nuts) == 1:
+                return nuts[0]
+            elif len(nuts) == 2:
+                if "left" in query_lower:
+                    return nuts[0]
+                if "right" in query_lower:
+                    return nuts[1]
+            elif len(nuts) == 3:
+                if "left" in query_lower:
+                    return nuts[0]
+                if "middle" in query_lower:
+                    return nuts[1]
+                if "right" in query_lower:
+                    return nuts[2]
+            elif len(nuts) == 4:
+                if "leftmost" in query_lower or ("left" in query_lower and "middle" not in query_lower):
+                    return nuts[0]
+                if "middle-left" in query_lower or "left-middle" in query_lower:
+                    return nuts[1]
+                if "middle-right" in query_lower or "right-middle" in query_lower:
+                    return nuts[2]
+                if "rightmost" in query_lower or ("right" in query_lower and "middle" not in query_lower):
+                    return nuts[3]
+            
+            # Fallback to index matching (for any number of nuts, or if they still refer to index)
+            for idx, name in enumerate(nuts):
+                if f"{type_str} {idx}" in query_lower or f" {idx}" in query_lower:
+                    return name
+            return None
+
+        return match_in_list(round_sorted, "round") or match_in_list(square_sorted, "square")
+
     @staticmethod
-    def _initial_stage(skill: str) -> str:
+    def _is_type_match(query_lower: str, name: str) -> bool:
+        """Check if a candidate nut name matches the type substring in the query."""
+        nl = name.lower()
+        if "round" in query_lower and "round" in nl:
+            return True
+        if "square" in query_lower and "square" in nl:
+            return True
+        return False
+
+    def _is_nut_obstacle(self, nut_name: str) -> bool:
+        """Check if target nut is an obstacle (different type from target nut type of this episode)."""
+        current_type = getattr(self.env, "current_nut_type", None)
+        if current_type == "roundnut":
+            return "square" in nut_name.lower()
+        elif current_type == "squarenut":
+            return "round" in nut_name.lower()
+        return False
+
+    def _initial_stage(self, skill: str, is_obstacle: bool = False) -> str:
         """Map a skill name to the heuristic policy's starting stage."""
         skill = skill.lower()
         # High-level skills
         if skill == "pick":
             return "move_to_nut"
         if skill == "insert":
-            return "move_to_peg"
+            return "move_to_table" if is_obstacle else "move_to_peg"
         if skill in ("place", "put_down"):
             return "move_to_table"
         # Sub-skill primitives (maps mirror the subskill event-tag boundaries
@@ -406,18 +624,17 @@ class NutAssemblyEnvWrapper:
         # Default: start from the beginning of the pick-place cycle.
         return "move_to_nut"
 
-    @staticmethod
-    def _terminal_stages(skill: str) -> frozenset:
+    def _terminal_stages(self, skill: str, is_obstacle: bool = False) -> frozenset:
         """Stages whose entry signals that *skill* has completed."""
         skill = skill.lower()
         # High-level skills
         if skill == "pick":
-            # Pick completes when the policy transitions to "move_to_peg"
-            # (nut is lifted and heading toward the peg).
-            return frozenset({"move_to_peg"})
+            # Pick completes when the policy transitions to the next high-level phase.
+            # If the nut is an obstacle, it goes to "move_to_table" instead of "move_to_peg".
+            return frozenset({"move_to_table"}) if is_obstacle else frozenset({"move_to_peg"})
         if skill == "insert":
             # Insert completes at release or retract.
-            return frozenset({"release", "retract", "reset_orientation"})
+            return frozenset({"reset_orientation"})
         if skill in ("place", "put_down"):
             return frozenset({"release", "retract", "reset_orientation"})
         # Sub-skill primitives

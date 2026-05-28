@@ -1,0 +1,36 @@
+# Few-shot example: obstacle clearing — VLM proposes clearing a blocking square nut first
+task: example_4
+instruction: "Assemble all square nuts onto their matching pegs."
+objects:
+  - "left square nut (id: SquareNut0)"
+  - "right square nut (id: SquareNut1)"
+  - "round nut (id: RoundNut0)"
+history: []
+
+# Images (relative to this file)
+current_image: example_4_current.png
+goal_image: example_4_goal.png
+horizon: 4
+
+# Behaviors
+plan:
+  - {"label": "round nut", "id": "RoundNut0"}
+  - {"label": "left square nut", "id": "SquareNut0"}
+  - {"label": "right square nut", "id": "SquareNut1"}
+plans:
+  - - {"label": "round nut", "id": "RoundNut0"}
+    - {"label": "left square nut", "id": "SquareNut0"}
+    - {"label": "right square nut", "id": "SquareNut1"}
+  - - {"label": "round nut", "id": "RoundNut0"}
+    - {"label": "right square nut", "id": "SquareNut1"}
+    - {"label": "left square nut", "id": "SquareNut0"}
+
+# Reflect (not used for this example)
+analysis: Null
+revised_plan: Null
+
+# OpenAI
+role: system
+name: Null
+name_query: example_user
+name_response: example_assistant
