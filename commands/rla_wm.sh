@@ -105,13 +105,15 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --latent-wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --num-round 2 \
-  --num-square 1 \
-  --initial-stacking-prob 0.0 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
+  --randomize-nut-counts \
+  --num-episodes 25 \
+  --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode rla_wm \
-  --output-dir verify2act/output/inference_run/rla_wm/nut_assembly
+  --wm-mode rla_wm
 
 # Calvin Inference (using rla_wm)
 xvfb-run -a python verify2act/pipeline/inference.py \
@@ -121,8 +123,7 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --num-round 2 \
   --num-square 1 \
-  --initial-stacking-prob 0.0 \
+  --guarantee-overlap \
   --device cuda \
   --dtype fp16 \
-  --wm-mode rla_wm \
-  --output-dir verify2act/output/inference_run/rla_wm/calvin
+  --wm-mode rla_wm

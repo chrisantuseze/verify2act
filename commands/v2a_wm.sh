@@ -169,11 +169,11 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
   --history-len 1 \
-  --num-round 3 \
-  --num-square 2 \
-  --initial-stacking-prob 0.5 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 15 \
+  --num-episodes 25 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
@@ -182,15 +182,15 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 # RoboSuite Inference (using rla_wm baseline)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
-  --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
+  --latent-wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/rla_wm/nut_assembly/decoder \
   --history-len 1 \
-  --num-round 3 \
-  --num-square 2 \
-  --initial-stacking-prob 0.5 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 15 \
+  --num-episodes 25 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
@@ -202,11 +202,11 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --wm-adapter-dir verify2act/output/diffusion_wm/nut_assembly/wm/best/unet_lora \
   --wm-decoder-dir verify2act/output/diffusion_wm/nut_assembly/decoder/checkpoint-5000 \
   --history-len 1 \
-  --num-round 3 \
-  --num-square 2 \
-  --initial-stacking-prob 0.5 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 20 \
+  --num-episodes 25 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
@@ -215,11 +215,11 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 # RoboSuite Inference (using vlm_only baseline)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --history-len 1 \
-  --num-round 3 \
-  --num-square 2 \
-  --initial-stacking-prob 0.5 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 15 \
+  --num-episodes 25 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \

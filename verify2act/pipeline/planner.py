@@ -956,6 +956,9 @@ class BeamSearchPlanner:
         """
         import torch
         device = next(self.critic.parameters()).device
+        # Convert numpy array to torch tensor if necessary
+        if isinstance(dino_features, np.ndarray):
+            dino_features = torch.from_numpy(dino_features)
         # Ensure features have a batch dimension (B, num_patches, dino_channels)
         if dino_features.ndim == 2:
             dino_features = dino_features.unsqueeze(0)

@@ -332,10 +332,7 @@ class NutAssemblyEnvWrapper:
         # wrapped env is not re-created/reset when we retry or run multiple
         # skills. Recreate only if the stored policy references a different
         # env instance or is not of the expected class.
-        if (
-            self._policy is None
-            or not isinstance(self._policy, HeuristicPolicy)
-        ):
+        if self._policy is None or not isinstance(self._policy, HeuristicPolicy):
             self._policy = HeuristicPolicy(
                 self.env,
                 data_collection_mode=False,
@@ -449,6 +446,150 @@ class NutAssemblyEnvWrapper:
         if success and nut_id:
             self.placed.add(nut_id)
         return obs, success
+
+    def is_nut_blocked_by_any_other_nut(self, nut_id: str) -> Optional[str]:
+        """Check if *nut_id* is physically blocked by another nut stacked on top of it.
+
+        Returns the name of the blocking nut if blocked, otherwise None.
+        """
+        # Get target position
+        try:
+            body_id = self.env.sim.model.body_name2id(f"{nut_id}_main")
+        except Exception:
+            try:
+                body_id = self.env.obj_body_id[nut_id]
+            except Exception:
+                try:
+                    body_id = self.env.sim.model.body_name2id(nut_id)
+                except Exception:
+                    logger.error(f"Could not resolve body ID for {nut_id} to check blocking")
+                    return None
+
+        pos_target = self.env.sim.data.body_xpos[body_id].copy()
+
+        # Check against all other nuts in the environment
+        all_nuts = self.env.round_nut_names + self.env.square_nut_names
+        for other_name in all_nuts:
+            if other_name == nut_id:
+                continue
+            if other_name in self.placed:
+                continue  # Already placed on a peg, not blocking
+
+            try:
+                other_body_id = self.env.sim.model.body_name2id(f"{other_name}_main")
+            except Exception:
+                try:
+                    other_body_id = self.env.obj_body_id[other_name]
+                except Exception:
+                    try:
+                        other_body_id = self.env.sim.model.body_name2id(other_name)
+                    except Exception:
+                        continue
+
+            pos_other = self.env.sim.data.body_xpos[other_body_id]
+
+            # Stacked check:
+            # 1. Close in XY plane (within 0.06 meters)
+            xy_dist = np.linalg.norm(pos_other[:2] - pos_target[:2])
+            # 2. Significantly higher in Z (other nut is stacked on top)
+            z_diff = pos_other[2] - pos_target[2]
+
+            # Standard nut height is 0.04m, so a difference between 0.015 and 0.06 is expected.
+            if xy_dist < 0.06 and 0.015 < z_diff < 0.06:
+                return other_name
+        return None
+
+    def execute_nut_oracle(
+        self, nut_name: str | dict
+    ) -> Tuple[Dict, bool]:
+        """Programmatically execute an assembly or clearance action via state teleportation.
+
+        This bypasses the physical robotic controller and simulates a perfect execution,
+        allowing clean evaluation of high-level planning and obstacle reasoning.
+        """
+        if isinstance(nut_name, dict):
+            nut_id = nut_name.get("id")
+            nut_query = nut_id
+        else:
+            nut_query = nut_name
+            nut_id = self._resolve_nut_name(nut_name)
+
+        if not nut_id:
+            logger.error(f"[ORACLE] Could not resolve nut name for {nut_name}")
+            return self._obs, False
+
+        if nut_id in self.placed:
+            print(f"Nut '{nut_id}' is already placed. Skipping execution.")
+            return self._obs, True
+
+        # Check if the nut is physically blocked by an obstacle stacked on top
+        blocking_nut = self.is_nut_blocked_by_any_other_nut(nut_id)
+        if blocking_nut:
+            logger.warning(
+                f"[ORACLE] Action FAILED: Nut '{nut_id}' is physically blocked by stacked nut '{blocking_nut}'."
+            )
+            return self._obs, False
+
+        is_obstacle = self._is_nut_obstacle(nut_id)
+
+        try:
+            # 1. Get body ID in MuJoCo
+            try:
+                body_id = self.env.sim.model.body_name2id(f"{nut_id}_main")
+            except Exception:
+                body_id = self.env.sim.model.body_name2id(nut_id)
+            
+            # Find the starting index for this body's free joint
+            qpos_start_idx = self.env.sim.model.jnt_qposadr[self.env.sim.model.body_jntadr[body_id]]
+
+            if is_obstacle:
+                # TELEPORT TO TABLE (Clear Obstacle)
+                # Place at a randomized, safe table coordinate away from pegs
+                new_x = np.random.uniform(-0.25, 0.25)
+                new_y = np.random.uniform(-0.15, -0.25)
+                new_z = 0.82  # resting on table
+
+                self.env.sim.data.qpos[qpos_start_idx : qpos_start_idx + 3] = [new_x, new_y, new_z]
+                # Reset orientation to flat
+                self.env.sim.data.qpos[qpos_start_idx + 3 : qpos_start_idx + 7] = [1.0, 0.0, 0.0, 0.0]
+                print(f"[ORACLE] Cleared obstacle {nut_id} to table position ({new_x:.2f}, {new_y:.2f})")
+                success = True
+            else:
+                # TELEPORT TO PEG (Assembly)
+                peg_id = self._peg_id_for_nut(nut_id)
+                peg_body_id = self._peg_body_id(peg_id)
+                peg_pos = self.env.sim.data.body_xpos[peg_body_id]
+
+                # Stack height depends on how many nuts are already on this peg
+                nuts_on_peg = sum(1 for p_nut in self.placed if self._peg_id_for_nut(p_nut) == peg_id)
+                stack_offset = 0.035 * nuts_on_peg
+
+                new_x = peg_pos[0]
+                new_y = peg_pos[1]
+                new_z = peg_pos[2] + 0.03 + stack_offset
+
+                self.env.sim.data.qpos[qpos_start_idx : qpos_start_idx + 3] = [new_x, new_y, new_z]
+                self.env.sim.data.qpos[qpos_start_idx + 3 : qpos_start_idx + 7] = [1.0, 0.0, 0.0, 0.0]
+
+                self.placed.add(nut_id)
+                print(f"[ORACLE] Teleported nut {nut_id} to peg {peg_id} (stack level {nuts_on_peg})")
+                success = True
+
+            # 2. Reset robot arm to neutral, safe pose to avoid collisions
+            if hasattr(self.env, "robots") and len(self.env.robots) > 0:
+                robot = self.env.robots[0]
+                neutral_qpos = robot.init_qpos
+                robot.set_robot_joint_positions(neutral_qpos)
+
+            # 3. Settle physics and sync rendering
+            self._settle_and_sync_viewer(n_steps=30, sync_viewer=True)
+            self._obs = self.env._get_observations(force_update=True)
+
+            return self._obs, success
+
+        except Exception as e:
+            logger.error(f"[ORACLE] Teleportation failed for {nut_id}: {e}")
+            return self._obs, False
 
     # ── internal helpers ───────────────────────────────────────────────
 
@@ -634,7 +775,7 @@ class NutAssemblyEnvWrapper:
             return frozenset({"move_to_table"}) if is_obstacle else frozenset({"move_to_peg"})
         if skill == "insert":
             # Insert completes at release or retract.
-            return frozenset({"reset_orientation"})
+            return frozenset({"move_to_nut"})
         if skill in ("place", "put_down"):
             return frozenset({"release", "retract", "reset_orientation"})
         # Sub-skill primitives

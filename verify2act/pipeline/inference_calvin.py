@@ -140,7 +140,7 @@ def main() -> int:
     
     # Evaluation config
     parser.add_argument("--debug", action="store_true", help="Print debug info and visualize environment")
-    parser.add_argument("--eval-log-dir", default="verify2act/output/inference_run/v2a_wm/calvin", help="Directory where evaluation logs are saved")
+    parser.add_argument("--output-dir", default="verify2act/output/inference_run", help="Base directory where evaluation logs are saved")
 
     args = parser.parse_args()
 
@@ -259,16 +259,63 @@ def main() -> int:
     # Retrieve the wrapped environment from the low-level policy wrapper
     env = agent.low_level_policy.env
 
-    logger.info("Starting standard CALVIN evaluation sequence...")
+    # ── Evaluation ──────────────────────────────────────────────────────────
+    eval_dir = Path(args.output_dir) / args.wm_mode / "calvin"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(
+        "Starting standard CALVIN evaluation sequence: mode=%s, output_dir=%s",
+        args.wm_mode, eval_dir
+    )
+    
     results = evaluate_policy(
         model=agent,
         env=env,
         epoch=0,
-        eval_log_dir=args.eval_log_dir,
+        eval_log_dir=str(eval_dir),
         debug=args.debug,
     )
 
-    logger.info("Evaluation complete! Results: %s", results)
+    # ── Aggregate metrics ────────────────────────────────────────────────
+    num_seqs = len(results)
+    successes = sum(1 for r in results if r == 5)
+    total_subtasks = sum(results)
+    max_subtasks = num_seqs * 5
+
+    summary = {
+        "wm_mode": args.wm_mode,
+        "num_sequences": num_seqs,
+        "success_rate": successes / num_seqs if num_seqs else 0.0,
+        "subtask_completion_rate": total_subtasks / max_subtasks if max_subtasks else 0.0,
+        "avg_subtasks_completed": total_subtasks / num_seqs if num_seqs else 0.0,
+        "per_sequence": [
+            {
+                "sequence": i,
+                "success": r == 5,
+                "subtasks_completed": r,
+                "total_target_subtasks": 5,
+            }
+            for i, r in enumerate(results)
+        ],
+    }
+
+    summary_path = eval_dir / "eval_summary.json"
+    with open(summary_path, "w") as f:
+        import json
+        json.dump(summary, f, indent=2)
+    logger.info("Eval summary saved to %s", summary_path)
+
+    # Print final report
+    print("\n" + "=" * 60)
+    print(f"  EVALUATION COMPLETE — {args.wm_mode} (CALVIN)")
+    print("=" * 60)
+    print(f"  Sequences:                 {num_seqs}")
+    print(f"  Success Rate (5/5):        {summary['success_rate']:.1%} ({successes}/{num_seqs})")
+    print(f"  Subtask Completion Rate:   {summary['subtask_completion_rate']:.1%} ({total_subtasks}/{max_subtasks})")
+    print(f"  Avg Subtasks Completed:    {summary['avg_subtasks_completed']:.2f}")
+    print(f"  Results:                   {summary_path}")
+    print("=" * 60 + "\n")
+
     env.close()
     return 0
 
