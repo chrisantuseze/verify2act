@@ -183,10 +183,10 @@ class ExamplePrompt:
         horizon = self.horizon or 10
 
         if num_candidates > 1:
-            req_format = f'Respond with JSON only: {{"plans": [["nut_label_1", ...], ...]}}'
+            req_format = 'Respond with JSON only: {"plans": [[{"label": "nut_label", "id": "NutId"}, ...], ...]}'
             plan_req = f"Propose exactly {num_candidates} distinct, diverse, and plausible candidate plans to achieve the task."
         else:
-            req_format = f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+            req_format = 'Respond with JSON only: {"plan": [{"label": "nut_label", "id": "NutId"}, ...]}'
             plan_req = "List the available nuts in the order they should be assembled."
 
         if (
@@ -411,16 +411,16 @@ class PromptManager:
 
         # 3. User message (multimodal)
         history_str = (
-            "\n".join(f"  {i+1}. {a}" for i, a in enumerate(history[-10:]))
+            "\n".join(f"  {i+1}. {a.get('label', a) + ' (id: ' + a.get('id', '') + ')' if isinstance(a, dict) else a}" for i, a in enumerate(history[-10:]))
             if history else "  (none — start of episode)"
         )
         obj_str = ", ".join(obj_labels)
 
         if num_candidates > 1:
-            req_format = f'Respond with JSON only: {{"plans": [["nut_label_1", ...], ...]}}'
+            req_format = 'Respond with JSON only: {"plans": [[{"label": "nut_label", "id": "NutId"}, ...], ...]}'
             plan_req = f"Propose exactly {num_candidates} distinct, diverse, and plausible candidate plans to achieve the task."
         else:
-            req_format = f'Respond with JSON only: {{"plan": ["nut_label_1", "nut_label_2", ...]}}'
+            req_format = 'Respond with JSON only: {"plan": [{"label": "nut_label", "id": "NutId"}, ...]}'
             plan_req = "List the available nuts in the order they should be assembled."
 
         user_content = [
@@ -428,7 +428,9 @@ class PromptManager:
             _text_block("### Current state (robot's current observation)"),
             _img_block(current_image_np),
             _text_block(
-                f"### Assembled nuts (history)\n{history_str}\n\n"
+                f"### Action history\n"
+                f"(entries marked [FAILED] are kinematic failures — the nut is still on the table and must be retried)\n"
+                f"{history_str}\n\n"
                 f"### Planning request\n"
                 f"{plan_req}\n"
                 f"Available nuts: {obj_str}\n\n"
@@ -483,10 +485,10 @@ class PromptManager:
 
         # 3. User message (multimodal)
         history_str = (
-            "\n".join(f"  {i+1}. {a}" for i, a in enumerate(history[-10:]))
+            "\n".join(f"  {i+1}. {a.get('label', a) + ' (id: ' + a.get('id', '') + ')' if isinstance(a, dict) else a}" for i, a in enumerate(history[-10:]))
             if history else "  (none — start of episode)"
         )
-        plan_str = "\n".join(f"  step {i}: {a}" for i, a in enumerate(full_plan))
+        plan_str = "\n".join(f"  step {i}: {a.get('label', a) + ' (id: ' + a.get('id', '') + ')' if isinstance(a, dict) else a}" for i, a in enumerate(full_plan))
         scores_str = ", ".join(
             f"step {i}: {s:.2f}" for i, (s, _) in enumerate(ctx["all_scores"])
         )
@@ -503,7 +505,9 @@ class PromptManager:
             _img_block(current_image_np),
             # 2. Execution history
             _text_block(
-                f"### 2. Execution history\n{history_str}"
+                f"### 2. Action history\n"
+                f"(entries marked [FAILED] are kinematic failures — the nut is still on the table)\n"
+                f"{history_str}"
             ),
             # 3. Original proposed plan
             _text_block(

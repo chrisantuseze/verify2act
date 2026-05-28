@@ -2,8 +2,10 @@
 task: example_1
 instruction: "Assemble all round nuts onto their matching pegs."
 objects:
-  - "left round nut"
-  - "right round nut"
+  - "left round nut (id: RoundNut0)"
+  - "right round nut (id: RoundNut1)"
+  - "left square nut (id: SquareNut0)"
+  - "right square nut (id: SquareNut1)"
 history: []
 
 # Images (relative to this file)
@@ -13,11 +15,13 @@ horizon: 4
 
 # Behaviors — query is auto-generated; these are the expected responses
 plan:
-  - "left round nut"
-  - "right round nut"
+  - {"label": "left round nut", "id": "RoundNut0"}
+  - {"label": "right round nut", "id": "RoundNut1"}
 plans:
-  - ["left round nut", "right round nut"]
-  - ["right round nut", "left round nut"]
+  - - {"label": "left round nut", "id": "RoundNut0"}
+    - {"label": "right round nut", "id": "RoundNut1"}
+  - - {"label": "right round nut", "id": "RoundNut1"}
+    - {"label": "left round nut", "id": "RoundNut0"}
 
 # Reflect (not used for this example)
 analysis: Null

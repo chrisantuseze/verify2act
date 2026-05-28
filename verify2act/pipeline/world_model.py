@@ -396,13 +396,15 @@ class LatentWorldModel(WorldModelBase):
         self.extractor = FeatureExtractor(self.device, dino_channels=dino_channels)
 
         logger.info("Initializing Latent Dynamics Core...")
+        # Build on CPU first, then move to GPU to manage memory
         self.dynamics = LatentDynamicsModel(
             dino_channels=dino_channels,
             history_len=history_len,
             token_dim=token_dim,
             num_patches=num_patches,
-        ).to(self.device)
+        )
         self.dynamics.eval()
+        self.dynamics = self.dynamics.to(self.device)
 
         if dynamics_weights_path:
             logger.info("Loading LatentDynamicsModel weights from %s", dynamics_weights_path)
@@ -414,19 +416,19 @@ class LatentWorldModel(WorldModelBase):
             token_dim=token_dim,
             dino_channels=dino_channels,
             num_patches=num_patches,
-        ).to(self.device)
+        )
+        self.delta_decoder.eval()
         
         if encoder_ckpt:
             logger.info("Loading DeltaDecoder weights from %s", encoder_ckpt)
             try:
-                ckpt = torch.load(encoder_ckpt, map_location=self.device)
+                ckpt = torch.load(encoder_ckpt, map_location="cpu")
                 dec_sd = ckpt.get("decoder", ckpt)
                 self.delta_decoder.load_state_dict(dec_sd)
             except Exception as e:
                 logger.warning("Could not load DeltaDecoder weights: %s. Using random weights.", e)
-        else:
-            logger.warning("No encoder_ckpt provided for DeltaDecoder — ΔF reconstruction will be random.")
-        self.delta_decoder.eval()
+        
+        self.delta_decoder = self.delta_decoder.to(self.device)
 
         self._history: Optional[torch.Tensor] = None
 

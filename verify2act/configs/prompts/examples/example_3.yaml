@@ -2,14 +2,14 @@
 task: example_3
 instruction: "Assemble all round nuts onto their matching pegs."
 objects:
-  - "front round nut"
-  - "back round nut"
+  - "left round nut (id: RoundNut0)"
+  - "right round nut (id: RoundNut1)"
 history: []
 
 # Original nut ordering that the critic rejected
 plan:
-  - "front round nut"
-  - "back round nut"
+  - {"label": "left round nut", "id": "RoundNut0"}
+  - {"label": "right round nut", "id": "RoundNut1"}
 
 # Images (relative to this file)
 current_image: example_3_current.png
@@ -19,10 +19,10 @@ gradcam_image: example_3_gradcam.png
 
 # Critic diagnosis (used to populate the reflect user message)
 # failed_step indexes into the EXPANDED sub-skill sequence (5 per nut).
-# Step 2 = "carry front round nut toward peg" (nut 0, sub-skill index 2).
+# Step 2 = "carry left round nut toward peg" (nut 0, sub-skill index 2).
 failed_step: 2
-failed_nut: "front round nut"
-failed_action: "carry front round nut toward peg"
+failed_nut: "left round nut"
+failed_action: "carry left round nut toward peg"
 mean_feasibility: 0.21
 uncertainty: 0.04
 score_trajectory:
@@ -33,10 +33,10 @@ failure_pattern: "sudden_drop"
 worst_region: "center"
 
 # Reflect expected response
-analysis: "The front round nut is obstructed by the back round nut during carrying; assembling the back round nut first should clear the path."
+analysis: "The left round nut is obstructed by the right round nut during carrying; assembling the right round nut first should clear the path."
 revised_plan:
-  - "back round nut"
-  - "front round nut"
+  - {"label": "right round nut", "id": "RoundNut1"}
+  - {"label": "left round nut", "id": "RoundNut0"}
 
 # OpenAI
 role: system

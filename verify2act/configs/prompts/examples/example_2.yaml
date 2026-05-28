@@ -2,10 +2,11 @@
 task: example_2
 instruction: "Assemble all round nuts onto their matching pegs."
 objects:
-  - "front-left round nut"
-  - "back-right round nut"
+  - "left round nut (id: RoundNut0)"
+  - "right round nut (id: RoundNut1)"
+  - "square nut (id: SquareNut0)"
 history:
-  - "front-left round nut"   # assembled in previous real step
+  - "left round nut (id: RoundNut0)"   # assembled in previous real step
 
 # Images (relative to this file)
 current_image: example_2_current.png
@@ -14,9 +15,9 @@ horizon: 4
 
 # Behaviors
 plan:
-  - "back-right round nut"
+  - {"label": "back-right round nut", "id": "RoundNut1"}
 plans:
-  - ["back-right round nut"]
+  - - {"label": "back-right round nut", "id": "RoundNut1"}
 
 # Reflect (not used for this example)
 analysis: Null

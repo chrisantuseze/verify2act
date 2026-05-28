@@ -13,9 +13,37 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import torch
+# GPU memory optimization
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+# PyTorch 2.6+ compatibility: patch lightning_fabric._load to disable weights_only
+try:
+    import lightning_fabric.utilities.cloud_io as cloud_io_module
+    _original_load = cloud_io_module._load
+    def _patched_load(path, map_location=None, weights_only=None):
+        # Always use weights_only=False for checkpoint loading
+        import torch
+        return torch.load(path, map_location=map_location, weights_only=False)
+    cloud_io_module._load = _patched_load
+except (ImportError, AttributeError):
+    pass
 
 # Ensure verify2act, calvin_agent, and calvin_env are in PYTHONPATH
+import collections
+import collections.abc
+collections.Mapping = collections.abc.Mapping
+collections.MutableMapping = collections.abc.MutableMapping
+collections.Sequence = collections.abc.Sequence
+collections.MutableSequence = collections.abc.MutableSequence
+collections.Iterable = collections.abc.Iterable
+collections.Set = collections.abc.Set
+import math
+import fractions
+fractions.gcd = math.gcd
+import numpy as np
+import torch
+np.float = float
+
 repo_root = Path(__file__).resolve().parents[2]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -25,6 +53,9 @@ if calvin_models.exists() and str(calvin_models) not in sys.path:
 calvin_env_path = repo_root / "calvin/calvin_env"
 if calvin_env_path.exists() and str(calvin_env_path) not in sys.path:
     sys.path.insert(0, str(calvin_env_path))
+tacto_path = calvin_env_path / "tacto"
+if tacto_path.exists() and str(tacto_path) not in sys.path:
+    sys.path.insert(0, str(tacto_path))
 
 from calvin_env.envs.play_table_env import get_env
 from calvin_agent.evaluation.evaluate_policy import evaluate_policy
@@ -62,8 +93,10 @@ def _build_critic(args: argparse.Namespace, device: torch.device) -> DINOv2DualH
             "Checkpoint missing keys (log_var heads will be randomly initialised): %s",
             missing,
         )
+    # Filter out _clip_model keys since CLIP is lazily loaded and not part of the model structure at init
+    unexpected = [k for k in unexpected if not k.startswith("_clip_model.")]
     if unexpected:
-        logger.warning("Checkpoint had unexpected keys: %s", unexpected)
+        logger.info("Checkpoint had unexpected keys: %s", unexpected)
     critic.eval()
     return critic
 
@@ -91,6 +124,19 @@ def main() -> int:
     # Hyperparameters
     parser.add_argument("--theta-c", type=float, default=0.7, help="Consistency threshold")
     parser.add_argument("--max-replans", type=int, default=2, help="Max replanning rounds per failure")
+    parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
+    parser.add_argument("--wm-mode", choices=["v2a_wm", "rla_wm", "diffusion", "vlm_only"], default="v2a_wm", help="World Model mode")
+    
+    # Diffusion world model arguments
+    parser.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
+    parser.add_argument("--vae-subfolder", default="vae")
+    parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
+    parser.add_argument("--wm-adapter-dir", default="verify2act/output/wm/best/unet_lora")
+    parser.add_argument("--dtype", choices=["fp32", "fp16", "bf16"], default="fp16")
+    parser.add_argument("--wm-steps", type=int, default=30)
+    parser.add_argument("--wm-image-guidance", type=float, default=2.8)
+    parser.add_argument("--wm-text-guidance", type=float, default=7.5)
+    parser.add_argument("--wm-seed", type=int, default=None)
     
     # Evaluation config
     parser.add_argument("--debug", action="store_true", help="Print debug info and visualize environment")
@@ -102,13 +148,17 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    from transformers import logging as transformers_logging
+    transformers_logging.set_verbosity_error()
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device cuda requested but CUDA is unavailable")
 
-    logger.info("Initializing CALVIN environment...")
-    env = get_env(dataset_path=args.dataset_path, show_gui=args.debug)
+    # Environment will be initialized automatically inside MCILLowLevelPolicy
+    # as a wrapped CalvinEnvWrapper.
 
     logger.info("Loading VLM Planner...")
     planner = VLMPlanner.from_yaml(
@@ -118,29 +168,75 @@ def main() -> int:
         temperature=args.planner_temperature,
     )
 
-    logger.info("Loading Latent World Model...")
-    world_model = LatentWorldModel(
-        device=args.device,
-        dynamics_weights_path=args.latent_wm_ckpt,
-        encoder_ckpt=args.encoder_ckpt,
-    )
+    if args.wm_mode == "vlm_only":
+        logger.info("VLM-Only mode selected. Bypassing World Model and Critic loading.")
+        world_model = None
+        critic = None
+    elif args.wm_mode == "diffusion":
+        logger.info("Loading Diffusion World Model (ReflectVLM)...")
+        from verify2act.pipeline.world_model import DiffusionWorldModel
+        
+        def _dtype_from_name(name: str) -> torch.dtype:
+            name = name.lower()
+            if name == "fp16":
+                return torch.float16
+            if name == "bf16":
+                return torch.bfloat16
+            return torch.float32
 
-    logger.info("Loading Critic...")
-    critic = _build_critic(args, device)
+        world_model = DiffusionWorldModel(
+            pretrained_model=args.wm_model,
+            adapter_dir=args.wm_adapter_dir,
+            decoder_dir=args.wm_decoder_dir,
+            vae_model=args.vae_model,
+            vae_subfolder=args.vae_subfolder,
+            device=args.device,
+            torch_dtype=_dtype_from_name(args.dtype),
+            num_inference_steps=args.wm_steps,
+            image_guidance_scale=args.wm_image_guidance,
+            guidance_scale=args.wm_text_guidance,
+            seed=args.wm_seed,
+        )
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+            
+        logger.info("ReflectVLM (Diffusion mode) selected. Bypassing Critic loading.")
+        critic = None
+    else:
+        logger.info("Loading Latent World Model...")
+        world_model = LatentWorldModel(
+            device=args.device,
+            dynamics_weights_path=args.latent_wm_ckpt,
+            encoder_ckpt=args.encoder_ckpt,
+            history_len=args.history_len,
+        )
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+        logger.info("Loading Critic...")
+        critic = _build_critic(args, device)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     # Note: verify2act's latent_wm has its own FeatureDecoder class
     # but we only load feature decoder if the directories are provided.
     decoder = None
-    if args.wm_decoder_dir:
+    if args.wm_decoder_dir and args.wm_mode not in ["vlm_only", "diffusion"]:
         from verify2act.latent_wm.decoder import FeatureDecoder
         logger.info("Loading FeatureDecoder for visual reflection...")
-        decoder = FeatureDecoder().to(device)
+        decoder = FeatureDecoder(dino_channels=1024).to(device)
         decoder.eval()
-        dec_path = Path(args.wm_decoder_dir) / "decoder.pt"
+        dec_path = Path(args.wm_decoder_dir) / "latent_decoder_best.pt"
         if dec_path.exists():
-            decoder.load_state_dict(torch.load(dec_path, map_location=device))
+            state_dict = torch.load(dec_path, map_location=device)
+            # If keys don't have "decoder." prefix, add it (checkpoint was saved from inner decoder)
+            if "decoder.input_proj.0.weight" not in state_dict and "input_proj.0.weight" in state_dict:
+                state_dict = {f"decoder.{k}": v for k, v in state_dict.items()}
+            decoder.load_state_dict(state_dict)
         else:
             logger.warning(f"Decoder checkpoint not found at {dec_path}")
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
     # Set up the V2A CALVIN Agent
     logger.info("Setting up Verify2Act CALVIN Agent...")
@@ -154,9 +250,14 @@ def main() -> int:
         theta_c=args.theta_c,
         max_replans=args.max_replans,
     )
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
     # Set external attributes on agent if needed (e.g. decoder)
     agent.decoder = decoder
+
+    # Retrieve the wrapped environment from the low-level policy wrapper
+    env = agent.low_level_policy.env
 
     logger.info("Starting standard CALVIN evaluation sequence...")
     results = evaluate_policy(

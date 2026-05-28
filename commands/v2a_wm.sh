@@ -51,21 +51,21 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
 # -------- NUT ASSEMBLY (RoboSuite) --------
 
 # Stage 1: Train DeltaEncoder (Bottleneck)
-accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 --main_process_port 29501 \
   verify2act/latent_wm/train_encoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
-  --num-epochs 50 --batch-size 64 --lr 1e-4 \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt
+  --num-epochs 100 --batch-size 16 --lr 1e-4 \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
 python verify2act/latent_wm/train_decoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --batch-size 32 \
-  --num-epochs 25 \
+  --batch-size 64 \
+  --num-epochs 100 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt
 
 # Stage 2: Flow Matching
@@ -73,11 +73,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/wm \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
-  --causal-masking \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 5 \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity/ckpt/latent_dynamics_best.pt \
+  --sparsity-weight 0.01
 
 # -------- CALVIN --------
 
@@ -93,7 +93,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/encoder \
-  --num-epochs 50 --batch-size 16 --lr 1e-4 \
+  --num-epochs 100 --batch-size 16 --lr 1e-4 \
   --resume-from verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
@@ -102,7 +102,7 @@ python verify2act/latent_wm/train_decoder.py \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/decoder \
   --batch-size 32 \
-  --num-epochs 50 \
+  --num-epochs 100 \
   --resume-from verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt
 
 # Stage 2: Flow Matching
@@ -110,11 +110,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/wm \
+  --output-dir verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01 \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
-  --causal-masking \
-  --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
+  --num-epochs 150 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --resume-from verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01/ckpt/latent_dynamics_best.pt \
+  --sparsity-weight 0.1
 
 CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 # ==============================================================================
@@ -125,18 +125,20 @@ CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --wm-ckpt verify2act/output/v2a_wm/nut_assembly/ckpt/latent_dynamics_best.pt \
+  --wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_history_1/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt \
+  --history-len 1 \
   --num-samples 5
 
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --wm-ckpt verify2act/output/v2a_wm/calvin/wm_causal/ckpt/latent_dynamics_best.pt \
+  --wm-ckpt verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
-  --num-samples 5
+  --history-len 1 \
+  --num-samples 10
 
 # ==============================================================================
 # INFERENCE PIPELINE
@@ -146,22 +148,108 @@ python verify2act/latent_wm/visualize_wm.py \
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --num-round 2 \
-  --num-square 1 \
-  --initial-stacking-prob 0.0 \
+  --history-len 1 \
+  --num-round 3 \
+  --num-square 2 \
+  --initial-stacking-prob 0.5 \
+  --randomize-nut-counts \
+  --num-episodes 15 \
+  --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode v2a_wm \
-  --output-dir verify2act/output/inference_run/v2a_wm/nut_assembly
+  --wm-mode v2a_wm
+
+# RoboSuite Inference (using rla_wm baseline)
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
+  --history-len 1 \
+  --num-round 3 \
+  --num-square 2 \
+  --initial-stacking-prob 0.5 \
+  --randomize-nut-counts \
+  --num-episodes 15 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode rla_wm
+
+# RoboSuite Inference (using diffusion baseline - ReflectVLM)
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --wm-model timbrooks/instruct-pix2pix \
+  --wm-adapter-dir verify2act/output/diffusion_wm/nut_assembly/wm/best/unet_lora \
+  --wm-decoder-dir verify2act/output/diffusion_wm/nut_assembly/decoder/checkpoint-5000 \
+  --history-len 1 \
+  --num-round 3 \
+  --num-square 2 \
+  --initial-stacking-prob 0.5 \
+  --randomize-nut-counts \
+  --num-episodes 20 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode diffusion
+
+# RoboSuite Inference (using vlm_only baseline)
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --history-len 1 \
+  --num-round 3 \
+  --num-square 2 \
+  --initial-stacking-prob 0.5 \
+  --randomize-nut-counts \
+  --num-episodes 15 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode vlm_only
 
 # Calvin Inference (using v2a_wm)
-xvfb-run -a python3 verify2act/pipeline/inference_calvin.py \
+python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
-  --device cuda
+  --history-len 3 \
+  --device cuda \
+  --wm-mode v2a_wm \
+  --debug
+
+# Calvin Inference (using rla_wm baseline)
+python3 verify2act/pipeline/inference_calvin.py \
+  --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --history-len 3 \
+  --device cuda \
+  --wm-mode rla_wm \
+  --debug
+
+# Calvin Inference (using diffusion baseline - ReflectVLM)
+python3 verify2act/pipeline/inference_calvin.py \
+  --wm-model timbrooks/instruct-pix2pix \
+  --wm-adapter-dir verify2act/output/diffusion_wm/calvin/wm/best/unet_lora \
+  --wm-decoder-dir verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000 \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --history-len 3 \
+  --device cuda \
+  --wm-mode diffusion \
+  --debug
+
+# Calvin Inference (using vlm_only baseline)
+python3 verify2act/pipeline/inference_calvin.py \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --history-len 3 \
+  --device cuda \
+  --wm-mode vlm_only \
+  --debug

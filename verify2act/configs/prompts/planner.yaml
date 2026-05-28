@@ -7,3 +7,4 @@ prompt_kwargs:
     - verify2act/configs/prompts/examples/example_1.yaml
     - verify2act/configs/prompts/examples/example_2.yaml
     - verify2act/configs/prompts/examples/example_3.yaml
+    - verify2act/configs/prompts/examples/example_4.yaml
