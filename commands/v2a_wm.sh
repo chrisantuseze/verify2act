@@ -271,3 +271,7 @@ python3 verify2act/pipeline/inference_calvin.py \
   --device cuda \
   --wm-mode vlm_only \
   --debug
+
+
+
+

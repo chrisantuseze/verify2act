@@ -164,13 +164,7 @@ class FeatureExtractor(nn.Module):
         super().__init__()
         self.device = device
         self.dino_channels = dino_channels
-        
-        model_name = "dinov2_vitl14" if dino_channels == 1024 else "dinov2_vitb14"
-        print(f"Loading frozen DINOv2 {model_name} backbone ({dino_channels}-ch)...")
-        self.dino = torch.hub.load("facebookresearch/dinov2", model_name, pretrained=True).to(device)
-        self.dino.eval()
-        for p in self.dino.parameters():
-            p.requires_grad = False
+        self.dino = None  # Lazily loaded to conserve VRAM when using cache
             
         print("Loading frozen CLIP text encoder...")
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -185,6 +179,14 @@ class FeatureExtractor(nn.Module):
         imgs: (..., 3, H, W)
         Returns: (..., num_patches, 768)
         """
+        if self.dino is None:
+            model_name = "dinov2_vitl14" if self.dino_channels == 1024 else "dinov2_vitb14"
+            print(f"Lazy loading frozen DINOv2 {model_name} backbone ({self.dino_channels}-ch)...")
+            self.dino = torch.hub.load("facebookresearch/dinov2", model_name, pretrained=True).to(self.device)
+            self.dino.eval()
+            for p in self.dino.parameters():
+                p.requires_grad = False
+
         orig_shape = imgs.shape
         if len(orig_shape) == 5: # (B, H_len, 3, H, W)
             imgs = imgs.view(-1, *orig_shape[2:])

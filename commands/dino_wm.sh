@@ -43,86 +43,71 @@ python3 verify2act/critic/train_contrastive.py \
   --device cuda
 
 # ==============================================================================
-# RLA_WM BASELINE TRAINING
+# DINO-WM BASELINE TRAINING (Causal raw DINOv2 feature space sequence model)
 # ==============================================================================
 
 # -------- NUT ASSEMBLY (RoboSuite) --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
-  verify2act/rla_wm_baseline/train_baseline.py \
+  verify2act/dino_wm_baseline/train_baseline.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/rla_wm/nut_assembly/wm \
-  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --output-dir verify2act/output/dino_wm/nut_assembly/wm \
   --num-epochs 100 \
-  --batch-size 32 \
+  --batch-size 16 \
   --lr 1e-4 \
-  --checkpoint-freq 5 \
-  --resume-from verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
+  --checkpoint-freq 5
 
 # -------- CALVIN --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
-  verify2act/rla_wm_baseline/train_baseline.py \
+  verify2act/dino_wm_baseline/train_baseline.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/rla_wm/calvin/wm \
-  --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --output-dir verify2act/output/dino_wm/calvin/wm \
   --num-epochs 100 \
-  --batch-size 32 \
+  --batch-size 8 \
   --lr 1e-4 \
-  --checkpoint-freq 5 \
-  --resume-from verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt
+  --checkpoint-freq 5
 
 # ==============================================================================
-# VISUALIZATION
+# INFERENCE & EVALUATION PIPELINES
 # ==============================================================================
 
-# RoboSuite Baseline Visualization
-python verify2act/rla_wm_baseline/visualize_baseline.py \
-  --dataset-type robosuite \
-  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
-  --decoder-ckpt verify2act/output/rla_wm/nut_assembly/decoder/latent_decoder_best.pt \
-  --num-samples 5
-
-# Calvin Baseline Visualization
-python verify2act/rla_wm_baseline/visualize_baseline.py \
-  --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
-  --decoder-ckpt verify2act/output/rla_wm/calvin/decoder/latent_decoder_best.pt \
-  --num-samples 5
-
-# ==============================================================================
-# INFERENCE PIPELINE
-# ==============================================================================
-
-# RoboSuite Inference (using rla_wm)
+# -------- NUT ASSEMBLY (RoboSuite) --------
+# RoboSuite Inference (using dino_wm)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --num-round 4 \
-  --num-square 3 \
-  --guarantee-overlap \
-  --randomize-nut-counts \
-  --num-episodes 25 \
-  --base-seed 42 \
+  --num-round 2 \
+  --num-square 1 \
+  --initial-stacking-prob 0.0 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode rla_wm
+  --wm-mode dino_wm \
+  --output-dir verify2act/output/inference_run/dino_wm/nut_assembly
 
-# Calvin Inference (using rla_wm)
+# -------- CALVIN --------
+# Calvin Standalone Inference (using dino_wm)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --num-round 2 \
   --num-square 1 \
-  --guarantee-overlap \
+  --initial-stacking-prob 0.0 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode rla_wm
+  --wm-mode dino_wm \
+  --output-dir verify2act/output/inference_run/dino_wm/calvin
+
+# Calvin Benchmark evaluate_policy Evaluation (using dino_wm)
+python3 verify2act/pipeline/inference_calvin.py \
+  --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --history-len 3 \
+  --device cuda \
+  --wm-mode dino_wm \
+  --debug
