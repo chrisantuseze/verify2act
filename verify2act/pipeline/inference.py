@@ -896,7 +896,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exec-mode",
         choices=["full_plan", "step_by_step"],
-        default="step_by_step",
+        default="full_plan",
         help=(
             "'full_plan' (default): execute all actions in the accepted plan "
             "before re-querying the VLM (Points2Plans-style). "

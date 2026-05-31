@@ -165,7 +165,7 @@ python verify2act/latent_wm/visualize_wm.py \
 # RoboSuite Inference (using v2a_wm)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity_001/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
   --history-len 1 \
@@ -225,6 +225,24 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --dtype fp16 \
   --wm-mode vlm_only
 
+# RoboSuite Inference (using dino_wm baseline)
+# NOTE: --history-len must match the value used during training.
+# The checkpoint at dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt was
+# trained with history_len=3 (pos_embedding shape [1,774,1024] = 3×258 patches).
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --history-len 3 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
+  --randomize-nut-counts \
+  --num-episodes 25 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode dino_wm
+
 # Calvin Inference (using v2a_wm)
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
@@ -233,9 +251,9 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
-  --history-len 3 \
   --device cuda \
   --wm-mode v2a_wm \
+  --num-sequences 25 \
   --debug
 
 # Calvin Inference (using rla_wm baseline)
@@ -246,9 +264,9 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
-  --history-len 3 \
   --device cuda \
   --wm-mode rla_wm \
+  --num-sequences 25 \
   --debug
 
 # Calvin Inference (using diffusion baseline - ReflectVLM)
@@ -258,18 +276,29 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-decoder-dir verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000 \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
-  --history-len 3 \
   --device cuda \
   --wm-mode diffusion \
+  --num-sequences 10 \
   --debug
 
 # Calvin Inference (using vlm_only baseline)
 python3 verify2act/pipeline/inference_calvin.py \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
-  --history-len 3 \
   --device cuda \
   --wm-mode vlm_only \
+  --num-sequences 100 \
+  --debug
+
+# Calvin Inference (using dino_wm baseline)
+python3 verify2act/pipeline/inference_calvin.py \
+  --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --device cuda \
+  --wm-mode dino_wm \
+  --num-sequences 10 \
   --debug
 
 

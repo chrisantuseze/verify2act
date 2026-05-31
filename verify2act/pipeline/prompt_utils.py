@@ -28,8 +28,15 @@ from PIL import Image
 # Low-level helpers
 # ---------------------------------------------------------------------------
 
-def _to_uint8_image(img: np.ndarray) -> np.ndarray:
+def _to_uint8_image(img) -> np.ndarray:
     """Normalize an image array to uint8 HxWx3 for PIL encoding."""
+    # Handle PyTorch tensors (including CUDA tensors) gracefully.
+    try:
+        import torch
+        if isinstance(img, torch.Tensor):
+            img = img.detach().cpu().numpy()
+    except ImportError:
+        pass
     arr = np.asarray(img)
     if arr.ndim == 2:
         arr = np.stack([arr, arr, arr], axis=-1)
@@ -494,7 +501,16 @@ class PromptManager:
         )
         obj_str = ", ".join(obj_labels)
 
-        imagined_np = np.array(ctx["imagined_state"])
+        _imagined_state = ctx["imagined_state"]
+        # If the world model returned a CUDA tensor that was never decoded to RGB
+        # (e.g. when decode_dino_features was bypassed), move it to CPU first.
+        try:
+            import torch
+            if isinstance(_imagined_state, torch.Tensor):
+                _imagined_state = _imagined_state.detach().cpu().numpy()
+        except ImportError:
+            pass
+        imagined_np = np.array(_imagined_state)
         # gradcam_np = np.array(ctx["gradcam_overlay"])
 
         user_content = [

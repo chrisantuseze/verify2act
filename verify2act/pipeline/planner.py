@@ -28,6 +28,10 @@ from verify2act.pipeline.prompt_utils import PromptManager
 logger = logging.getLogger(__name__)
 
 
+class VLMRefusalError(ValueError):
+    """Raised when the VLM returns a safety / content-policy refusal instead of JSON."""
+
+
 class VLMPlanner:
     """GPT-4o based planner with YAML-driven prompt templates."""
 
@@ -67,14 +71,37 @@ class VLMPlanner:
 
     # -- internal -----------------------------------------------------------
 
+    # Substrings that indicate a safety/content-policy refusal.
+    # Used only as a fallback when finish_reason is not "content_filter".
+    _REFUSAL_PATTERNS: tuple = (
+        "i'm sorry, i can't assist",
+        "i'm sorry, i cannot assist",
+        "i can't assist with that",
+        "i cannot assist with that",
+        "i'm unable to assist",
+        "i am unable to assist",
+        "i'm not able to assist",
+        "i am not able to assist",
+        "i can't help with that",
+        "i cannot help with that",
+        "i'm sorry, but i can't",
+        "i'm sorry, but i cannot",
+        "as an ai,",
+    )
+
     def _call(self, messages: List[Dict[str, Any]], temperature: Optional[float] = None) -> str:
-        # Mock mode: return dummy JSON response
+        """Call the chat-completion API and return the raw text content.
+
+        Raises
+        ------
+        VLMRefusalError
+            When the model's finish_reason is ``"content_filter"`` or the
+            response text matches a known safety-refusal pattern.
+        """
         if self._api_key == "mock-key-for-testing":
             logger.warning("Mock mode: returning dummy response for testing")
-            # Return a dummy JSON response that matches expected format
             return '{"plan": ["mock_action_1", "mock_action_2"], "analysis": "Mock response for testing"}'
-        
-        # print("Calling GPT-4o with messages:", messages[0])
+
         temp = self._temperature if temperature is None else temperature
         resp = self._client.chat.completions.create(
             model=self._model,
@@ -82,8 +109,31 @@ class VLMPlanner:
             max_tokens=self._max_tokens,
             temperature=temp,
         )
-        content = resp.choices[0].message.content.strip()
-        # logger.debug("GPT-4o raw response: %s", content)
+
+        choice = resp.choices[0]
+
+        # Primary signal: OpenAI sets finish_reason = "content_filter" when
+        # the safety policy blocks a response.  This is more reliable than
+        # pattern-matching on the text.
+        if getattr(choice, "finish_reason", None) == "content_filter":
+            raise VLMRefusalError(
+                "OpenAI content filter blocked the response (finish_reason='content_filter'). "
+                "The prompt may have been flagged by the model's safety policy."
+            )
+
+        content = choice.message.content or ""
+        content = content.strip()
+
+        # Fallback signal: some models (or older API versions) return a refusal
+        # as plain text without setting finish_reason.
+        content_lower = content.lower()
+        for pattern in self._REFUSAL_PATTERNS:
+            if pattern in content_lower:
+                raise VLMRefusalError(
+                    f"VLM returned a safety refusal instead of JSON: {content!r}. "
+                    "The prompt may have been flagged by the model's content policy."
+                )
+
         return content
 
     @staticmethod
@@ -433,7 +483,12 @@ class BeamSearchPlanner:
         imagination_steps = self.plan_expander(plan)
         
         best_eval_score = -float('inf')
-        best_eval_final_state = current_image_np
+        # Initialise to None, not current_image_np. For the latent-WM path,
+        # best_eval_final_state must always be a DINO feature tensor (or None).
+        # Leaving it as an RGB numpy array is a type mismatch that causes a
+        # shape error in decode_dino_features when the imagination loop never
+        # runs (empty plan) or all HEAD1 retries are exhausted.
+        best_eval_final_state = None
         best_eval_all_scores: List[Tuple[float, float]] = []
         best_eval_step_failed = True
         best_eval_failed_step = None
@@ -609,6 +664,13 @@ class BeamSearchPlanner:
                 if prox_decision.action == "requery":
                     # Critic is uncertain — re-roll the entire imagined trajectory.
                     # This is the ONLY case where the outer loop keeps iterating.
+                    # Save the current imagined final_state NOW so that if all
+                    # attempts are exhausted, _reflect_and_replan receives a valid
+                    # latent tensor (not the initial current_image_np RGB array,
+                    # which would cause a shape mismatch in decode_dino_features).
+                    best_eval_final_state = final_state
+                    best_eval_all_scores = all_scores
+                    best_eval_critic_decisions = critic_decisions
                     logger.info("  HEAD1 uncertain; re-rolling full imagined trajectory...")
                     continue
 
@@ -692,11 +754,25 @@ class BeamSearchPlanner:
             replan_attempts = attempt
             logger.info(f"Reflection attempt {attempt}/{self.max_replans} for plan: {current_plan}")
             
-            # 1. Reconstruct the image if using LatentWorldModel
+            # 1. Reconstruct the image if using LatentWorldModel.
+            # current_final_state is None when the world model never ran (empty
+            # plan or all HEAD1 retries exhausted with nothing imagined yet).
+            # In that case, fall back to the current real observation — the VLM
+            # will reflect on what it can actually see rather than an imagined
+            # future state.
             if is_latent_wm and decoder is not None:
-                imagined_img_next = self.decode_dino_features(current_final_state, decoder)
+                if current_final_state is None:
+                    logger.warning(
+                        "_reflect_and_replan: no imagined final state available "
+                        "(world model did not run). Using current real observation "
+                        "for reflection context."
+                    )
+                    imagined_img_next = current_image_np
+                else:
+                    imagined_img_next = self.decode_dino_features(current_final_state, decoder)
             else:
-                imagined_img_next = current_final_state
+                # Non-latent WM: final_state is already an RGB array (or None → real obs).
+                imagined_img_next = current_final_state if current_final_state is not None else current_image_np
                 
             # 2. Build the reflection context dict.
             # Use the high-level nut-name label (first element of tuple), NOT the
@@ -892,7 +968,10 @@ class BeamSearchPlanner:
         if best_plan is None:
             best_plan = candidate_plans[0] if candidate_plans else []
             best_score = -float('inf')
-            best_final_state = current_image_np
+            # Use None so _reflect_and_replan's None-guard fires correctly.
+            # Assigning current_image_np here was the direct cause of the
+            # shape mismatch: an RGB (H,W,3) array being decoded as DINO features.
+            best_final_state = None
             best_all_scores = []
             best_imagination_steps = self.plan_expander(best_plan)
             best_failed_step = 0
@@ -956,21 +1035,27 @@ class BeamSearchPlanner:
         """
         import torch
         device = next(self.critic.parameters()).device
-        # Convert numpy array to torch tensor if necessary
+
+        # Convert numpy array to torch tensor if necessary.
+        # At this point dino_features is always a valid latent tensor
+        # (shape (num_patches, C) or (1, num_patches, C)) — the three
+        # call-sites that previously passed current_image_np here have all
+        # been fixed to use None and handled upstream in _reflect_and_replan.
         if isinstance(dino_features, np.ndarray):
             dino_features = torch.from_numpy(dino_features)
+
         # Ensure features have a batch dimension (B, num_patches, dino_channels)
         if dino_features.ndim == 2:
             dino_features = dino_features.unsqueeze(0)
-            
+
         with torch.no_grad():
             # Forward pass through FeatureDecoder
             rec_img = decoder.decode(dino_features.to(device))  # (B, 3, H, W) in range [-1, 1]
-            
+
             # Map from [-1, 1] to [0, 1] and clamp
             rec_img = (rec_img + 1.0) / 2.0
             rec_img = torch.clamp(rec_img, 0.0, 1.0)
-            
+
             # Format output
             if as_numpy:
                 rec_img = rec_img.squeeze(0).cpu().numpy()  # (3, H, W)

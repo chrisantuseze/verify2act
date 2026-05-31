@@ -58,13 +58,145 @@ if tacto_path.exists() and str(tacto_path) not in sys.path:
     sys.path.insert(0, str(tacto_path))
 
 from calvin_env.envs.play_table_env import get_env
-from calvin_agent.evaluation.evaluate_policy import evaluate_policy
-from verify2act.pipeline.calvin_agent_wrapper import Verify2ActCalvinAgent
+from calvin_agent.evaluation.multistep_sequences import get_sequences
+import time
+from termcolor import colored
+from calvin_agent.evaluation.utils import (
+    count_success,
+    get_env_state_for_initial_condition,
+    get_log_dir,
+    join_vis_lang,
+    print_and_save,
+)
+from verify2act.pipeline.calvin_agent_wrapper import (
+    CalvinEpisodeTrace,
+    Verify2ActCalvinAgent,
+    _save_calvin_trace,
+)
 from verify2act.pipeline.planner import VLMPlanner
 from verify2act.pipeline.world_model import LatentWorldModel
 from verify2act.critic.model import DINOv2DualHeadCritic
+import hydra
+from omegaconf import OmegaConf
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+EP_LEN = 360
+NUM_SEQUENCES = 1000
+
+
+def _evaluate_calvin(
+    agent: Verify2ActCalvinAgent,
+    env,
+    eval_log_dir: Path,
+    debug: bool = False,
+    num_sequences: int = NUM_SEQUENCES,
+) -> tuple:
+    """Custom CALVIN evaluation loop that mirrors evaluate_policy() but hooks
+    agent.start_sequence() / flush_trace() at each sequence boundary so that
+    rich per-step metrics are captured.
+
+    Returns
+    -------
+    results : List[int]
+        Number of subtasks completed per sequence (0-5).
+    traces : List[CalvinEpisodeTrace]
+        One per sequence, containing critic/VLM/reflection metrics.
+    """
+    conf_dir = (
+        Path(__file__).absolute().parents[2]
+        / "calvin/calvin_models/conf"
+    )
+    task_cfg = OmegaConf.load(
+        conf_dir / "callbacks/rollout/tasks/new_playtable_tasks.yaml"
+    )
+    task_oracle = hydra.utils.instantiate(task_cfg)
+    val_annotations = OmegaConf.load(
+        conf_dir / "annotations/new_playtable_validation.yaml"
+    )
+
+    eval_sequences = get_sequences(num_sequences)
+    if not debug:
+        eval_sequences = tqdm(eval_sequences, position=0, leave=True)
+
+    results = []
+    traces: list = []
+
+    for seq_idx, (initial_state, eval_sequence) in enumerate(eval_sequences):
+        # ── Reset per-sequence accumulator ─────────────────────────
+        agent.start_sequence(seq_idx)
+
+        # ── Reset env to the initial scene state ─────────────────────
+        robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
+        env.reset(robot_obs=robot_obs, scene_obs=scene_obs)
+
+        if debug:
+            time.sleep(1)
+            print()
+            print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
+            print("Subtask: ", end="")
+
+        success_counter = 0
+        for subtask in eval_sequence:
+            lang_annotation = val_annotations[subtask][0]
+            agent.reset()
+            start_info = env.get_info()
+            obs = env.get_obs()
+
+            if debug:
+                print(f"{subtask} ", end="", flush=True)
+                time.sleep(0.5)
+
+            subtask_success = False
+            for step in range(EP_LEN):
+                action = agent.step(obs, lang_annotation)
+                obs, _, _, current_info = env.step(action)
+                if debug:
+                    img = env.render(mode="rgb_array")
+                    join_vis_lang(img, lang_annotation)
+                task_info = task_oracle.get_task_info_for_set(
+                    start_info, current_info, {subtask}
+                )
+                if len(task_info) > 0:
+                    subtask_success = True
+                    break
+
+            if debug:
+                if subtask_success:
+                    print(colored("success", "green"), end=" ", flush=True)
+                else:
+                    print(colored("fail", "red"), end=" ", flush=True)
+
+            # Commit subtask outcome into agent's running trace
+            agent._close_subtask(subtask_success)
+
+            if subtask_success:
+                success_counter += 1
+            else:
+                break  # CALVIN stops the sequence on first failure
+
+        if debug:
+            print()  # newline after the subtask success/fail line
+
+        # ── Flush trace after sequence completes ────────────────────
+        seq_dir = eval_log_dir / f"sequence_{seq_idx:04d}"
+        trace = agent.flush_trace(
+            subtasks_completed=success_counter,
+            output_dir=eval_log_dir,
+        )
+        traces.append(trace)
+        results.append(success_counter)
+
+        if not debug:
+            eval_sequences.set_description(
+                " ".join(
+                    [f"{i + 1}/5 : {v * 100:.1f}% |" for i, v in enumerate(count_success(results))]
+                ) + "|"
+            )
+
+    return results, traces
 
 
 def _build_critic(args: argparse.Namespace, device: torch.device) -> DINOv2DualHeadCritic:
@@ -113,7 +245,14 @@ def main() -> int:
     
     # CALVIN directories & policies
     parser.add_argument("--train-folder", default="calvin/models/hulc_baseline", help="MCIL/HULC baseline logs/checkpoints dir")
-    parser.add_argument("--dataset-path", default="calvin/dataset/task_ABC_D", help="CALVIN dataset dir")
+    parser.add_argument("--dataset-path", default="calvin/dataset/task_ABC_D", help="Primary CALVIN dataset dir (used for env init and statistics)")
+    parser.add_argument(
+        "--full-dataset-path",
+        default=None,
+        help="Optional path to the full (unfiltered) CALVIN dataset. When --dataset-path points to "
+             "task_ABC_D_filtered, pass 'calvin/dataset/task_ABC_D' here to merge its language "
+             "embeddings and eliminate nearest-neighbour fallbacks for missing eval sentences.",
+    )
     
     # Planner configuration
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
@@ -140,7 +279,8 @@ def main() -> int:
     
     # Evaluation config
     parser.add_argument("--debug", action="store_true", help="Print debug info and visualize environment")
-    parser.add_argument("--output-dir", default="verify2act/output/inference_run", help="Base directory where evaluation logs are saved")
+    parser.add_argument("--output-dir", default="verify2act/output/eval", help="Base directory where evaluation logs are saved")
+    parser.add_argument("--num-sequences", type=int, default=20, help="Number of evaluation sequences to run")
 
     args = parser.parse_args()
 
@@ -259,6 +399,7 @@ def main() -> int:
         dataset_path=args.dataset_path,
         theta_c=args.theta_c,
         max_replans=args.max_replans,
+        extra_dataset_path=args.full_dataset_path,
     )
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -272,58 +413,122 @@ def main() -> int:
     # ── Evaluation ──────────────────────────────────────────────────────────
     eval_dir = Path(args.output_dir) / args.wm_mode / "calvin"
     eval_dir.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info(
-        "Starting standard CALVIN evaluation sequence: mode=%s, output_dir=%s",
-        args.wm_mode, eval_dir
-    )
-    
-    results = evaluate_policy(
-        model=agent,
-        env=env,
-        epoch=0,
-        eval_log_dir=str(eval_dir),
-        debug=args.debug,
+        "Starting CALVIN evaluation: mode=%s, sequences=%d, output_dir=%s",
+        args.wm_mode, args.num_sequences, eval_dir,
     )
 
-    # ── Aggregate metrics ────────────────────────────────────────────────
-    num_seqs = len(results)
+    results, traces = _evaluate_calvin(
+        agent=agent,
+        env=env,
+        eval_log_dir=eval_dir,
+        debug=args.debug,
+        num_sequences=args.num_sequences,
+    )
+
+    # ── Aggregate metrics (mirrors nut-assembly eval_summary) ────────────
+    import json
+    num_seqs  = len(results)
     successes = sum(1 for r in results if r == 5)
     total_subtasks = sum(results)
-    max_subtasks = num_seqs * 5
+    max_subtasks   = num_seqs * 5
+
+    # VLM / critic roll-ups
+    total_vlm_calls    = sum(t.total_vlm_calls    for t in traces)
+    total_reflections  = sum(t.total_reflections  for t in traces)
+    total_critic_acc   = sum(t.critic_accepts     for t in traces)
+    total_critic_rej   = sum(t.critic_rejects     for t in traces)
+    total_critic_tp    = sum(t.critic_tp          for t in traces)
+    total_critic_fp    = sum(t.critic_fp          for t in traces)
+
+    critic_precision   = total_critic_tp / total_critic_acc if total_critic_acc else None
+    critic_fp_rate     = total_critic_fp / total_critic_acc if total_critic_acc else None
+    critic_reject_rate = (
+        total_critic_rej / (total_critic_acc + total_critic_rej)
+        if (total_critic_acc + total_critic_rej) else None
+    )
+    vlm_calls_per_subtask = total_vlm_calls / total_subtasks if total_subtasks else None
+
+    # ── Chain success rates (the standard CALVIN metric) ────────────────
+    # SR(k) = fraction of sequences where at least k subtasks were completed in a row.
+    # This is the primary metric reported in CALVIN benchmark papers.
+    chain_sr = count_success(results)  # [SR1, SR2, SR3, SR4, SR5]
 
     summary = {
         "wm_mode": args.wm_mode,
         "num_sequences": num_seqs,
-        "success_rate": successes / num_seqs if num_seqs else 0.0,
+        # ── Primary CALVIN chain success rates ──
+        # SR(k): % of sequences completing at least k consecutive subtasks.
+        # Report all five in your paper table.
+        "chain_success_rates": {
+            f"SR_{k+1}": round(v, 4) for k, v in enumerate(chain_sr)
+        },
+        "avg_subtasks_completed": round(total_subtasks / num_seqs, 4) if num_seqs else 0.0,
+        # ── Derived / legacy metrics ──
+        "success_rate_5of5": successes / num_seqs if num_seqs else 0.0,
         "subtask_completion_rate": total_subtasks / max_subtasks if max_subtasks else 0.0,
-        "avg_subtasks_completed": total_subtasks / num_seqs if num_seqs else 0.0,
+        # Planning efficiency
+        "total_vlm_calls": total_vlm_calls,
+        "total_reflections": total_reflections,
+        "vlm_calls_per_subtask_completed": vlm_calls_per_subtask,
+        # Critic quality
+        "critic_total_accepts": total_critic_acc,
+        "critic_total_rejects": total_critic_rej,
+        "critic_tp": total_critic_tp,
+        "critic_fp": total_critic_fp,
+        "critic_precision": critic_precision,
+        "critic_fp_rate_of_accepts": critic_fp_rate,
+        "critic_reject_rate": critic_reject_rate,
+        # Per-sequence breakdown
         "per_sequence": [
             {
                 "sequence": i,
                 "success": r == 5,
                 "subtasks_completed": r,
                 "total_target_subtasks": 5,
+                "total_vlm_calls": t.total_vlm_calls,
+                "total_reflections": t.total_reflections,
+                "critic_accepts": t.critic_accepts,
+                "critic_rejects": t.critic_rejects,
+                "critic_tp": t.critic_tp,
+                "critic_fp": t.critic_fp,
             }
-            for i, r in enumerate(results)
+            for i, (r, t) in enumerate(zip(results, traces))
         ],
     }
 
     summary_path = eval_dir / "eval_summary.json"
     with open(summary_path, "w") as f:
-        import json
         json.dump(summary, f, indent=2)
     logger.info("Eval summary saved to %s", summary_path)
 
-    # Print final report
+    _pct = lambda v: f"{v:.1%}" if v is not None else "N/A"
+    _flt = lambda v: f"{v:.3f}" if v is not None else "N/A"
     print("\n" + "=" * 60)
     print(f"  EVALUATION COMPLETE — {args.wm_mode} (CALVIN)")
     print("=" * 60)
-    print(f"  Sequences:                 {num_seqs}")
-    print(f"  Success Rate (5/5):        {summary['success_rate']:.1%} ({successes}/{num_seqs})")
-    print(f"  Subtask Completion Rate:   {summary['subtask_completion_rate']:.1%} ({total_subtasks}/{max_subtasks})")
-    print(f"  Avg Subtasks Completed:    {summary['avg_subtasks_completed']:.2f}")
-    print(f"  Results:                   {summary_path}")
+    print(f"  Sequences evaluated:  {num_seqs}")
+    print(f"")
+    print(f"  --- Chain Success Rates (primary CALVIN metric) ---")
+    print(f"  {'Tasks':>5}  {'SR':>8}   (# sequences completing at least N tasks)")
+    for k, v in enumerate(chain_sr):
+        n_success = sum(1 for r in results if r >= k + 1)
+        print(f"  {k+1:>5}/5  {_pct(v):>8}   ({n_success}/{num_seqs})")
+    print(f"")
+    print(f"  Avg subtasks completed:  {total_subtasks / num_seqs if num_seqs else 0.0:.2f} / 5.0")
+    print(f"  --- Planning Efficiency ---")
+    print(f"  Total VLM Calls:               {total_vlm_calls}")
+    print(f"  Total Reflections:             {total_reflections}")
+    print(f"  VLM Calls / Subtask Completed: {_flt(vlm_calls_per_subtask)}")
+    if total_critic_acc + total_critic_rej > 0:
+        print(f"  --- Critic Quality (online) ---")
+        print(f"  Critic Accepts:                {total_critic_acc}")
+        print(f"  Critic Rejects:                {total_critic_rej}")
+        print(f"  Critic Precision (TP/acc):     {_pct(critic_precision)}")
+        print(f"  Critic FP Rate  (FP/acc):      {_pct(critic_fp_rate)}")
+        print(f"  Critic Reject Rate:            {_pct(critic_reject_rate)}")
+    print(f"  Results:                       {summary_path}")
     print("=" * 60 + "\n")
 
     env.close()
