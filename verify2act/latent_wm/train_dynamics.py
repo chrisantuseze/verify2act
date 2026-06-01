@@ -285,7 +285,7 @@ def train(args):
     # Latent normalization constant — matches RLA-WM's latent_scalar_normalization=10.0.
     # Encoder latents are divided by this before flow interpolation so their scale
     # matches the unit-variance Gaussian noise.  Denormalised back after sampling.
-    LATENT_SCALE = 10.0
+    LATENT_SCALE = 1.0
 
     extractor = FeatureExtractor(device, dino_channels=args.dino_channels)
 
@@ -329,6 +329,7 @@ def train(args):
         num_patches=256,
         token_dim=args.token_dim,
         num_latent_tokens=args.num_latent_tokens,
+        latent_scale=LATENT_SCALE,
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)

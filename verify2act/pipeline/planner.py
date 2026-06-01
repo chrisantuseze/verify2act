@@ -365,6 +365,7 @@ class BeamSearchPlanner:
         language_goal: str = "",
         timestep: int = 0,
         output_dir: Optional[Union[str, pathlib.Path]] = None,
+        candidate_idx: Optional[int] = None,
         replan_attempt: int = 0,
     ) -> Tuple[float, Any, List[Tuple[float, float]], List[Tuple[str, str]], bool, Optional[int], List[str]]:
         """Roll out the proposed plan to the end of the horizon sequentially without a critic (ReflectVLM)."""
@@ -380,11 +381,28 @@ class BeamSearchPlanner:
             final_state = imagined_state_next
             
             if output_dir:
-                step_dir = pathlib.Path(output_dir) / "steps"
+                step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
                 step_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save initial state at step 0 if it doesn't exist
+                init_state_path = step_dir / "step_0_initial_state.png"
                 from PIL import Image
+                if not init_state_path.exists():
+                    Image.fromarray(current_image_np).save(init_state_path)
+                    
+                if candidate_idx is not None:
+                    plan_dir = step_dir / f"candidate_{candidate_idx:02d}"
+                else:
+                    plan_dir = step_dir / f"replan_attempt_{replan_attempt:02d}"
+                    
+                horizon_dir = plan_dir / f"horizon_{k+1:02d}"
+                horizon_dir.mkdir(parents=True, exist_ok=True)
+                
+                with open(horizon_dir / "action.txt", "w") as f:
+                    f.write(imagine_action)
+                    
                 Image.fromarray(imagined_state_next).save(
-                    step_dir / f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}.png"
+                    horizon_dir / "imagine_frame.png"
                 )
         
         # Since there is no critic, we use dummy values for scores
@@ -413,6 +431,7 @@ class BeamSearchPlanner:
         language_goal: str,
         timestep: int = 0,
         output_dir: Optional[Union[str, pathlib.Path]] = None,
+        candidate_idx: Optional[int] = None,
         replan_attempt: int = 0,
         decoder: Optional[torch.nn.Module] = None,
     ) -> Tuple[float, Any, List[Tuple[float, float]], List[Tuple[str, str]], bool, Optional[int], List[str]]:
@@ -469,6 +488,7 @@ class BeamSearchPlanner:
                 language_goal=language_goal,
                 timestep=timestep,
                 output_dir=output_dir,
+                candidate_idx=candidate_idx,
                 replan_attempt=replan_attempt,
             )
 
@@ -547,17 +567,35 @@ class BeamSearchPlanner:
                         final_state = imagined_state_next
 
                     if output_dir:
-                        step_dir = pathlib.Path(output_dir) / "steps"
+                        step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
+                        step_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        init_state_path = step_dir / "step_0_initial_state.png"
+                        if not init_state_path.exists():
+                            from PIL import Image
+                            Image.fromarray(current_image_np).save(init_state_path)
+                            
+                        if candidate_idx is not None:
+                            plan_dir = step_dir / f"candidate_{candidate_idx:02d}"
+                        else:
+                            plan_dir = step_dir / f"replan_attempt_{replan_attempt:02d}"
+                            
+                        horizon_dir = plan_dir / f"horizon_{k+1:02d}"
+                        horizon_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        with open(horizon_dir / "action.txt", "w") as f:
+                            f.write(imagine_action)
+                            
                         if not is_latent_wm:
                             _save_image(
-                                imagined_state_next, step_dir,
-                                f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}.png",
+                                imagined_state_next, horizon_dir,
+                                "imagine_frame.png",
                             )
                         elif decoder is not None:
                             image_from_latent = self.decode_dino_features(final_state, decoder)
                             _save_image(
-                                image_from_latent, step_dir,
-                                f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}_latent.png",
+                                image_from_latent, horizon_dir,
+                                "imagine_frame.png",
                             )
 
                     # ── 2. HEAD2: temporal consistency check ───────────────────
@@ -578,6 +616,18 @@ class BeamSearchPlanner:
                     decision_msg = f"k={k} action='{imagine_action}' tc={tc_score:.3f}(unc={tc_uncertainty:.3f}) → {decision.action}"
                     critic_decisions.append(decision_msg)
                     logger.info("  " + decision_msg)
+                    
+                    if output_dir:
+                        import json
+                        with open(horizon_dir / "temporal_critic.json", "w") as f:
+                            json.dump({
+                                "temporal_consistency_score": tc_score,
+                                "uncertainty": tc_uncertainty,
+                                "decision": decision.action,
+                                "decision_reason": decision.reason,
+                                "k": k,
+                                "attempt": attempt,
+                            }, f, indent=2)
 
                     # ── 2a. Per-step requery: re-sample from the same context ──
                     # Re-imagines only this step — does NOT restart the whole plan.
@@ -602,14 +652,14 @@ class BeamSearchPlanner:
                             if output_dir:
                                 if not is_latent_wm:
                                     _save_image(
-                                        imagined_state_next, step_dir,
-                                        f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}_retry{retry_i}.png",
+                                        imagined_state_next, horizon_dir,
+                                        f"imagine_frame_retry{retry_i}.png",
                                     )
                                 elif decoder is not None:
                                     image_from_latent = self.decode_dino_features(final_state, decoder)
                                     _save_image(
-                                        image_from_latent, step_dir,
-                                        f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}_retry{retry_i}_latent.png",
+                                        image_from_latent, horizon_dir,
+                                        f"imagine_frame_retry{retry_i}.png",
                                     )
 
                             with torch.no_grad():
@@ -660,6 +710,16 @@ class BeamSearchPlanner:
                 decision_msg = f"HEAD1 proximity={prox_score:.3f}(unc={prox_uncertainty:.3f}) → {prox_decision.action}"
                 critic_decisions.append(decision_msg)
                 logger.info("  " + decision_msg)
+                
+                if output_dir:
+                    import json
+                    with open(horizon_dir / "goal_critic.json", "w") as f:
+                        json.dump({
+                            "goal_proximity_score": prox_score,
+                            "uncertainty": prox_uncertainty,
+                            "decision": prox_decision.action,
+                            "decision_reason": prox_decision.reason,
+                        }, f, indent=2)
 
                 if prox_decision.action == "requery":
                     # Critic is uncertain — re-roll the entire imagined trajectory.
@@ -819,6 +879,7 @@ class BeamSearchPlanner:
                 language_goal=language_goal,
                 timestep=timestep,
                 output_dir=output_dir,
+                candidate_idx=None,
                 replan_attempt=attempt,
                 decoder=decoder,
             )
@@ -924,6 +985,8 @@ class BeamSearchPlanner:
         best_step_failed = True
         best_critic_decisions = []
 
+        candidate_scores_log = []
+
         # 2. Evaluate each candidate
         for i, plan in enumerate(candidate_plans):
             if not plan:
@@ -936,9 +999,17 @@ class BeamSearchPlanner:
                 language_goal=language_goal,
                 timestep=timestep,
                 output_dir=output_dir,
+                candidate_idx=i,
                 replan_attempt=0,
                 decoder=decoder,
             )
+            
+            candidate_scores_log.append({
+                "candidate_idx": i,
+                "plan": plan,
+                "score": score,
+                "step_failed": step_failed,
+            })
             
             is_better = False
             if best_plan is None:
@@ -963,6 +1034,13 @@ class BeamSearchPlanner:
             if not step_failed and score >= self.goal_threshold:
                 logger.info(f"Candidate {i+1} reached goal threshold {self.goal_threshold:.3f}. Short-circuiting search.")
                 break
+
+        if output_dir:
+            import json
+            step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
+            step_dir.mkdir(parents=True, exist_ok=True)
+            with open(step_dir / "candidate_plans.json", "w") as f:
+                json.dump(candidate_scores_log, f, indent=2)
 
         # Fallback if no plan was evaluated/chosen
         if best_plan is None:

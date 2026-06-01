@@ -91,11 +91,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/wm \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_causal \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 50 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/v2a_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best.pt
 
 # -------- CALVIN --------
 
@@ -143,7 +143,7 @@ CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_history_1/ckpt/latent_dynamics_best.pt \
+  --wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best.pt \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt \
   --history-len 1 \
@@ -264,6 +264,8 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode rla_wm \
   --num-sequences 25 \
@@ -276,6 +278,8 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-decoder-dir verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000 \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode diffusion \
   --num-sequences 10 \
@@ -285,6 +289,8 @@ python3 verify2act/pipeline/inference_calvin.py \
 python3 verify2act/pipeline/inference_calvin.py \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode vlm_only \
   --num-sequences 100 \
@@ -296,6 +302,8 @@ python3 verify2act/pipeline/inference_calvin.py \
   --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode dino_wm \
   --num-sequences 10 \

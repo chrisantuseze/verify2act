@@ -77,46 +77,7 @@ def _save_calvin_trace(trace: CalvinEpisodeTrace, output_dir: Path) -> None:
         json.dump(asdict(trace), f, indent=2, default=_default)
     logger.info("Calvin episode trace saved to %s", path)
 
-
-class MCILLowLevelPolicy:
-    """Wrapper for the pre-trained CALVIN baseline policy (MCIL/HULC)."""
-    
-    def __init__(self, train_folder: str, dataset_path: str, device: torch.device, extra_dataset_path: str = None):
-        logger.info(f"Loading MCIL baseline policy from {train_folder}...")
-        
-        train_folder_path = Path(train_folder)
-        checkpoint = get_last_checkpoint(train_folder_path)
-        
-        # Load the model using CALVIN's built-in loader
-        self.model, self.env, self.data_module = get_default_model_and_env(
-            train_folder=train_folder,
-            dataset_path=dataset_path,
-            checkpoint=checkpoint,
-            device_id=device.index if device.index is not None else 0,
-            extra_dataset_path=extra_dataset_path,
-        )
-        self.model.eval()
-        logger.info("MCIL baseline policy loaded successfully.")
-        
-    def reset(self):
-        self.model.reset()
-        
-    def step(self, obs: Dict[str, np.ndarray], text_instruction: str) -> np.ndarray:
-        # Returns a 7-DoF continuous action
-        action = self.model.step(obs, text_instruction)
-        if isinstance(action, torch.Tensor):
-            action = action.cpu().numpy()
-        return action
-
-    def propose_trajectory(self, obs: Dict[str, np.ndarray], text_instruction: str, steps: int = 10) -> List[np.ndarray]:
-        """
-        Propose a sequence of actions to achieve the instruction.
-        Note: MCIL is autoregressive on observations. It's difficult to propose a true
-        closed-loop trajectory without stepping the environment.
-        For Verify2Act's imagination phase, we might just need the text_instruction,
-        but we provide this interface for future action-conditioned world models.
-        """
-        return [self.step(obs, text_instruction) for _ in range(steps)]
+from verify2act.pipeline.calvin_policy_wrapper import LowLevelPolicyFactory
 
 
 class Verify2ActCalvinAgent(CalvinBaseModel):
@@ -133,6 +94,7 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         theta_c: float = 0.7,
         max_replans: int = 2,
         extra_dataset_path: str = None,
+        **kwargs,
     ):
         self.vlm_planner = vlm_planner
         self.world_model = world_model
@@ -141,9 +103,11 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         self.theta_c = theta_c
         self.max_replans = max_replans
 
-        # Load the actual MCIL pre-trained policy
-        self.low_level_policy = MCILLowLevelPolicy(
-            train_folder, dataset_path, device,
+        self.low_level_policy = LowLevelPolicyFactory.get_policy(
+            policy_type=kwargs.get("low_level_policy_type", "hulc"),
+            train_folder=train_folder, 
+            dataset_path=dataset_path, 
+            device=device,
             extra_dataset_path=extra_dataset_path,
         )
 
@@ -170,9 +134,10 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
 
     # ── Trace management helpers ──────────────────────────────────────────
 
-    def start_sequence(self, sequence_idx: int) -> None:
+    def start_sequence(self, sequence_idx: int, output_dir: Optional[Path] = None) -> None:
         """Call before each new evaluation sequence to reset the accumulator."""
         self._sequence_idx = sequence_idx
+        self.output_dir = output_dir
         self._current_trace = CalvinEpisodeTrace(sequence_idx=sequence_idx)
         self._subtask_idx = 0
         self._current_subtask_rec = CalvinSubtaskRecord(
@@ -240,6 +205,7 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         self._reflect_count = 0
         self._last_reflect_step = -999
         self._last_reflected_plan = []
+        self._last_verify_dir = None
         if hasattr(self, "low_level_policy"):
             self.low_level_policy.reset()
         if hasattr(self.vlm_planner, "reset_history"):
@@ -257,6 +223,22 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
             action: 7-DoF continuous action array
         """
         # 1. Update the active goal
+        
+        if hasattr(self.low_level_policy, "env") and hasattr(self.low_level_policy.env, "env"):
+            raw_obs = self.low_level_policy.env.env.get_obs()
+            img_np = raw_obs['rgb_obs']['rgb_static']
+        else:
+            img_np = obs['rgb_obs']['rgb_static']
+
+        if getattr(self, "_last_verify_dir", None) is not None:
+            exec_dir = self._last_verify_dir / "execution" / "horizon_01"
+            exec_dir.mkdir(parents=True, exist_ok=True)
+            from PIL import Image
+            Image.fromarray(img_np).save(exec_dir / "groundtruth_frame.png")
+            with open(exec_dir / "action.txt", "w") as f:
+                f.write(self.plan_queue[0] if self.plan_queue else self.current_subgoal)
+            self._last_verify_dir = None
+
         if goal != self.current_subgoal:
             logger.info(f"New CALVIN Goal Received: {goal}")
             self.current_subgoal = goal
@@ -314,13 +296,16 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         should_verify = (self._step_count % 30 == 0) and (self.world_model is not None)
 
         if should_verify:
-            # 1. Get current state image
-            if hasattr(self.low_level_policy, "env") and hasattr(self.low_level_policy.env, "env"):
-                raw_obs = self.low_level_policy.env.env.get_obs()
-                img_np = raw_obs['rgb_obs']['rgb_static']
-            else:
-                img_np = obs['rgb_obs']['rgb_static']
-            
+            verify_dir = None
+            if getattr(self, "output_dir", None) is not None:
+                verify_dir = self.output_dir / "imagination_logs" / f"planning_call_{self._step_count:02d}"
+                verify_dir.mkdir(parents=True, exist_ok=True)
+                from PIL import Image
+                init_state_path = verify_dir / "step_0_initial_state.png"
+                if not init_state_path.exists():
+                    Image.fromarray(img_np).save(init_state_path)
+                self._last_verify_dir = verify_dir
+
             # 2. Propose a trajectory from the low-level policy
             # Note: Dummy policy just returns 10 copies of the single action.
             # A real policy might autoregressively generate a sequence.
@@ -360,6 +345,30 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                         if getattr(self, "decoder", None) is not None:
                             # Decode DINO features to image for VLM planner verification
                             imagined_img_next = self.decode_dino_features(F_next, self.decoder)
+                            
+                            if verify_dir is not None:
+                                candidate_str = f"candidate_00" if self._reflect_count == 0 else f"replan_attempt_{self._reflect_count:02d}"
+                                horizon_dir = verify_dir / candidate_str / "horizon_01"
+                                horizon_dir.mkdir(parents=True, exist_ok=True)
+                                from PIL import Image
+                                Image.fromarray(imagined_img_next).save(horizon_dir / "imagine_frame.png")
+                                with open(horizon_dir / "action.txt", "w") as f:
+                                    f.write(active_instruction)
+                                import json
+                                with open(horizon_dir / "temporal_critic.json", "w") as f:
+                                    json.dump({
+                                        "temporal_consistency_score": mean_tc.item(),
+                                        "uncertainty": std_tc.item(),
+                                        "decision": decision.action,
+                                        "decision_reason": decision.reason,
+                                    }, f, indent=2)
+                                with open(horizon_dir / "goal_critic.json", "w") as f:
+                                    json.dump({
+                                        "goal_proximity_score": mean_prox.item(),
+                                        "uncertainty": std_prox.item(),
+                                        # (Decision saved below after proximity check)
+                                    }, f, indent=2)
+
                             vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
                             if not vlm_verification["achieved"]:
                                 decision.action = "reflect"
@@ -421,6 +430,28 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                             emb_next_pe, active_instruction
                         )
                     if decision.action != "reflect":
+                        if verify_dir is not None:
+                            candidate_str = f"candidate_00" if self._reflect_count == 0 else f"replan_attempt_{self._reflect_count:02d}"
+                            horizon_dir = verify_dir / candidate_str / "horizon_01"
+                            horizon_dir.mkdir(parents=True, exist_ok=True)
+                            from PIL import Image
+                            Image.fromarray(imagined_img_next).save(horizon_dir / "imagine_frame.png")
+                            with open(horizon_dir / "action.txt", "w") as f:
+                                f.write(active_instruction)
+                            import json
+                            with open(horizon_dir / "temporal_critic.json", "w") as f:
+                                json.dump({
+                                    "temporal_consistency_score": mean_tc.item(),
+                                    "uncertainty": std_tc.item(),
+                                    "decision": decision.action,
+                                    "decision_reason": decision.reason,
+                                }, f, indent=2)
+                            with open(horizon_dir / "goal_critic.json", "w") as f:
+                                json.dump({
+                                    "goal_proximity_score": mean_prox.item(),
+                                    "uncertainty": std_prox.item(),
+                                }, f, indent=2)
+
                         vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
                         if not vlm_verification["achieved"]:
                             decision.action = "reflect"

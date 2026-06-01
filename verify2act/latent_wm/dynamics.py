@@ -61,7 +61,7 @@ class LatentDynamicsModel(nn.Module):
         token_dim: int = 64,            # Dim of each compact latent token
         num_latent_tokens: int = 16,    # Number of compact latent tokens
         # ── Latent normalization (#1) ────────────────────────────────────────
-        latent_scale: float = 10.0,     # Matches RLA-WM latent_scalar_normalization
+        latent_scale: float = 1.0,     # Matches RLA-WM latent_scalar_normalization
     ):
         super().__init__()
         self.dino_channels = dino_channels

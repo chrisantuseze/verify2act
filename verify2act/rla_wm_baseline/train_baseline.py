@@ -32,7 +32,7 @@ from verify2act.rla_wm_baseline.dynamics import BaselineRLAWM
 from verify2act.latent_wm.delta_encoder import DeltaEncoder
 
 # Latent normalization constant — matches RLA-WM's latent_scalar_normalization=10.0.
-LATENT_SCALE = 10.0
+LATENT_SCALE = 1.0
 
 # ─── TRAINING LOOP ───────────────────────────────────────────────────────
 
@@ -151,6 +151,7 @@ def train(args):
         num_patches=256,
         token_dim=args.token_dim,
         num_latent_tokens=args.num_latent_tokens,
+        latent_scale=LATENT_SCALE,
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)

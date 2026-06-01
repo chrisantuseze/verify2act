@@ -508,10 +508,16 @@ def run_episode(
             history.append(action)
 
             if out_path:
+                exec_horizon_dir = out_path / "imagination_logs" / f"planning_call_{t:02d}" / "execution" / f"horizon_{idx+1:02d}"
+                exec_horizon_dir.mkdir(parents=True, exist_ok=True)
+                
+                with open(exec_horizon_dir / "action.txt", "w") as f:
+                    f.write(action_label)
+                    
                 _save_image(
                     env_wrapper.read_image(),
-                    out_path / "steps",
-                    f"step_{t:03d}_after_exec.png",
+                    exec_horizon_dir,
+                    "groundtruth_frame.png",
                 )
 
             if not skill_ok:

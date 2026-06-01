@@ -13,36 +13,6 @@
 # sbatch verify2act.sbatch
 
 # ==============================================================================
-# CRITIC TRAINING
-# ==============================================================================
-
-# RoboSuite Critic Training
-python3 verify2act/critic/train_contrastive.py \
-  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/contrastive/nut_assembly \
-  --dataset-type robosuite \
-  --epochs 50 \
-  --batch-size 16 \
-  --learning-rate 1e-4 \
-  --lambda1 0.4 \
-  --lambda2 0.8 \
-  --kl-weight 5e-4 \
-  --device cuda
-
-# Calvin Critic Training
-python3 verify2act/critic/train_contrastive.py \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/contrastive/calvin \
-  --dataset-type calvin \
-  --epochs 50 \
-  --batch-size 32 \
-  --learning-rate 1e-4 \
-  --lambda1 0.4 \
-  --lambda2 0.8 \
-  --kl-weight 5e-4 \
-  --device cuda
-
-# ==============================================================================
 # RLA_WM BASELINE TRAINING
 # ==============================================================================
 
@@ -54,7 +24,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --output-dir verify2act/output/rla_wm/nut_assembly/wm \
   --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --num-epochs 100 \
-  --batch-size 32 \
+  --batch-size 16 \
   --lr 1e-4 \
   --checkpoint-freq 5 \
   --resume-from verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt

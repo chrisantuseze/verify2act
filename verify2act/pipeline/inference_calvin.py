@@ -126,7 +126,7 @@ def _evaluate_calvin(
 
     for seq_idx, (initial_state, eval_sequence) in enumerate(eval_sequences):
         # ── Reset per-sequence accumulator ─────────────────────────
-        agent.start_sequence(seq_idx)
+        agent.start_sequence(seq_idx, output_dir=eval_log_dir)
 
         # ── Reset env to the initial scene state ─────────────────────
         robot_obs, scene_obs = get_env_state_for_initial_condition(initial_state)
@@ -245,6 +245,8 @@ def main() -> int:
     
     # CALVIN directories & policies
     parser.add_argument("--train-folder", default="calvin/models/hulc_baseline", help="MCIL/HULC baseline logs/checkpoints dir")
+    parser.add_argument("--low-level-policy", choices=["hulc", "diffusion", "mode"], default="hulc", help="Type of low-level policy to use")
+    parser.add_argument("--low-level-policy-ckpt", default=None, help="Path to checkpoint for diffusion low-level policy (if different from train-folder)")
     parser.add_argument("--dataset-path", default="calvin/dataset/task_ABC_D", help="Primary CALVIN dataset dir (used for env init and statistics)")
     parser.add_argument(
         "--full-dataset-path",
@@ -395,11 +397,12 @@ def main() -> int:
         world_model=world_model,
         critic=critic,
         device=device,
-        train_folder=args.train_folder,
+        train_folder=args.low_level_policy_ckpt if args.low_level_policy_ckpt else args.train_folder,
         dataset_path=args.dataset_path,
         theta_c=args.theta_c,
         max_replans=args.max_replans,
         extra_dataset_path=args.full_dataset_path,
+        low_level_policy_type=args.low_level_policy,
     )
     if device.type == "cuda":
         torch.cuda.empty_cache()
