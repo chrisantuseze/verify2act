@@ -30,10 +30,10 @@ export APPTAINER_BIND=$PWD
 #   --causal-masking \
 #   --resume-from verify2act/output/v2a_wm/calvin/task_ABC_D/ckpt/latent_dynamics_best.pt
 
-apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-  --input-dir calvin/dataset/task_ABC_D/validation \
-  --output-dir calvin/dataset/task_ABC_D_filtered/validation \
-  --history-len 5
+# apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+#   --input-dir calvin/dataset/task_ABC_D/validation \
+#   --output-dir calvin/dataset/task_ABC_D_filtered/validation \
+#   --history-len 5
 
 # apptainer exec --nv verify2act.sif accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 verify2act/latent_wm/train_dynamics.py \
 #   --dataset-type calvin \
@@ -45,3 +45,17 @@ apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_datase
 #   --causal-masking
 
 # apptainer exec --nv verify2act.sif python3 unzip.py
+
+apptainer exec --nv verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
+
+apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+  --input-dir calvin/dataset/task_ABCD_D/training \
+  --output-dir calvin/dataset/task_ABCD_D_filtered/training \
+  --history-len 10 &
+
+apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+  --input-dir calvin/dataset/task_ABCD_D/validation \
+  --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
+  --history-len 10 &
+
+wait
