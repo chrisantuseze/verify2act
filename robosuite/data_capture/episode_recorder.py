@@ -212,9 +212,11 @@ class EpisodeRecorder:
         if success:
             last_t = self._step_count
             needed.add(last_t)
-            last_frame_bytes = self._frame_buffer.get(last_t)
-            if last_frame_bytes:
-                (self.episode_dir / "goal.png").write_bytes(last_frame_bytes)
+            last_frame_rgb = self._frame_buffer.get(last_t)
+            if last_frame_rgb is not None:
+                buf = io.BytesIO()
+                Image.fromarray(last_frame_rgb).save(buf, format='PNG')
+                (self.episode_dir / "goal.png").write_bytes(buf.getvalue())
             goal_rel = str(Path("episodes") / self.episode_id / "goal.png")
             goal_source = "self"
         else:
@@ -308,7 +310,7 @@ class EpisodeRecorder:
         self._info: Dict = {}
         self.episode_id = ""
         self.episode_dir: Optional[Path] = None
-        self._frame_buffer: Dict[int, bytes] = {}
+        self._frame_buffer: Dict[int, np.ndarray] = {}
         self._state_buffer: Dict[int, tuple] = {}
 
     def _render_rgb(self) -> np.ndarray:
@@ -334,11 +336,8 @@ class EpisodeRecorder:
         return cam_obs.rgb
 
     def _buffer_frame(self, t: int):
-        """Render and store a frame as compressed PNG bytes in memory."""
-        rgb = self._render_rgb()
-        buf = io.BytesIO()
-        Image.fromarray(rgb).save(buf, format='PNG')
-        self._frame_buffer[t] = buf.getvalue()
+        """Render and store a frame as a raw numpy array in memory."""
+        self._frame_buffer[t] = self._render_rgb()
 
     def _buffer_sim_state(self, t: int):
         """Capture and store the sim state in memory."""
@@ -362,9 +361,11 @@ class EpisodeRecorder:
     def _write_needed_frames_and_states(self, needed: set):
         """Write only the buffered frames and states whose timestep is in `needed`."""
         for t in needed:
-            frame_bytes = self._frame_buffer.get(t)
-            if frame_bytes is not None:
-                (self.episode_dir / f"frame_{t:05d}.png").write_bytes(frame_bytes)
+            frame_rgb = self._frame_buffer.get(t)
+            if frame_rgb is not None:
+                buf = io.BytesIO()
+                Image.fromarray(frame_rgb).save(buf, format='PNG')
+                (self.episode_dir / f"frame_{t:05d}.png").write_bytes(buf.getvalue())
             state_entry = self._state_buffer.get(t)
             if state_entry is not None:
                 qpos, qvel = state_entry

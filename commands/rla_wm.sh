@@ -21,14 +21,11 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/rla_wm_baseline/train_baseline.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/rla_wm/nut_assembly/wm \
+  --output-dir verify2act/output/rla_wm/nut_assembly/wm_causal \
   --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 \
-  --batch-size 16 \
-  --lr 1e-4 \
-  --checkpoint-freq 5 \
-  --resume-from verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
-
+  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --resume-from verify2act/output/rla_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best.pt
+ 
 # -------- CALVIN --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/rla_wm_baseline/train_baseline.py \
