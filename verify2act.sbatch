@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH -p bullet
+#SBATCH -p batch
 #SBATCH -t 72:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=12
 #SBATCH --mail-user=chrisantus.eze@okstate.edu
 #SBATCH --mail-type=end
-module load apptainer/1.2.2 cuda/12.1
+# #SBATCH --gres=gpu:1
+# module load apptainer/1.2.2 cuda/12.1
 export APPTAINER_BIND=$PWD
 
 # # Run 10 data collection processes in parallel (you can add more seeds to the list)
@@ -46,14 +47,14 @@ export APPTAINER_BIND=$PWD
 
 # apptainer exec --nv verify2act.sif python3 unzip.py
 
-apptainer exec --nv verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
+apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
 
-apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABCD_D/training \
   --output-dir calvin/dataset/task_ABCD_D_filtered/training \
   --history-len 10 &
 
-apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABCD_D/validation \
   --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
   --history-len 10 &
