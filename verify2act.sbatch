@@ -1,4 +1,5 @@
 #!/bin/bash
+# #SBATCH -p bullet
 #SBATCH -p batch
 #SBATCH -t 72:00:00
 #SBATCH --nodes=1
