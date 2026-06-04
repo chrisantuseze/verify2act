@@ -8,6 +8,7 @@
 #SBATCH --mail-type=end
 # #SBATCH --gres=gpu:1
 # module load apptainer/1.2.2 cuda/12.1
+module load apptainer/1.2.2
 export APPTAINER_BIND=$PWD
 
 # # Run 10 data collection processes in parallel (you can add more seeds to the list)
