@@ -192,7 +192,7 @@ class HeuristicNutAssemblyPolicy:
     NUT_EEF_ATTACH_THRESH = 0.04  # Max distance (m) between nut and EEF to consider it attached
     
     # Counter thresholds
-    GRASP_DURATION = 25
+    GRASP_DURATION = 35
     RELEASE_DURATION = 20
     ALIGN_DURATION = 40  # For aligning nut over peg
     PRE_GRASP_ALIGN_DURATION = 15  # Min steps to spend aligning orientation before lowering to nut
@@ -200,7 +200,7 @@ class HeuristicNutAssemblyPolicy:
     # End-effector stagnation detection (if EEF stays within `EEF_STAGNATION_THRESH`
     # meters for `EEF_STAGNATION_MAX_STEPS` steps, reset the episode)
     EEF_STAGNATION_THRESH = 0.0015  # meters (2 mm)
-    EEF_STAGNATION_MAX_STEPS = 150 #50
+    EEF_STAGNATION_MAX_STEPS = 200 #50
     
     def __init__(self, env, data_collection_mode: bool = True):
         """

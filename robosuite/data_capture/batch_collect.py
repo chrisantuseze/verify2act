@@ -14,9 +14,9 @@ Usage:
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 2 --initial-stacking-prob 0.0 \
-        --nut-type-mode random --num-episodes 3000 \
-        --image-size 512 --seed 42
+        --num-round 3 --num-square 3 --initial-stacking-prob 1.0 \
+        --nut-type-mode random --num-episodes 20 \
+        --image-size 512 --seed 44
 
     # Expert episodes --headless
     xvfb-run -a python batch_collect.py \
@@ -362,7 +362,7 @@ def main():
                         choices=["Stack", "Stack3", "Stack4",
                                  "ClutteredNutAssembly", "PickPlace"])
     parser.add_argument("--num-episodes", type=int, default=10)
-    parser.add_argument("--max-timesteps", type=int, default=1500)
+    parser.add_argument("--max-timesteps", type=int, default=2500)
     parser.add_argument("--output-dir", type=str,
                         default="dataset/nut_assembly")
     parser.add_argument("--camera", type=str, default="agentview")

@@ -477,15 +477,18 @@ class ClutteredNutAssembly(ManipulationEnv):
             target_nuts = self.square_nut_names
             obstacle_nuts = self.round_nut_names
 
+        used_obstacles = set()
+
         # Decide which target nuts get an obstacle nut stacked on them
         for target_nut in target_nuts:
             if np.random.random() < self.initial_stacking_prob and obstacle_nuts:
                 # Pick a random obstacle nut that hasn't been stacked yet
                 available_obstacles = [s for s in obstacle_nuts
-                                       if not self._is_nut_stacked(s)]
+                                       if not self._is_nut_stacked(s) and s not in used_obstacles]
                 if available_obstacles:
                     obstacle_nut = np.random.choice(available_obstacles)
                     self._stack_nut_on_nut(obstacle_nut, target_nut)
+                    used_obstacles.add(obstacle_nut)
 
         # Let stacked objects settle
         for _ in range(10):
