@@ -192,27 +192,35 @@ class HeuristicNutAssemblyPolicy:
     NUT_EEF_ATTACH_THRESH = 0.04  # Max distance (m) between nut and EEF to consider it attached
     
     # Counter thresholds
-    GRASP_DURATION = 35
+    GRASP_DURATION = 25
     RELEASE_DURATION = 20
     ALIGN_DURATION = 40  # For aligning nut over peg
     PRE_GRASP_ALIGN_DURATION = 15  # Min steps to spend aligning orientation before lowering to nut
-    ORIENTATION_RESET_DURATION = 50  # Steps to spend resetting gripper orientation after release
+    ORIENTATION_RESET_DURATION = 150  # Max steps for resetting gripper back to init pose (increased to allow travel time)
     # End-effector stagnation detection (if EEF stays within `EEF_STAGNATION_THRESH`
     # meters for `EEF_STAGNATION_MAX_STEPS` steps, reset the episode)
     EEF_STAGNATION_THRESH = 0.0015  # meters (2 mm)
     EEF_STAGNATION_MAX_STEPS = 200 #50
     
-    def __init__(self, env, data_collection_mode: bool = True):
+    def __init__(self, env, data_collection_mode: bool = True, disable_reactive_blocking: bool = False, obs: Optional[dict] = None):
         """
         Initialize the heuristic policy.
         
         Args:
             env: The robosuite environment instance
             data_collection_mode: If True, disable retries for clean training trajectories
+            disable_reactive_blocking: If True, do not reactively clear blockers
+            obs: Initial observation dictionary (prevents duplicate resets)
         """
         self.env = env
-        self.obs = env.reset()
+        if obs is not None:
+            self.obs = obs
+        elif hasattr(env, "_obs") and env._obs is not None:
+            self.obs = env._obs
+        else:
+            self.obs = env.reset()
         self.data_collection_mode = data_collection_mode
+        self.disable_reactive_blocking = disable_reactive_blocking
 
         # Initialize planner (used for precondition checking only in reactive mode)
         self.planner = SymbolicPlanner(env)
@@ -244,8 +252,21 @@ class HeuristicNutAssemblyPolicy:
         self.table_z = self.env.table_offset[2]
         self.safe_z_height = self.table_z + self.SAFE_Z_OFFSET
 
-        # Cache initial EEF position for reset orientation stage
+        # Cache initial EEF position and joint qpos for reset orientation stage.
+        # We take the observation immediately after reset — this is the canonical
+        # neutral pose the robot should return to between pick-insert cycles.
         self.init_eef_pos = self.obs.get("robot0_eef_pos", None)
+        # Store initial joint positions AND velocities so we can hard-teleport
+        # back to them between pick-insert cycles (avoids OSC IK ambiguity).
+        try:
+            robot = self.env.robots[0]
+            self.init_joint_qpos = self.env.sim.data.qpos[
+                robot._ref_joint_pos_indexes
+            ].copy()
+            self.init_joint_vel_indexes = robot._ref_joint_vel_indexes
+        except Exception:
+            self.init_joint_qpos = None
+            self.init_joint_vel_indexes = None
 
         # Cache peg body ids from simulator (observations don't include peg positions)
         try:
@@ -476,7 +497,7 @@ class HeuristicNutAssemblyPolicy:
         print(f"Safe Z height: {self.safe_z_height}")
         print(f"Currently targeting: {self.current_nut} -> peg {self.current_peg_id}\n")
 
-        print(f"\nobs keys: {list(self.obs.keys())}\n")
+        # print(f"\nobs keys: {list(self.obs.keys())}\n")
     
     def _is_current_nut_obstacle(self) -> bool:
         """Check if current nut is an obstacle (different type from target) or target nut.
@@ -1168,12 +1189,36 @@ class HeuristicNutAssemblyPolicy:
     def stage_reset_orientation(self, eef_pos: np.ndarray,
                                 nut_pos: np.ndarray,
                                 peg_pos: np.ndarray) -> Tuple[np.ndarray, Optional[str]]:
-        """Reset gripper position and yaw to neutral pose before moving to next nut."""
+        """Reset gripper position and yaw to neutral pose before moving to next nut.
+
+        This stage does two things simultaneously:
+          1. Drives the EEF *back* to its initial XY/Z position (as recorded at
+             episode start) so the next pick approach begins from a consistent pose.
+          2. Drives the wrist yaw back to 0 rad (neutral) so the gripper finger
+             orientation is predictable for the next approach.
+
+        Both conditions (position reached + yaw aligned) must be satisfied before
+        transitioning to ``move_to_nut``.  A step-count timeout is used as a
+        safety valve.
+
+        The hard joint reset fires on the **very first tick** (reset_counter==0)
+        so it executes even when the inference wrapper uses reset_orientation as a
+        terminal stage and stops the loop immediately after the stage is entered.
+        """
         action = np.zeros(self.env.action_dim)
 
-        # Move back toward initial EEF position at a safe height
+        # Hard-reset joints at stage ENTRY (first tick only) so the reset is
+        # guaranteed to execute regardless of how long this stage runs.
+        if self.reset_counter == 0:
+            self._hard_reset_robot_joints()
+            # Re-read eef_pos from updated observations so subsequent position
+            # control starts from the correct (post-reset) state.
+            eef_pos = self.obs.get("robot0_eef_pos", eef_pos)
+
+        # --- Position: drive back toward initial EEF XY/Z at a safe height ------
         if self.init_eef_pos is not None:
             reset_target = self.init_eef_pos.copy()
+            # Ensure we never clip through the table during transit
             reset_target[2] = max(self.safe_z_height, reset_target[2])
         else:
             # Fallback: hover at current XY, safe Z
@@ -1181,24 +1226,24 @@ class HeuristicNutAssemblyPolicy:
             reset_target = eef_pos.copy()
             reset_target[2] = max(self.safe_z_height, eef_pos[2])
 
-        # action[:3] = self.compute_position_action(reset_target, eef_pos)
+        # Drive position — this line was inadvertently commented out previously,
+        # which caused the robot to stall wherever it released the nut.
+        action[:3] = self.compute_position_action(reset_target, eef_pos)
 
-        # Drive yaw toward neutral (0 rad) and check alignment
+        # --- Orientation: drive wrist yaw toward 0 rad (neutral) ----------------
         current_quat = self.get_current_eef_quat()
         yaw_ready = True
-        
+
         if current_quat is not None:
             try:
                 cur_mat = T.quat2mat(current_quat)
                 _, _, cur_yaw = T.mat2euler(cur_mat)
                 yaw_err = self._wrap_angle(0.0 - cur_yaw)
-                
-                # Apply orientation control
+
                 if self.env.action_dim >= 6:
                     yaw_delta = np.clip(self.R_GAIN * yaw_err, -0.6, 0.6)
                     action[3:6] = np.array([0.0, 0.0, yaw_delta])
-                
-                # Check if aligned
+
                 yaw_ready = abs(yaw_err) < np.radians(5)
             except Exception:
                 print("Warning: failed to compute yaw error, proceeding without orientation control")
@@ -1209,12 +1254,46 @@ class HeuristicNutAssemblyPolicy:
         next_stage = None
 
         pos_error = np.linalg.norm(reset_target - eef_pos)
-        if (pos_error < 0.01 and yaw_ready) or (self.reset_counter > self.ORIENTATION_RESET_DURATION):
+
+        # Transition when both position and orientation are satisfied, or on timeout
+        reached = pos_error < 0.02 and yaw_ready
+        timed_out = self.reset_counter > self.ORIENTATION_RESET_DURATION
+        if reached or timed_out:
+            if timed_out and not reached:
+                print(f"  reset_orientation timeout (pos_err={pos_error:.3f}m, "
+                      f"yaw_ready={yaw_ready}) after {self.reset_counter} steps")
             self.reset_counter = 0
             next_stage = "move_to_nut"
             print(f"Stage: reset_orientation -> {next_stage}")
 
         return action, next_stage
+
+    def _hard_reset_robot_joints(self):
+        """Directly teleport robot joint angles to their episode-start values.
+
+        The OSC controller resolves Cartesian targets through IK, which can
+        produce different joint configurations for the same EEF position.  After
+        wrist-yaw rotations during nut alignment/insertion the arm may settle in
+        a kinematically alien pose that causes stagnation on the next lower-to-nut
+        approach.  Writing ``qpos`` directly bypasses this ambiguity and gives a
+        guaranteed, reproducible starting configuration for every pick cycle.
+        """
+        if self.init_joint_qpos is None:
+            return
+        try:
+            robot = self.env.robots[0]
+            # Write joint positions
+            self.env.sim.data.qpos[robot._ref_joint_pos_indexes] = self.init_joint_qpos.copy()
+            # Zero joint velocities so the arm doesn't lurch from residual momentum
+            if self.init_joint_vel_indexes is not None:
+                self.env.sim.data.qvel[self.init_joint_vel_indexes] = 0.0
+            # Propagate kinematics (updates body positions, site positions, etc.)
+            self.env.sim.forward()
+            # Refresh observations so the next stage reads the correct EEF pose
+            self.obs = self.env._get_observations()
+            print("  [Reset] Hard joint reset to initial configuration ✓")
+        except Exception as e:
+            print(f"  [Reset] Hard joint reset failed: {e}")
     
     def stage_skip_nut(self, eef_pos: np.ndarray, 
                       nut_pos: np.ndarray,
@@ -1305,7 +1384,7 @@ class HeuristicNutAssemblyPolicy:
         """
         # Check preconditions: is current nut graspable?
         can_execute, blocker = self._check_subtask_preconditions()
-        if not can_execute:
+        if not can_execute and not self.disable_reactive_blocking:
             # Reactively switch to clearing the blocker first
             print(f"⚠️ Switching target: {self.current_nut} blocked by {blocker}")
 
@@ -1399,36 +1478,36 @@ class HeuristicNutAssemblyPolicy:
         return action, False
 
 
-def create_environment(env_name: str = "NutAssembly", 
-                      num_round_nuts: int = 2,
-                      num_square_nuts: int = 2,
-                      initial_stacking_prob: float = 0.0,
+def create_environment(env_name: str = "NutAssembly",
+                      num_round_nuts: int = 3,
+                      num_square_nuts: int = 3,
+                      guarantee_overlap: bool = True,
                       nut_type_mode: str = "random",
                       has_renderer: bool = True,
                       has_offscreen_renderer: bool = False,
-                    #   render_camera: str = "agentview",
                       use_camera_obs: bool = False,
-                      horizon: int = 2000):
+                      horizon: int = 2500):
     """
     Create and configure the robosuite ClutteredNutAssembly environment.
-    
+
     Args:
         env_name: Name of the environment (defaults to "NutAssembly" but creates ClutteredNutAssembly)
         num_round_nuts: Number of round nuts in the scene
         num_square_nuts: Number of square nuts in the scene
-        initial_stacking_prob: Probability that nuts start stacked
+        guarantee_overlap: If True, at least one obstacle nut is guaranteed to be
+            stacked on a target nut at the start of every episode.
         nut_type_mode: Which nut type mode to use ("roundnut", "squarenut", "random", or "alternate")
         has_renderer: Enable on-screen rendering
         has_offscreen_renderer: Enable offscreen rendering for cameras
         render_camera: Camera used by on-screen renderer (e.g., agentview)
         use_camera_obs: Enable camera observations
         horizon: Episode horizon
-        
+
     Returns:
         Configured environment instance
     """
     controller_config = load_composite_controller_config(controller="BASIC")
-    
+
     env = make(
         env_name="ClutteredNutAssembly",
         robots="Panda",
@@ -1444,9 +1523,9 @@ def create_environment(env_name: str = "NutAssembly",
         num_round_nuts=num_round_nuts,
         num_square_nuts=num_square_nuts,
         nut_type_mode=nut_type_mode,
-        initial_stacking_prob=initial_stacking_prob,
+        guarantee_overlap=guarantee_overlap,
     )
-    
+
     return env
 
 
@@ -1480,17 +1559,17 @@ def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000, nut
             # env.reset() does a hard reset so the MuJoCo model/sim is replaced;
             # flush stale renderers so render_goal() allocates fresh ones.
             policy = HeuristicNutAssemblyPolicy(env)
-            goal_renderer.flush_renderers()
+            # goal_renderer.flush_renderers()
 
             # Render goal image anchored to this episode's settled configuration.
-            print("Rendering goal image...")
-            goal_rgb = goal_renderer.render_goal()
-            if goal_rgb is not None:
-                goal_path = Path(f"goal_nut_ep{episode}.png")
-                Image.fromarray(goal_rgb).save(str(goal_path))
-                print(f"Goal image saved to: {goal_path.resolve()}")
-            else:
-                print("[Warning] Goal rendering failed; continuing without goal image.")
+            # print("Rendering goal image...")
+            # goal_rgb = goal_renderer.render_goal()
+            # if goal_rgb is not None:
+            #     goal_path = Path(f"goal_nut_ep{episode}.png")
+            #     Image.fromarray(goal_rgb).save(str(goal_path))
+            #     print(f"Goal image saved to: {goal_path.resolve()}")
+            # else:
+            #     print("[Warning] Goal rendering failed; continuing without goal image.")
 
             print("Starting episode loop...\n")
             step = 0
@@ -1519,13 +1598,13 @@ def run_heuristic_policy(env_name: str = "NutAssembly", horizon: int = 2000, nut
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="Run heuristic nut assembly policy"
     )
     parser.add_argument(
-        '--env', 
-        type=str, 
+        '--env',
+        type=str,
         default='NutAssembly',
         choices=['NutAssembly', 'NutAssemblySingle', 'NutAssemblySquare', 'NutAssemblyRound'],
         help='Which NutAssembly environment to run'
@@ -1545,10 +1624,16 @@ if __name__ == "__main__":
     parser.add_argument(
         '--nut-type-mode',
         type=str,
-        default='squarenut',
+        default='random',
         choices=['roundnut', 'squarenut', 'random', 'alternate'],
         help='Nut type mode for ClutteredNutAssembly'
     )
-    
+    parser.add_argument(
+        '--guarantee-overlap',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Guarantee at least one obstacle nut is stacked on a target nut at episode start'
+    )
+
     args = parser.parse_args()
-    run_heuristic_policy(env_name=args.env, horizon=args.horizon, nut_type_mode=args.nut_type_mode)        # Identify nut names from observations
+    run_heuristic_policy(env_name=args.env, horizon=args.horizon, nut_type_mode=args.nut_type_mode)

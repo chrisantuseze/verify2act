@@ -19,22 +19,14 @@ from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
 from accelerate.utils import set_seed
 
-from transformers import CLIPTextModel, CLIPTokenizer
-
 import sys
-from pathlib import Path
 root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
+# Import DINO-WM baseline dynamics and the shared verify2act dataset utilities
 from verify2act.latent_wm.train_dynamics import LatentDynamicsDataset, FeatureExtractor
-from verify2act.rla_wm_baseline.dynamics import BaselineRLAWM
-from verify2act.latent_wm.delta_encoder import DeltaEncoder
-
-# Latent normalization constant — matches RLA-WM's latent_scalar_normalization=10.0.
-LATENT_SCALE = 1.0
-
-# ─── TRAINING LOOP ───────────────────────────────────────────────────────
+from verify2act.dino_wm_baseline.dynamics import BaselineDINOWM
 
 def train(args):
     # Set seed for reproducibility
@@ -48,31 +40,28 @@ def train(args):
     batch_size = args.batch_size
     num_epochs = args.num_epochs
     lr = args.lr
-    sparsity_weight = args.sparsity_weight
-    dataset_dir = args.dataset_dir
     device = accelerator.device
     
     if accelerator.is_local_main_process:
         print(f"Using device: {device} (Accelerate distributed)")
-        print(f"Sparsity Weight: {sparsity_weight}")
+        print(f"Dataset type: {args.dataset_type}")
     
     # ── Automatic Cache Checking & Generation ─────────────────────────────────
     if not args.no_cache:
+        if args.cache_dir is None:
+            args.cache_dir = str(Path(args.output_dir).parent / "dino_features")
+            print(f"Cache directory not specified. Using default: {args.cache_dir}")
+        
         if accelerator.is_local_main_process:
             from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
             
-            if args.cache_dir is None:
-                cache_dir = str(Path(args.output_dir).parent / "dino_features")
-            else:
-                cache_dir = args.cache_dir
-                
             if args.dataset_type == "calvin":
-                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, device=str(device))
+                ensure_calvin_cache_complete(args.dataset_dir, cache_dir=args.cache_dir, device=str(device))
             else:
                 ensure_cache_complete(
                     args.dataset_dir,
                     transitions_file=args.transitions_file,
-                    cache_dir=cache_dir,
+                    cache_dir=args.cache_dir,
                     history_len=args.history_len,
                     device=str(device)
                 )
@@ -88,7 +77,7 @@ def train(args):
             history_len=args.history_len,
             seed=args.seed,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None
+            cached_dino_dir=args.cache_dir if not args.no_cache else None
         )
         if accelerator.is_local_main_process:
             print(f"CALVIN Dataset loaded. Train: {len(train_dataset)}, Val: {len(val_dataset)}")
@@ -99,7 +88,7 @@ def train(args):
             history_len=args.history_len, 
             image_size=args.image_size,
             use_cache=not args.no_cache,
-            cached_dino_dir=cache_dir if not args.no_cache else None
+            cached_dino_dir=args.cache_dir if not args.no_cache else None
         )
         
         # Split into train/val
@@ -108,7 +97,7 @@ def train(args):
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         
         if accelerator.is_local_main_process:
-            print(f"RoboSuite Dataset loaded with {len(dataset)} samples. Train: {train_size}, Val: {val_size}")
+            print(f"RoboSuite Dataset loaded. Train: {train_size}, Val: {val_size}")
     
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
@@ -116,42 +105,20 @@ def train(args):
     # 2. Models
     extractor = FeatureExtractor(device, dino_channels=args.dino_channels)
 
-    # ── Frozen DeltaEncoder (same checkpoint as V2A-WM Stage 1) ─────────────────────
-    # The baseline uses the same latent token space so the comparison is fair:
-    # the only difference is in the conditioning stage, not the flow space.
-    delta_encoder = DeltaEncoder(
-        dino_channels=args.dino_channels,
-        model_channels=args.enc_model_channels,
-        token_dim=args.token_dim,
-        num_latent_tokens=args.num_latent_tokens,
-        num_blocks=args.num_enc_blocks,
-        num_heads=args.enc_num_heads,
-    ).to(device)
-
-    if args.encoder_ckpt:
-        enc_state = torch.load(args.encoder_ckpt, map_location=device)
-        if isinstance(enc_state, dict) and "encoder" in enc_state:
-            enc_state = enc_state["encoder"]
-        delta_encoder.load_state_dict(enc_state)
-        if accelerator.is_local_main_process:
-            print(f"[DeltaEncoder] Loaded from {args.encoder_ckpt}")
-    else:
-        if accelerator.is_local_main_process:
-            print("[DeltaEncoder] No checkpoint — using random weights.")
-
-    delta_encoder.eval()
-    for p in delta_encoder.parameters():
-        p.requires_grad = False
-
-    # ── Baseline flow model ────────────────────────────────────────────────
-    model = BaselineRLAWM(
+    # Strictly aligned DINO-WM baseline model
+    model = BaselineDINOWM(
         dino_channels=args.dino_channels,
         clip_channels=512,
+        action_dim=args.action_dim,
+        action_emb_dim=args.action_emb_dim,
+        proprio_dim=args.proprio_dim,
+        proprio_emb_dim=args.proprio_emb_dim,
         history_len=args.history_len,
         num_patches=256,
-        token_dim=args.token_dim,
-        num_latent_tokens=args.num_latent_tokens,
-        latent_scale=LATENT_SCALE,
+        depth=args.depth,
+        heads=args.heads,
+        mlp_dim=args.mlp_dim,
+        concat_dim=args.concat_dim
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -178,7 +145,6 @@ def train(args):
             if accelerator.is_local_main_process:
                 print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
     
-    # Accelerate Prepare (delta_encoder is frozen, not wrapped)
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, val_dataloader
     )
@@ -190,12 +156,14 @@ def train(args):
         os.makedirs(args.output_dir, exist_ok=True)
         os.makedirs(f'{args.output_dir}/ckpt', exist_ok=True)
         writer = SummaryWriter(log_dir=f'{args.output_dir}/tb_logs')
+        # Save run config
+        import json as _json
+        with open(f'{args.output_dir}/config.json', 'w') as _f:
+            _json.dump(vars(args), _f, indent=2)
     
     for epoch in range(start_epoch, num_epochs):
         model.train()
         train_loss = 0.0
-        train_cfm_loss = 0.0
-        train_sparse_loss = 0.0
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         
@@ -212,48 +180,21 @@ def train(args):
                 target_img   = target_img.to(device)
             B = target_img.shape[0]
 
-            # Feature extraction (frozen backbone)
+            # Feature extraction (frozen DINOv2 and CLIP backbones)
             with torch.no_grad():
-                # Check if history_imgs holds pre-computed DINOv2 features [B, H, 256, dino_channels]
                 if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
                     F_history = history_imgs
                     F_t1 = target_img
                 else:
                     F_history = extractor.extract_dino(history_imgs)
                     F_t1 = extractor.extract_dino(target_img)
-                F_t  = F_history[:, -1, :, :]          # Baseline uses only F_t (Markovian)
+                
+                # Combine history and targets to create sequence: (B, H + 1, 256, C)
+                F_seq = torch.cat([F_history, F_t1.unsqueeze(1)], dim=1)
                 A_clip = extractor.extract_clip(action_texts)
 
-                # Encode residual into compact latent tokens
-                residual_raw = F_t1 - F_t
-                gt_tokens = delta_encoder(residual_raw)  # (B, N, token_dim)
-
-            # Flow matching in compact latent space
-            # Normalize into flow space - divide by LATENT_SCALE
-            x_0 = gt_tokens / LATENT_SCALE
-
-            # logitNormal timestep sampling — same as V2A-WM and RLA-WM
-            t = torch.sigmoid(torch.randn(B, device=device))
-            noise = torch.randn_like(x_0)
-            t_expand = t.view(B, 1, 1)
-            noisy_latent = (1 - t_expand) * noise + t_expand * x_0
-            velocity_target = x_0 - noise
-
-            # Baseline forward_cond uses only F_t (last frame) — ignores history
-            cond = model.forward_cond(F_history, A_clip)
-            velocity_pred = model.forward_flow(cond, noisy_latent, t)
-
-            loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-
-            # Sparsity (applied in raw DINO space, consistent with V2A-WM)
-            loss_sparsity = torch.tensor(0.0, device=device)
-            if sparsity_weight > 0.0:
-                patch_movement = residual_raw.norm(dim=-1)
-                static_weight  = (patch_movement < 0.05).float().mean(dim=-1)
-                latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)
-                loss_sparsity = (static_weight * latent_activity).mean()
-
-            loss = loss_cfm + sparsity_weight * loss_sparsity
+            # Forward pass: yields prediction, target, and standard MSE loss
+            z_pred, z_tgt, loss = model(F_seq, A_clip)
             
             optimizer.zero_grad()
             accelerator.backward(loss)
@@ -262,32 +203,17 @@ def train(args):
             optimizer.step()
             
             train_loss += loss.item()
-            train_cfm_loss += loss_cfm.item()
-            if sparsity_weight > 0.0:
-                train_sparse_loss += loss_sparsity.item()
-            
-            pbar.set_postfix({
-                "loss": f"{loss.item():.4f}", 
-                "cfm": f"{loss_cfm.item():.4f}", 
-                "sparse": f"{loss_sparsity.item() * sparsity_weight:.4f}"
-            })
+            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
             
         num_train_batches = len(train_dataloader)
         train_loss /= num_train_batches
-        train_cfm_loss /= num_train_batches
-        train_sparse_loss /= num_train_batches
         
         if accelerator.is_main_process:
             writer.add_scalar('Loss/train', train_loss, epoch)
-            writer.add_scalar('Loss_CFM/train', train_cfm_loss, epoch)
-            if sparsity_weight > 0.0:
-                writer.add_scalar('Loss_Sparse/train', train_sparse_loss, epoch)
         
         # --- Evaluation Loop ---
         model.eval()
         val_loss = 0.0
-        val_cfm_loss = 0.0
-        val_sparse_loss = 0.0
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
         with torch.no_grad():
@@ -300,68 +226,30 @@ def train(args):
                     history_imgs, target_img, action_texts, _ = batch
                     history_imgs = history_imgs.to(device)
                     target_img   = target_img.to(device)
-                B = target_img.shape[0]
 
-                # Check if history_imgs holds pre-computed DINOv2 features [B, H, 256, dino_channels]
                 if len(history_imgs.shape) == 4 and history_imgs.shape[-1] == args.dino_channels:
                     F_history = history_imgs
                     F_t1 = target_img
                 else:
                     F_history = extractor.extract_dino(history_imgs)
                     F_t1 = extractor.extract_dino(target_img)
-                F_t  = F_history[:, -1, :, :]
+                
+                F_seq = torch.cat([F_history, F_t1.unsqueeze(1)], dim=1)
                 A_clip = extractor.extract_clip(action_texts)
 
-                residual_raw  = F_t1 - F_t
-                gt_tokens     = delta_encoder(residual_raw)
-
-                # Normalize into flow space - divide by LATENT_SCALE
-                x_0 = gt_tokens / LATENT_SCALE
-
-                t          = torch.sigmoid(torch.randn(B, device=device))
-                noise      = torch.randn_like(x_0)
-                t_expand   = t.view(B, 1, 1)
-                noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
-                velocity_target = x_0 - noise
-
-                cond          = model.forward_cond(F_history, A_clip)
-                velocity_pred = model.forward_flow(cond, noisy_latent, t)
-
-                loss_cfm = F.mse_loss(velocity_pred, velocity_target)
-
-                loss_sparsity = torch.tensor(0.0, device=device)
-                if sparsity_weight > 0.0:
-                    patch_movement  = residual_raw.norm(dim=-1)
-                    static_weight   = (patch_movement < 0.05).float().mean(dim=-1)
-                    latent_activity = velocity_pred.norm(dim=-1).mean(dim=-1)
-                    loss_sparsity   = (static_weight * latent_activity).mean()
-
-                loss = loss_cfm + sparsity_weight * loss_sparsity
-                
+                z_pred, z_tgt, loss = model(F_seq, A_clip)
                 val_loss += loss.item()
-                val_cfm_loss += loss_cfm.item()
-                if sparsity_weight > 0.0:
-                    val_sparse_loss += loss_sparsity.item()
-                
                 pbar_val.set_postfix({"loss": f"{loss.item():.4f}"})
                 
         num_val_batches = len(val_dataloader)
         if num_val_batches > 0:
             val_loss /= num_val_batches
-            val_cfm_loss /= num_val_batches
-            val_sparse_loss /= num_val_batches
         
         if accelerator.is_main_process:
             writer.add_scalar('Loss/val', val_loss, epoch)
-            writer.add_scalar('Loss_CFM/val', val_cfm_loss, epoch)
-            if sparsity_weight > 0.0:
-                writer.add_scalar('Loss_Sparse/val', val_sparse_loss, epoch)
-            
             print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
             
-            os.makedirs(args.output_dir, exist_ok=True)
             unwrapped_model = accelerator.unwrap_model(model)
-            
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(unwrapped_model.state_dict(), f"{args.output_dir}/ckpt/latent_dynamics_best.pt")
@@ -376,47 +264,38 @@ def train(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train Baseline RLA-WM (Markovian, pooled-action self-attention conditioning)"
+        description="Train strictly aligned DINO-WM baseline (Causal sequence prediction in raw DINOv2 space)"
     )
 
     # Dataset
     parser.add_argument("--dataset-dir", type=str, default="robosuite/data_capture_wm/dataset/nut_assembly_merged")
-    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"],
-                        help="Type of dataset loader to use")
-    parser.add_argument("--val-frac", type=float, default=0.1, help="Validation fraction")
+    parser.add_argument("--dataset-type", type=str, default="robosuite", choices=["robosuite", "calvin"])
+    parser.add_argument("--val-frac", type=float, default=0.1)
     parser.add_argument("--transitions-file", type=str, default="transitions.jsonl")
-    parser.add_argument("--history-len", type=int, default=3,
-                        help="Window size for dataloader compat; baseline only uses last frame.")
+    parser.add_argument("--history-len", type=int, default=3, help="Temporal window context length")
     parser.add_argument("--image-size", type=int, default=224)
-    parser.add_argument("--dino-channels", type=int, default=1024,
-                        help="DINO feature dimension (768 for ViT-B, 1024 for ViT-L)")
+    parser.add_argument("--dino-channels", type=int, default=1024, help="1024 for ViT-L/14, 768 for ViT-B/14")
 
-    # Frozen DeltaEncoder (Stage 1, shared with V2A-WM for fair comparison)
-    parser.add_argument("--encoder-ckpt", type=str, default=None,
-                        help="Path to pre-trained DeltaEncoder (encoder_only_best.pt).")
-    parser.add_argument("--token-dim", type=int, default=64)
-    parser.add_argument("--num-latent-tokens", type=int, default=16)
-    parser.add_argument("--enc-model-channels", type=int, default=512)
-    parser.add_argument("--num-enc-blocks", type=int, default=4)
-    parser.add_argument("--enc-num-heads", type=int, default=8)
+    # DINO-WM Hyperparameters
+    parser.add_argument("--action-dim", type=int, default=64)
+    parser.add_argument("--action-emb_dim", type=int, default=64)
+    parser.add_argument("--proprio-dim", type=int, default=16)
+    parser.add_argument("--proprio-emb_dim", type=int, default=16)
+    parser.add_argument("--depth", type=int, default=6)
+    parser.add_argument("--heads", type=int, default=16)
+    parser.add_argument("--mlp-dim", type=int, default=2048)
+    parser.add_argument("--concat-dim", type=int, default=0, choices=[0, 1])
 
     # Training
-    parser.add_argument("--output-dir", type=str, default="verify2act/output/rla_wm_baseline")
+    parser.add_argument("--output-dir", type=str, default="verify2act/output/dino_wm_baseline")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--sparsity-weight", type=float, default=0.0)
     parser.add_argument("--checkpoint-freq", type=int, default=2)
     parser.add_argument("--resume-from", type=str, default=None)
-    parser.add_argument(
-        "--no-cache", action="store_true", default=False,
-        help="Disable using pre-computed DINOv2 feature cache"
-    )
-    parser.add_argument(
-        "--cache-dir", type=str, default=None,
-        help="Centralized directory to save DINO cache. If None, uses args.output_dir/dino_features"
-    )
+    parser.add_argument("--no-cache", action="store_true", default=False)
+    parser.add_argument("--cache-dir", type=str, default=None)
 
     return parser.parse_args()
 

@@ -396,13 +396,15 @@ class LatentWorldModel(WorldModelBase):
         self.extractor = FeatureExtractor(self.device, dino_channels=dino_channels)
 
         logger.info("Initializing Latent Dynamics Core...")
+        # Build on CPU first, then move to GPU to manage memory
         self.dynamics = LatentDynamicsModel(
             dino_channels=dino_channels,
             history_len=history_len,
             token_dim=token_dim,
             num_patches=num_patches,
-        ).to(self.device)
+        )
         self.dynamics.eval()
+        self.dynamics = self.dynamics.to(self.device)
 
         if dynamics_weights_path:
             logger.info("Loading LatentDynamicsModel weights from %s", dynamics_weights_path)
@@ -414,19 +416,19 @@ class LatentWorldModel(WorldModelBase):
             token_dim=token_dim,
             dino_channels=dino_channels,
             num_patches=num_patches,
-        ).to(self.device)
+        )
+        self.delta_decoder.eval()
         
         if encoder_ckpt:
             logger.info("Loading DeltaDecoder weights from %s", encoder_ckpt)
             try:
-                ckpt = torch.load(encoder_ckpt, map_location=self.device)
+                ckpt = torch.load(encoder_ckpt, map_location="cpu")
                 dec_sd = ckpt.get("decoder", ckpt)
                 self.delta_decoder.load_state_dict(dec_sd)
             except Exception as e:
                 logger.warning("Could not load DeltaDecoder weights: %s. Using random weights.", e)
-        else:
-            logger.warning("No encoder_ckpt provided for DeltaDecoder — ΔF reconstruction will be random.")
-        self.delta_decoder.eval()
+        
+        self.delta_decoder = self.delta_decoder.to(self.device)
 
         self._history: Optional[torch.Tensor] = None
 
@@ -552,3 +554,88 @@ class RLAWorldModel(LatentWorldModel):
         self.delta_decoder.eval()
 
         self._history: Optional[torch.Tensor] = None
+
+
+class DINOWorldModel(LatentWorldModel):
+    """World model backed by the Baseline DINO-WM architecture.
+
+    Predicts next-state raw DINOv2 features directly in a single forward pass
+    without flow matching or delta decoding bottleneck structures.
+    """
+    def __init__(
+        self,
+        device: str = "cuda",
+        dynamics_weights_path: Optional[str] = None,
+        history_len: int = 3,
+        dino_channels: int = 1024,
+    ) -> None:
+        from verify2act.dino_wm_baseline.dynamics import BaselineDINOWM
+        from verify2act.latent_wm.train_dynamics import FeatureExtractor
+
+        self.device = torch.device(device)
+        self.history_len = history_len
+
+        logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")
+        self.extractor = FeatureExtractor(self.device, dino_channels=dino_channels)
+
+        logger.info("Initializing Baseline DINO Dynamics Core...")
+        self.dynamics = BaselineDINOWM(
+            dino_channels=dino_channels,
+            clip_channels=512,
+            action_dim=64,
+            action_emb_dim=64,
+            proprio_dim=16,
+            proprio_emb_dim=16,
+            history_len=history_len,
+            num_patches=256,
+        ).to(self.device)
+        self.dynamics.eval()
+
+        if dynamics_weights_path:
+            logger.info("Loading BaselineDINOWM weights from %s", dynamics_weights_path)
+            self.dynamics.load_state_dict(torch.load(dynamics_weights_path, map_location=self.device))
+
+        self._history: Optional[torch.Tensor] = None
+
+    def initialize_history(self, start_img_np: np.ndarray) -> None:
+        import torchvision.transforms as T
+        from PIL import Image
+        img = Image.fromarray(start_img_np).resize((224, 224))
+        tensor = T.ToTensor()(img)
+        tensor = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(tensor)
+        tensor = tensor.unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            F_start = self.extractor.extract_dino(tensor)  # (1, 256, dino_channels)
+        self._history = F_start.unsqueeze(1).repeat(1, self.history_len, 1, 1)
+
+    def set_history(self, history: torch.Tensor) -> None:
+        self._history = history
+
+    def get_history(self) -> Optional[torch.Tensor]:
+        return self._history
+
+    def imagine(
+        self,
+        current_image_np: np.ndarray,
+        action_text: str,
+    ) -> Tuple[torch.Tensor, float]:
+        if self._history is None:
+            if current_image_np is None:
+                raise ValueError(
+                    "DINOWorldModel.imagine() called with current_image_np=None but history "
+                    "is not initialized. Call initialize_history() or set_history() first."
+                )
+            self.initialize_history(current_image_np)
+
+        with torch.no_grad():
+            action_emb = self.extractor.extract_clip([action_text])
+            # dynamics.step returns predicted raw DINOv2 features directly: (1, 256, dino_channels)
+            F_next = self.dynamics.step(self._history, action_emb)
+
+            # Update history sliding window
+            self._history = torch.cat([self._history[:, 1:, :, :], F_next.unsqueeze(1)], dim=1)
+            uncertainty = 0.0
+
+        return F_next, uncertainty
+

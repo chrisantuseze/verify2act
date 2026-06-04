@@ -28,6 +28,10 @@ from verify2act.pipeline.prompt_utils import PromptManager
 logger = logging.getLogger(__name__)
 
 
+class VLMRefusalError(ValueError):
+    """Raised when the VLM returns a safety / content-policy refusal instead of JSON."""
+
+
 class VLMPlanner:
     """GPT-4o based planner with YAML-driven prompt templates."""
 
@@ -44,8 +48,13 @@ class VLMPlanner:
         self._temperature = temperature
 
         self._api_key = os.environ.get("OPENAI_API_KEY")
+        # Allow mock mode for testing if MOCK_API_KEY is set
         if self._api_key is None:
-            raise ValueError("API key must be provided.")
+            if os.environ.get("MOCK_API_KEY"):
+                logger.warning("Using mock API key for testing purposes")
+                self._api_key = "mock-key-for-testing"
+            else:
+                raise ValueError("API key must be provided.")
 
         self._client = openai.OpenAI(api_key=self._api_key, http_client=httpx.Client())  # uses OPENAI_API_KEY env var
 
@@ -62,8 +71,37 @@ class VLMPlanner:
 
     # -- internal -----------------------------------------------------------
 
+    # Substrings that indicate a safety/content-policy refusal.
+    # Used only as a fallback when finish_reason is not "content_filter".
+    _REFUSAL_PATTERNS: tuple = (
+        "i'm sorry, i can't assist",
+        "i'm sorry, i cannot assist",
+        "i can't assist with that",
+        "i cannot assist with that",
+        "i'm unable to assist",
+        "i am unable to assist",
+        "i'm not able to assist",
+        "i am not able to assist",
+        "i can't help with that",
+        "i cannot help with that",
+        "i'm sorry, but i can't",
+        "i'm sorry, but i cannot",
+        "as an ai,",
+    )
+
     def _call(self, messages: List[Dict[str, Any]], temperature: Optional[float] = None) -> str:
-        print("Calling GPT-4o with messages:", messages[0])
+        """Call the chat-completion API and return the raw text content.
+
+        Raises
+        ------
+        VLMRefusalError
+            When the model's finish_reason is ``"content_filter"`` or the
+            response text matches a known safety-refusal pattern.
+        """
+        if self._api_key == "mock-key-for-testing":
+            logger.warning("Mock mode: returning dummy response for testing")
+            return '{"plan": ["mock_action_1", "mock_action_2"], "analysis": "Mock response for testing"}'
+
         temp = self._temperature if temperature is None else temperature
         resp = self._client.chat.completions.create(
             model=self._model,
@@ -71,8 +109,31 @@ class VLMPlanner:
             max_tokens=self._max_tokens,
             temperature=temp,
         )
-        content = resp.choices[0].message.content.strip()
-        logger.debug("GPT-4o raw response: %s", content)
+
+        choice = resp.choices[0]
+
+        # Primary signal: OpenAI sets finish_reason = "content_filter" when
+        # the safety policy blocks a response.  This is more reliable than
+        # pattern-matching on the text.
+        if getattr(choice, "finish_reason", None) == "content_filter":
+            raise VLMRefusalError(
+                "OpenAI content filter blocked the response (finish_reason='content_filter'). "
+                "The prompt may have been flagged by the model's safety policy."
+            )
+
+        content = choice.message.content or ""
+        content = content.strip()
+
+        # Fallback signal: some models (or older API versions) return a refusal
+        # as plain text without setting finish_reason.
+        content_lower = content.lower()
+        for pattern in self._REFUSAL_PATTERNS:
+            if pattern in content_lower:
+                raise VLMRefusalError(
+                    f"VLM returned a safety refusal instead of JSON: {content!r}. "
+                    "The prompt may have been flagged by the model's content policy."
+                )
+
         return content
 
     @staticmethod
@@ -140,7 +201,7 @@ class VLMPlanner:
         raw = self._call(messages, temperature=temperature)
         result = self._parse_json(raw)
         plan = result.get("plan", [])
-        if not isinstance(plan, list) or not all(isinstance(a, str) for a in plan):
+        if not isinstance(plan, list) or not all(isinstance(a, (str, dict)) for a in plan):
             raise ValueError(f"Invalid 'plan' output from model: {plan}")
         if len(plan) > horizon:
             plan = plan[:horizon]
@@ -195,7 +256,7 @@ class VLMPlanner:
 
         cleaned_plans = []
         for p in plans:
-            if all(isinstance(step, str) for step in p):
+            if all(isinstance(step, (str, dict)) for step in p):
                 if len(p) > horizon:
                     p = p[:horizon]
                 cleaned_plans.append(p)
@@ -232,7 +293,7 @@ class VLMPlanner:
         raw = self._call(messages)
         result = self._parse_json(raw)
         revised = result.get("revised_plan")
-        if not isinstance(revised, list) or not all(isinstance(a, str) for a in revised):
+        if not isinstance(revised, list) or not all(isinstance(a, (str, dict)) for a in revised):
             raise ValueError(f"Invalid 'revised_plan' output from model: {revised}")
         if "analysis" not in result:
             result["analysis"] = ""
@@ -279,6 +340,7 @@ class BeamSearchPlanner:
         temporal_threshold: float = 0.5,
         max_retries: int = 2,
         max_replans: int = 3,
+        wm_mode: str = "v2a_wm",
     ):
         self.vlm = vlm_planner
         self.world_model = world_model
@@ -288,12 +350,79 @@ class BeamSearchPlanner:
         self.temporal_threshold = temporal_threshold
         self.max_retries = max_retries
         self.max_replans = max_replans
+        self.wm_mode = wm_mode
 
         if plan_expander is None:
             # Default to no subskill expansion (identity expander)
             self.plan_expander = lambda plan: [(step, step) for step in plan if step.strip().lower() != "done"]
         else:
             self.plan_expander = plan_expander
+
+    def _evaluate_diffusion_trajectory(
+        self,
+        plan: List[str],
+        current_image_np: np.ndarray,
+        language_goal: str = "",
+        timestep: int = 0,
+        output_dir: Optional[Union[str, pathlib.Path]] = None,
+        candidate_idx: Optional[int] = None,
+        replan_attempt: int = 0,
+    ) -> Tuple[float, Any, List[Tuple[float, float]], List[Tuple[str, str]], bool, Optional[int], List[str]]:
+        """Roll out the proposed plan to the end of the horizon sequentially without a critic (ReflectVLM)."""
+        import pathlib
+        imagination_steps = self.plan_expander(plan)
+        logger.info("ReflectVLM (Diffusion mode): Rolling out plan to end of horizon: %s", imagination_steps)
+        imagined_state = current_image_np
+        final_state = current_image_np
+        
+        for k, (hl_action, imagine_action) in enumerate(imagination_steps):
+            imagined_state_next = self.world_model.imagine(imagined_state, imagine_action)
+            imagined_state = imagined_state_next
+            final_state = imagined_state_next
+            
+            if output_dir:
+                step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
+                step_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save initial state at step 0 if it doesn't exist
+                init_state_path = step_dir / "step_0_initial_state.png"
+                from PIL import Image
+                if not init_state_path.exists():
+                    Image.fromarray(current_image_np).save(init_state_path)
+                    
+                if candidate_idx is not None:
+                    plan_dir = step_dir / f"candidate_{candidate_idx:02d}"
+                else:
+                    plan_dir = step_dir / f"replan_attempt_{replan_attempt:02d}"
+                    
+                horizon_dir = plan_dir / f"horizon_{k+1:02d}"
+                horizon_dir.mkdir(parents=True, exist_ok=True)
+                
+                with open(horizon_dir / "action.txt", "w") as f:
+                    f.write(imagine_action)
+                    
+                Image.fromarray(imagined_state_next).save(
+                    horizon_dir / "imagine_frame.png"
+                )
+        
+        # Since there is no critic, we use dummy values for scores
+        all_scores = [(1.0, 1.0)] * len(imagination_steps)
+        critic_decisions = ["ReflectVLM (no critic check)"]
+        
+        # We always trigger reflection at the end of the horizon, so step_failed = True
+        step_failed = True
+        failed_step = len(imagination_steps) - 1 if imagination_steps else 0
+        score = 1.0
+        
+        return (
+            score,
+            final_state,
+            all_scores,
+            imagination_steps,
+            step_failed,
+            failed_step,
+            critic_decisions,
+        )
 
     def _evaluate_trajectory(
         self,
@@ -302,7 +431,9 @@ class BeamSearchPlanner:
         language_goal: str,
         timestep: int = 0,
         output_dir: Optional[Union[str, pathlib.Path]] = None,
+        candidate_idx: Optional[int] = None,
         replan_attempt: int = 0,
+        decoder: Optional[torch.nn.Module] = None,
     ) -> Tuple[float, Any, List[Tuple[float, float]], List[Tuple[str, str]], bool, Optional[int], List[str]]:
         """
         Evaluates a single candidate plan against the critic.
@@ -342,28 +473,42 @@ class BeamSearchPlanner:
         score, final_state, all_scores, imagination_steps,
         step_failed, failed_step_index, critic_decisions
         """
+
         import torch
         from verify2act.pipeline.inference import preprocess_image_for_critic
         from verify2act.critic.inference import CriticDecision, check_rollout_consistency, decide_from_proximity
         from verify2act.pipeline.world_model import LatentWorldModel, OracleWorldModel
         from contextlib import nullcontext
+        from verify2act.pipeline.inference import _save_image
+
+        if self.wm_mode == "diffusion":
+            return self._evaluate_diffusion_trajectory(
+                plan=plan,
+                current_image_np=current_image_np,
+                language_goal=language_goal,
+                timestep=timestep,
+                output_dir=output_dir,
+                candidate_idx=candidate_idx,
+                replan_attempt=replan_attempt,
+            )
 
         device = next(self.critic.parameters()).device
         is_latent_wm = isinstance(self.world_model, LatentWorldModel)
 
-        # Seed the latent WM history once from the real current frame.
-        # All imagine() calls inside the loop will pass None — the WM's
-        # internal rolling window drives all future predictions.
         start_history = None
         if is_latent_wm:
             self.world_model.initialize_history(current_image_np)
             start_history = self.world_model.get_history().clone()  # clone to avoid aliasing
 
         imagination_steps = self.plan_expander(plan)
-
-        # Best results across outer-loop attempts (HEAD1 requery re-rolls).
+        
         best_eval_score = -float('inf')
-        best_eval_final_state = current_image_np
+        # Initialise to None, not current_image_np. For the latent-WM path,
+        # best_eval_final_state must always be a DINO feature tensor (or None).
+        # Leaving it as an RGB numpy array is a type mismatch that causes a
+        # shape error in decode_dino_features when the imagination loop never
+        # runs (empty plan) or all HEAD1 retries are exhausted.
+        best_eval_final_state = None
         best_eval_all_scores: List[Tuple[float, float]] = []
         best_eval_step_failed = True
         best_eval_failed_step = None
@@ -421,13 +566,37 @@ class BeamSearchPlanner:
                         imagined_state_next = self.world_model.imagine(imagined_state, imagine_action)
                         final_state = imagined_state_next
 
-                    if output_dir and not is_latent_wm:
-                        from verify2act.pipeline.inference import _save_image
-                        step_dir = pathlib.Path(output_dir) / "steps"
-                        _save_image(
-                            imagined_state_next, step_dir,
-                            f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}.png",
-                        )
+                    if output_dir:
+                        step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
+                        step_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        init_state_path = step_dir / "step_0_initial_state.png"
+                        if not init_state_path.exists():
+                            from PIL import Image
+                            Image.fromarray(current_image_np).save(init_state_path)
+                            
+                        if candidate_idx is not None:
+                            plan_dir = step_dir / f"candidate_{candidate_idx:02d}"
+                        else:
+                            plan_dir = step_dir / f"replan_attempt_{replan_attempt:02d}"
+                            
+                        horizon_dir = plan_dir / f"horizon_{k+1:02d}"
+                        horizon_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        with open(horizon_dir / "action.txt", "w") as f:
+                            f.write(imagine_action)
+                            
+                        if not is_latent_wm:
+                            _save_image(
+                                imagined_state_next, horizon_dir,
+                                "imagine_frame.png",
+                            )
+                        elif decoder is not None:
+                            image_from_latent = self.decode_dino_features(final_state, decoder)
+                            _save_image(
+                                image_from_latent, horizon_dir,
+                                "imagine_frame.png",
+                            )
 
                     # ── 2. HEAD2: temporal consistency check ───────────────────
                     with torch.no_grad():
@@ -447,6 +616,18 @@ class BeamSearchPlanner:
                     decision_msg = f"k={k} action='{imagine_action}' tc={tc_score:.3f}(unc={tc_uncertainty:.3f}) → {decision.action}"
                     critic_decisions.append(decision_msg)
                     logger.info("  " + decision_msg)
+                    
+                    if output_dir:
+                        import json
+                        with open(horizon_dir / "temporal_critic.json", "w") as f:
+                            json.dump({
+                                "temporal_consistency_score": tc_score,
+                                "uncertainty": tc_uncertainty,
+                                "decision": decision.action,
+                                "decision_reason": decision.reason,
+                                "k": k,
+                                "attempt": attempt,
+                            }, f, indent=2)
 
                     # ── 2a. Per-step requery: re-sample from the same context ──
                     # Re-imagines only this step — does NOT restart the whole plan.
@@ -468,11 +649,18 @@ class BeamSearchPlanner:
                                 imagined_state_next = self.world_model.imagine(imagined_state, imagine_action)
                                 final_state = imagined_state_next
 
-                            if output_dir and not is_latent_wm:
-                                _save_image(
-                                    imagined_state_next, step_dir,
-                                    f"step_{timestep:03d}_imagine_r{replan_attempt}_k{k}_retry{retry_i}.png",
-                                )
+                            if output_dir:
+                                if not is_latent_wm:
+                                    _save_image(
+                                        imagined_state_next, horizon_dir,
+                                        f"imagine_frame_retry{retry_i}.png",
+                                    )
+                                elif decoder is not None:
+                                    image_from_latent = self.decode_dino_features(final_state, decoder)
+                                    _save_image(
+                                        image_from_latent, horizon_dir,
+                                        f"imagine_frame_retry{retry_i}.png",
+                                    )
 
                             with torch.no_grad():
                                 if is_latent_wm:
@@ -522,10 +710,27 @@ class BeamSearchPlanner:
                 decision_msg = f"HEAD1 proximity={prox_score:.3f}(unc={prox_uncertainty:.3f}) → {prox_decision.action}"
                 critic_decisions.append(decision_msg)
                 logger.info("  " + decision_msg)
+                
+                if output_dir:
+                    import json
+                    with open(horizon_dir / "goal_critic.json", "w") as f:
+                        json.dump({
+                            "goal_proximity_score": prox_score,
+                            "uncertainty": prox_uncertainty,
+                            "decision": prox_decision.action,
+                            "decision_reason": prox_decision.reason,
+                        }, f, indent=2)
 
                 if prox_decision.action == "requery":
                     # Critic is uncertain — re-roll the entire imagined trajectory.
                     # This is the ONLY case where the outer loop keeps iterating.
+                    # Save the current imagined final_state NOW so that if all
+                    # attempts are exhausted, _reflect_and_replan receives a valid
+                    # latent tensor (not the initial current_image_np RGB array,
+                    # which would cause a shape mismatch in decode_dino_features).
+                    best_eval_final_state = final_state
+                    best_eval_all_scores = all_scores
+                    best_eval_critic_decisions = critic_decisions
                     logger.info("  HEAD1 uncertain; re-rolling full imagined trajectory...")
                     continue
 
@@ -591,7 +796,6 @@ class BeamSearchPlanner:
         from verify2act.pipeline.reflection import build_reflection_context
         from verify2act.pipeline.world_model import LatentWorldModel
         
-        device = next(self.critic.parameters()).device
         is_latent_wm = isinstance(self.world_model, LatentWorldModel)
         
         reflection_analyses = []
@@ -610,19 +814,25 @@ class BeamSearchPlanner:
             replan_attempts = attempt
             logger.info(f"Reflection attempt {attempt}/{self.max_replans} for plan: {current_plan}")
             
-            # 1. Reconstruct the image if using LatentWorldModel
+            # 1. Reconstruct the image if using LatentWorldModel.
+            # current_final_state is None when the world model never ran (empty
+            # plan or all HEAD1 retries exhausted with nothing imagined yet).
+            # In that case, fall back to the current real observation — the VLM
+            # will reflect on what it can actually see rather than an imagined
+            # future state.
             if is_latent_wm and decoder is not None:
-                with torch.no_grad():
-                    # decoder.decode expects patch_tokens: (B, num_patches, dino_channels)
-                    rec_img = decoder.decode(current_final_state.to(device))
-                    # Map from [-1, 1] to [0, 255]
-                    rec_img = (rec_img + 1.0) / 2.0
-                    rec_img = torch.clamp(rec_img, 0.0, 1.0)
-                    rec_img = rec_img.squeeze(0).cpu().numpy() # [3, H, W]
-                    rec_img = (rec_img * 255.0).astype(np.uint8)
-                    imagined_img_next = np.transpose(rec_img, (1, 2, 0)) # [H, W, 3]
+                if current_final_state is None:
+                    logger.warning(
+                        "_reflect_and_replan: no imagined final state available "
+                        "(world model did not run). Using current real observation "
+                        "for reflection context."
+                    )
+                    imagined_img_next = current_image_np
+                else:
+                    imagined_img_next = self.decode_dino_features(current_final_state, decoder)
             else:
-                imagined_img_next = current_final_state
+                # Non-latent WM: final_state is already an RGB array (or None → real obs).
+                imagined_img_next = current_final_state if current_final_state is not None else current_image_np
                 
             # 2. Build the reflection context dict.
             # Use the high-level nut-name label (first element of tuple), NOT the
@@ -643,6 +853,9 @@ class BeamSearchPlanner:
             )
             ctx["failed_highlevel_action"] = current_imagination_steps[current_failed_step][0] if current_imagination_steps else "none"
             
+            if self.wm_mode == "diffusion":
+                ctx["failure_pattern"] = "ReflectVLM evaluation: The action sequence was fully simulated. Please inspect the final imagined scene and verify if the goal is met or if the plan needs correction."
+            
             # 3. Call the planner's reflect method to get a revised plan
             try:
                 result = self.vlm.reflect(
@@ -658,9 +871,7 @@ class BeamSearchPlanner:
             except Exception as e:
                 logger.error(f"VLM reflection failed: {e}")
                 break
-                
-            logger.info(f"VLM proposed revised plan: {revised_plan}")
-            
+                            
             # 4. Evaluate the revised plan
             eval_score, eval_final_state, eval_all_scores, eval_imag_steps, eval_step_failed, eval_failed_step, eval_critic_decisions = self._evaluate_trajectory(
                 plan=revised_plan,
@@ -668,7 +879,9 @@ class BeamSearchPlanner:
                 language_goal=language_goal,
                 timestep=timestep,
                 output_dir=output_dir,
+                candidate_idx=None,
                 replan_attempt=attempt,
+                decoder=decoder,
             )
             
             reflection_critic_decisions.extend(eval_critic_decisions)
@@ -680,6 +893,11 @@ class BeamSearchPlanner:
             current_imagination_steps = eval_imag_steps
             current_failed_step = eval_failed_step
             
+            if self.wm_mode == "diffusion":
+                logger.info("ReflectVLM (Diffusion mode): Reflection completed. Accepting plan.")
+                plan_accepted = True
+                break
+                
             if not eval_step_failed and eval_score >= self.goal_threshold:
                 logger.info(f"Revised plan succeeded with score {eval_score:.3f} >= {self.goal_threshold:.3f}")
                 plan_accepted = True
@@ -717,17 +935,8 @@ class BeamSearchPlanner:
         logger.info(f"BeamSearchPlanner: Sampling up to {self.beam_width} candidate plans...")
         
         # 1. Propose candidates using propose_candidates
-        try:
-            candidate_plans = self.vlm.propose_candidates(
-                current_image_np=current_image_np,
-                language_goal=language_goal,
-                history=history,
-                obj_labels=obj_labels,
-                horizon=horizon,
-                num_candidates=self.beam_width,
-            )
-        except Exception as e:
-            logger.warning(f"VLM candidate proposal failed: {e}. Falling back to default plan Propose.")
+        if self.wm_mode == "diffusion":
+            logger.info("ReflectVLM (Diffusion mode): Proposing a single plan upfront...")
             try:
                 plan = self.vlm.propose(
                     current_image_np=current_image_np,
@@ -737,9 +946,33 @@ class BeamSearchPlanner:
                     horizon=horizon,
                 )
                 candidate_plans = [plan]
-            except Exception as ex:
-                logger.error(f"VLM propose fallback failed: {ex}")
+            except Exception as e:
+                logger.error(f"VLM propose failed in ReflectVLM: {e}")
                 candidate_plans = [[]]
+        else:
+            try:
+                candidate_plans = self.vlm.propose_candidates(
+                    current_image_np=current_image_np,
+                    language_goal=language_goal,
+                    history=history,
+                    obj_labels=obj_labels,
+                    horizon=horizon,
+                    num_candidates=self.beam_width,
+                )
+            except Exception as e:
+                logger.warning(f"VLM candidate proposal failed: {e}. Falling back to default plan Propose.")
+                try:
+                    plan = self.vlm.propose(
+                        current_image_np=current_image_np,
+                        language_goal=language_goal,
+                        history=history,
+                        obj_labels=obj_labels,
+                        horizon=horizon,
+                    )
+                    candidate_plans = [plan]
+                except Exception as ex:
+                    logger.error(f"VLM propose fallback failed: {ex}")
+                    candidate_plans = [[]]
 
         logger.info(f"Generated {len(candidate_plans)} candidate plans.")
 
@@ -751,6 +984,8 @@ class BeamSearchPlanner:
         best_failed_step = None
         best_step_failed = True
         best_critic_decisions = []
+
+        candidate_scores_log = []
 
         # 2. Evaluate each candidate
         for i, plan in enumerate(candidate_plans):
@@ -764,8 +999,17 @@ class BeamSearchPlanner:
                 language_goal=language_goal,
                 timestep=timestep,
                 output_dir=output_dir,
+                candidate_idx=i,
                 replan_attempt=0,
+                decoder=decoder,
             )
+            
+            candidate_scores_log.append({
+                "candidate_idx": i,
+                "plan": plan,
+                "score": score,
+                "step_failed": step_failed,
+            })
             
             is_better = False
             if best_plan is None:
@@ -791,11 +1035,21 @@ class BeamSearchPlanner:
                 logger.info(f"Candidate {i+1} reached goal threshold {self.goal_threshold:.3f}. Short-circuiting search.")
                 break
 
+        if output_dir:
+            import json
+            step_dir = pathlib.Path(output_dir) / "imagination_logs" / f"planning_call_{timestep:02d}"
+            step_dir.mkdir(parents=True, exist_ok=True)
+            with open(step_dir / "candidate_plans.json", "w") as f:
+                json.dump(candidate_scores_log, f, indent=2)
+
         # Fallback if no plan was evaluated/chosen
         if best_plan is None:
             best_plan = candidate_plans[0] if candidate_plans else []
             best_score = -float('inf')
-            best_final_state = current_image_np
+            # Use None so _reflect_and_replan's None-guard fires correctly.
+            # Assigning current_image_np here was the direct cause of the
+            # shape mismatch: an RGB (H,W,3) array being decoded as DINO features.
+            best_final_state = None
             best_all_scores = []
             best_imagination_steps = self.plan_expander(best_plan)
             best_failed_step = 0
@@ -837,3 +1091,54 @@ class BeamSearchPlanner:
             "critic_decisions": best_critic_decisions,
             "plan_accepted": True,
         }
+
+    def decode_dino_features(
+        self,
+        dino_features: torch.Tensor,
+        decoder: torch.nn.Module,
+        as_numpy: bool = True,
+    ) -> Union[np.ndarray, torch.Tensor]:
+        """
+        Decodes predicted DINO features back to an RGB image.
+        
+        Args:
+            dino_features (torch.Tensor): Predicted DINO features tensor of shape
+                (num_patches, dino_channels) or (1, num_patches, dino_channels).
+            decoder (torch.nn.Module): An instance of FeatureDecoder.
+            as_numpy (bool): If True, returns a uint8 numpy array of shape (H, W, 3) in [0, 255].
+                If False, returns a float tensor of shape (1, 3, H, W) in [0, 1].
+                
+        Returns:
+            Union[np.ndarray, torch.Tensor]: Decoded RGB image.
+        """
+        import torch
+        device = next(self.critic.parameters()).device
+
+        # Convert numpy array to torch tensor if necessary.
+        # At this point dino_features is always a valid latent tensor
+        # (shape (num_patches, C) or (1, num_patches, C)) — the three
+        # call-sites that previously passed current_image_np here have all
+        # been fixed to use None and handled upstream in _reflect_and_replan.
+        if isinstance(dino_features, np.ndarray):
+            dino_features = torch.from_numpy(dino_features)
+
+        # Ensure features have a batch dimension (B, num_patches, dino_channels)
+        if dino_features.ndim == 2:
+            dino_features = dino_features.unsqueeze(0)
+
+        with torch.no_grad():
+            # Forward pass through FeatureDecoder
+            rec_img = decoder.decode(dino_features.to(device))  # (B, 3, H, W) in range [-1, 1]
+
+            # Map from [-1, 1] to [0, 1] and clamp
+            rec_img = (rec_img + 1.0) / 2.0
+            rec_img = torch.clamp(rec_img, 0.0, 1.0)
+
+            # Format output
+            if as_numpy:
+                rec_img = rec_img.squeeze(0).cpu().numpy()  # (3, H, W)
+                rec_img = (rec_img * 255.0).astype(np.uint8)
+                rgb_img = np.transpose(rec_img, (1, 2, 0))  # (H, W, 3)
+                return rgb_img
+            else:
+                return rec_img

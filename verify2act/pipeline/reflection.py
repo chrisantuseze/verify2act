@@ -47,7 +47,7 @@ def classify_failure_pattern(
         return (
             f"the world model produced an incoherent transition at step {worst_idx} "
             f"(temporal consistency dropped to {worst_val:.3f}); "
-            "this suggests a diffusion artifact rather than a plan error"
+            "this suggests a world model artifact/hallucination rather than a plan error"
         )
 
     if all(s < 0.3 for s in consistency_scores):

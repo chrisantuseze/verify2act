@@ -125,14 +125,16 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
   --wm-adapter-dir verify2act/output/diffusion_wm/nut_assembly/wm/best/unet_lora \
   --wm-decoder-dir verify2act/output/diffusion_wm/nut_assembly/decoder \
-  --num-round 2 \
-  --num-square 1 \
-  --initial-stacking-prob 0.0 \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
+  --randomize-nut-counts \
+  --num-episodes 25 \
+  --base-seed 42 \
   --device cuda \
   --dtype fp16 \
   --wm-mode diffusion \
-  --vae-model runwayml/stable-diffusion-v1-5 \
-  --output-dir verify2act/output/inference_run/diffusion/nut_assembly
+  --vae-model runwayml/stable-diffusion-v1-5
 
 # Calvin Inference (using diffusion)
 xvfb-run -a python verify2act/pipeline/inference.py \
@@ -141,9 +143,8 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --wm-decoder-dir verify2act/output/diffusion_wm/calvin/decoder \
   --num-round 2 \
   --num-square 1 \
-  --initial-stacking-prob 0.0 \
+  --guarantee-overlap \
   --device cuda \
   --dtype fp16 \
   --wm-mode diffusion \
-  --vae-model runwayml/stable-diffusion-v1-5 \
-  --output-dir verify2act/output/inference_run/diffusion/calvin
+  --vae-model runwayml/stable-diffusion-v1-5

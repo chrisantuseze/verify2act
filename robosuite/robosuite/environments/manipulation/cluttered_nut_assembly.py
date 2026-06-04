@@ -48,7 +48,7 @@ class ClutteredNutAssembly(ManipulationEnv):
         placement_initializer=None,
         num_round_nuts=4,
         num_square_nuts=3,
-        initial_stacking_prob=0.5,
+        guarantee_overlap=True,
         nut_type_mode="random",
         has_renderer=False,
         has_offscreen_renderer=True,
@@ -73,7 +73,7 @@ class ClutteredNutAssembly(ManipulationEnv):
         # Task settings
         self.num_round_nuts = num_round_nuts
         self.num_square_nuts = num_square_nuts
-        self.initial_stacking_prob = initial_stacking_prob
+        self.guarantee_overlap = guarantee_overlap
         
         # Nut type mode: "round" or "square" selects target type; "random" picks target each episode
         assert nut_type_mode in {"roundnut", "squarenut", "random", "alternate"}, \
@@ -84,7 +84,7 @@ class ClutteredNutAssembly(ManipulationEnv):
         # Placement constraints to keep nuts away from pegs at initialization
         # (prevents spawning over pegs / intersecting peg geometry)
         self.peg_clearance_xy = 0.1 #0.07  # meters, min XY distance from peg center
-        self.min_nut_distance = 0.08  # meters, min XY distance between any two nuts
+        self.min_nut_distance = 0.06  # meters, min XY distance between any two nuts (relaxed to allow near-placement)
         self.placement_max_x = 0.15  # Max x-coordinate (keep nuts on robot side of pegs at x=0.23)
         self.placement_y_range = 0.20  # Max absolute y-coordinate (keep nuts within reach)
         self.placement_max_attempts = 50
@@ -410,11 +410,9 @@ class ClutteredNutAssembly(ManipulationEnv):
         self.round_nuts_on_pegs = np.zeros(self.num_round_nuts)
         self.square_nuts_on_pegs = np.zeros(self.num_square_nuts)
 
-        # Apply initial stacking after placement only when requested.
-        # Skipping when prob=0 avoids the physics settling steps that can
-        # accidentally cause closely-placed nuts to stack.
-        if self.round_nut_names and self.square_nut_names and self.initial_stacking_prob > 0:
-            self._apply_initial_stacking()
+        # Guarantee at least one stacked pair per episode when requested.
+        if self.guarantee_overlap and self.round_nut_names and self.square_nut_names:
+            self._force_guaranteed_overlap()
 
     def _placements_valid(self, placements):
         """
@@ -458,41 +456,46 @@ class ClutteredNutAssembly(ManipulationEnv):
 
         return True
 
-    def _apply_initial_stacking(self):
+    def _force_guaranteed_overlap(self):
         """
-        Randomly stack obstacle nuts on top of target nuts.
-        The obstacle type is always the opposite of current_nut_type:
-          - target=roundnut  → stack square nuts on round nuts
-          - target=squarenut → stack round nuts on square nuts
-        """
-        # Let physics settle first
-        for _ in range(10):
-            self.sim.step()
+        Guarantee at least one obstacle nut is stacked on a target nut at episode start.
 
-        # Determine target (bottom) and obstacle (top) nut lists based on episode type
+        This is called unconditionally every reset so the task always requires
+        obstacle-clearing, regardless of ``initial_stacking_prob``.
+
+        Strategy:
+          - Determine which nut type is the target and which is the obstacle.
+          - Pick one target nut and one obstacle nut at random.
+          - Directly set the obstacle nut's joint qpos to sit on top of the target.
+          - Run a short physics warmup so the configuration is physically consistent
+            before the rest of reset proceeds.
+        """
+        # Determine target/obstacle roles
         if self.current_nut_type == "roundnut":
-            target_nuts = self.round_nut_names
-            obstacle_nuts = self.square_nut_names
+            target_nuts = list(self.round_nut_names)
+            obstacle_nuts = list(self.square_nut_names)
         else:
-            target_nuts = self.square_nut_names
-            obstacle_nuts = self.round_nut_names
+            target_nuts = list(self.square_nut_names)
+            obstacle_nuts = list(self.round_nut_names)
 
-        used_obstacles = set()
+        if not target_nuts or not obstacle_nuts:
+            return  # Nothing to stack
 
-        # Decide which target nuts get an obstacle nut stacked on them
-        for target_nut in target_nuts:
-            if np.random.random() < self.initial_stacking_prob and obstacle_nuts:
-                # Pick a random obstacle nut that hasn't been stacked yet
-                available_obstacles = [s for s in obstacle_nuts
-                                       if not self._is_nut_stacked(s) and s not in used_obstacles]
-                if available_obstacles:
-                    obstacle_nut = np.random.choice(available_obstacles)
-                    self._stack_nut_on_nut(obstacle_nut, target_nut)
-                    used_obstacles.add(obstacle_nut)
+        # Shuffle to randomise which pair is chosen each episode
+        self.rng.shuffle(target_nuts)
+        self.rng.shuffle(obstacle_nuts)
 
-        # Let stacked objects settle
-        for _ in range(10):
+        target_nut = target_nuts[0]
+        obstacle_nut = obstacle_nuts[0]
+
+        print(f"[Stacking] Guaranteeing overlap: {obstacle_nut} on top of {target_nut}")
+        self._stack_nut_on_nut(obstacle_nut, target_nut)
+
+        # Brief physics warmup so MuJoCo registers the new configuration
+        for _ in range(5):
             self.sim.step()
+
+    # _apply_initial_stacking has been removed; use guarantee_overlap=True instead.
 
     def _stack_nut_on_nut(self, top_nut, bottom_nut):
         """
@@ -526,10 +529,11 @@ class ClutteredNutAssembly(ManipulationEnv):
         peg_pos = np.array(self.sim.data.body_xpos[self.peg_body_ids[peg_id]])
         # XY: radial distance from peg axis. 0.07m gives enough room for the nut
         # body to be slightly off-center while still clearly on the peg shaft.
-        # Z: nut center must be below the peg body origin (mid-height), which only
-        # holds when the nut is threaded down to the base — not resting on the tip.
+        # Z: nut center must be below the peg top height (origin + 0.1m). Allowing up to 
+        # peg_pos[2] + 0.085m accommodates up to 4 stacked nuts (highest center at 0.87m)
+        # while still correctly rejecting a nut resting on the tip of the peg (center at 0.96m).
         xy_dist = np.linalg.norm(obj_pos[:2] - peg_pos[:2])
-        return xy_dist < 0.07 and obj_pos[2] < peg_pos[2]
+        return xy_dist < 0.07 and obj_pos[2] < peg_pos[2] + 0.085
 
     def _post_action(self, action):
         """

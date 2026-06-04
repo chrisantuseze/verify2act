@@ -56,31 +56,39 @@ _SKILL_TO_SUBSKILLS = {
 }
 
 
-def expand_nut_plan(nut_names: List[str]) -> List[Tuple[str, str]]:
-    """Expand a nut-ordering plan into ``(nut_name, sub_skill_prompt)`` pairs.
+def expand_nut_plan(nut_names: List[str | dict]) -> List[Tuple[str | dict, str]]:
+    """Expand a nut-ordering plan into ``(nut_name, action_prompt)`` pairs.
 
     This is the **primary** decomposition for Option A inference, where the
     VLM outputs only nut names in assembly order.
 
     Parameters
     ----------
-    nut_names : List[str]
+    nut_names : List[str | dict]
         Nut labels as returned by the VLM, e.g.
-        ``["left round nut", "right round nut"]``.
+        ``["left round nut", "right round nut"]`` or paired dicts.
 
     Returns
     -------
-    List[Tuple[str, str]]
-        Five ``(nut_name, sub_skill_prompt)`` pairs per nut.
-        Sub-skill prompts go to the world model; nut names are retained for
+    List[Tuple[str | dict, str]]
+        Two ``(nut_name, action_prompt)`` pairs (pick and insert) per nut.
+        Action prompts go to the world model; nut names are retained for
         real execution (``env_wrapper.execute_nut_assembly``) and reflection.
     """
-    result: List[Tuple[str, str]] = []
+    result: List[Tuple[str | dict, str]] = []
     for nut in nut_names:
-        if nut.strip().lower() == "done":
-            continue
-        for template in _ALL_SUBSKILLS:
-            result.append((nut, template.format(obj=nut)))
+        if isinstance(nut, dict):
+            label_str = nut.get("label", "")
+            if label_str.strip().lower() == "done":
+                continue
+            orig_nut = nut
+        else:
+            if nut.strip().lower() == "done":
+                continue
+            label_str = nut
+            orig_nut = nut
+        result.append((orig_nut, f"pick {label_str}"))
+        result.append((orig_nut, f"insert {label_str}"))
     return result
 
 
@@ -95,31 +103,13 @@ def decompose_action(action_text: str) -> List[str]:
     Returns
     -------
     List[str]
-        e.g. ``["approach left round nut from above",
-                "grasp left round nut and lift",
-                "carry left round nut toward peg"]``
-
-    Notes
-    -----
-    Unknown skills (including ``"done"``) are returned as a single-element
-    list containing the original string unchanged.
+        e.g. ``["pick left round nut"]``
     """
-    parts = action_text.strip().lower().split(None, 1)
-    if not parts:
-        return [action_text]
-
-    skill = parts[0]
-    obj = parts[1] if len(parts) > 1 else ""
-
-    templates = _SKILL_TO_SUBSKILLS.get(skill)
-    if templates is None:
-        return [action_text]
-
-    return [t.format(obj=obj) for t in templates]
+    return [action_text]
 
 
 def expand_plan(plan: List[str]) -> List[Tuple[str, str]]:
-    """Expand a VLM-level plan into ``(orig_action, subskill_prompt)`` pairs.
+    """Expand a VLM-level plan into ``(orig_action, action_prompt)`` pairs.
 
     Parameters
     ----------
@@ -129,12 +119,9 @@ def expand_plan(plan: List[str]) -> List[Tuple[str, str]]:
     Returns
     -------
     List[Tuple[str, str]]
-        Each element is ``(original_vl_action, sub_skill_prompt)``.
-        The sub-skill prompts go to the world model; the original VLM actions
-        are retained for real execution and VLM reflection.
+        Each element is ``(original_vl_action, action_prompt)``.
     """
     result: List[Tuple[str, str]] = []
     for action in plan:
-        for sub in decompose_action(action):
-            result.append((action, sub))
+        result.append((action, action))
     return result

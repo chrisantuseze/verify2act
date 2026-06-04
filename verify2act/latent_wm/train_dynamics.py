@@ -7,6 +7,8 @@ import warnings
 warnings.filterwarnings("ignore", message=".*torch\.cuda\.amp\.GradScaler.*")
 warnings.filterwarnings("ignore", message=".*xFormers is not available.*")
 
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -164,13 +166,7 @@ class FeatureExtractor(nn.Module):
         super().__init__()
         self.device = device
         self.dino_channels = dino_channels
-        
-        model_name = "dinov2_vitl14" if dino_channels == 1024 else "dinov2_vitb14"
-        print(f"Loading frozen DINOv2 {model_name} backbone ({dino_channels}-ch)...")
-        self.dino = torch.hub.load("facebookresearch/dinov2", model_name, pretrained=True).to(device)
-        self.dino.eval()
-        for p in self.dino.parameters():
-            p.requires_grad = False
+        self.dino = None  # Lazily loaded to conserve VRAM when using cache
             
         print("Loading frozen CLIP text encoder...")
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
@@ -185,6 +181,14 @@ class FeatureExtractor(nn.Module):
         imgs: (..., 3, H, W)
         Returns: (..., num_patches, 768)
         """
+        if self.dino is None:
+            model_name = "dinov2_vitl14" if self.dino_channels == 1024 else "dinov2_vitb14"
+            print(f"Lazy loading frozen DINOv2 {model_name} backbone ({self.dino_channels}-ch)...")
+            self.dino = torch.hub.load("facebookresearch/dinov2", model_name, pretrained=True).to(self.device)
+            self.dino.eval()
+            for p in self.dino.parameters():
+                p.requires_grad = False
+
         orig_shape = imgs.shape
         if len(orig_shape) == 5: # (B, H_len, 3, H, W)
             imgs = imgs.view(-1, *orig_shape[2:])
@@ -283,7 +287,7 @@ def train(args):
     # Latent normalization constant — matches RLA-WM's latent_scalar_normalization=10.0.
     # Encoder latents are divided by this before flow interpolation so their scale
     # matches the unit-variance Gaussian noise.  Denormalised back after sampling.
-    LATENT_SCALE = 10.0
+    LATENT_SCALE = 1.0
 
     extractor = FeatureExtractor(device, dino_channels=args.dino_channels)
 
@@ -327,10 +331,17 @@ def train(args):
         num_patches=256,
         token_dim=args.token_dim,
         num_latent_tokens=args.num_latent_tokens,
+        latent_scale=LATENT_SCALE,
     ).to(device)
     
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    # Cosine LR decay: ramps LR from `lr` → eta_min over num_epochs.
+    # Helps escape the flat-LR plateau that causes val loss to diverge after ~ep48.
+    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
     
+    best_val_loss = float('inf')
+    patience_counter = 0
     start_epoch = 0
     if args.resume_from:
         if os.path.exists(args.resume_from):
@@ -342,8 +353,12 @@ def train(args):
                 model.load_state_dict(checkpoint["model_state_dict"])
                 if "optimizer_state_dict" in checkpoint:
                     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                if "scheduler_state_dict" in checkpoint:
+                    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
                 if "epoch" in checkpoint:
                     start_epoch = checkpoint["epoch"]
+                if "val_loss" in checkpoint:
+                    best_val_loss = checkpoint["val_loss"]
             else:
                 model.load_state_dict(checkpoint)
                 # Try to extract epoch from filename if it matches format
@@ -351,6 +366,9 @@ def train(args):
                 match = re.search(r"ep(\d+)\.pt$", args.resume_from)
                 if match:
                     start_epoch = int(match.group(1))
+                # Fast-forward scheduler to match the resumed epoch
+                for _ in range(start_epoch):
+                    scheduler.step()
         else:
             if accelerator.is_local_main_process:
                 print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
@@ -363,7 +381,6 @@ def train(args):
         print(f"Using device: {device} (Accelerate distributed)")
     
     # 3. Training Loop
-    best_val_loss = float('inf')
     writer = None
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
@@ -486,11 +503,16 @@ def train(args):
         train_loss /= num_train_batches
         train_cfm_loss /= num_train_batches
         train_sparse_loss /= num_train_batches
-        
+
+        # Step cosine LR scheduler once per epoch (after all optimizer.step() calls)
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
         if accelerator.is_main_process:
             writer.add_scalar('Loss/train', train_loss, epoch)
             writer.add_scalar('Loss_CFM/train', train_cfm_loss, epoch)
             writer.add_scalar('Loss_Sparse/train', train_sparse_loss, epoch)
+            writer.add_scalar('LR', current_lr, epoch)
         
         # --- Evaluation Loop ---
         model.eval()
@@ -563,26 +585,59 @@ def train(args):
             val_cfm_loss /= num_val_batches
             val_sparse_loss /= num_val_batches
         
+        # Aggregate validation losses across all processes
+        val_losses_t = torch.tensor([val_loss, val_cfm_loss, val_sparse_loss], device=device)
+        val_losses_t = accelerator.reduce(val_losses_t, reduction="mean")
+        val_loss, val_cfm_loss, val_sparse_loss = val_losses_t.tolist()
+
+        # Early stopping logic (runs on all processes)
+        is_best = False
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            is_best = True
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
         if accelerator.is_main_process:
             writer.add_scalar('Loss/val', val_loss, epoch)
             writer.add_scalar('Loss_CFM/val', val_cfm_loss, epoch)
             writer.add_scalar('Loss_Sparse/val', val_sparse_loss, epoch)
             
-            print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            print(
+                f"Epoch {epoch+1}/{num_epochs} - "
+                f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, "
+                f"LR: {current_lr:.2e}"
+            )
             
             os.makedirs(args.output_dir, exist_ok=True)
             unwrapped_model = accelerator.unwrap_model(model)
-            
+
+            # Full checkpoint dict — includes scheduler state for proper resume
+            full_ckpt = {
+                "model_state_dict":     unwrapped_model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "epoch":                epoch + 1,
+                "val_loss":             val_loss,
+            }
+
             # Save best checkpoint
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(unwrapped_model.state_dict(), f"{args.output_dir}/ckpt/latent_dynamics_best.pt")
-                print(f"Saved best checkpoint to {args.output_dir}/ckpt/latent_dynamics_best.pt with val loss: {val_loss:.4f}")
+            if is_best:
+                torch.save(full_ckpt, f"{args.output_dir}/ckpt/latent_dynamics_best.pt")
+                # Also save a plain state-dict version for easy inference loading
+                torch.save(unwrapped_model.state_dict(), f"{args.output_dir}/ckpt/latent_dynamics_best_weights.pt")
+                print(f"Saved best checkpoint (val loss: {val_loss:.4f})")
                 
             # Save regular checkpoint
             if (epoch + 1) % args.checkpoint_freq == 0:
-                torch.save(unwrapped_model.state_dict(), f"{args.output_dir}/ckpt/latent_dynamics_ep{epoch+1}.pt")
+                torch.save(full_ckpt, f"{args.output_dir}/ckpt/latent_dynamics_ep{epoch+1}.pt")
                 print(f"Saved checkpoint to {args.output_dir}/ckpt/latent_dynamics_ep{epoch+1}.pt")
+
+        if args.patience > 0 and patience_counter >= args.patience:
+            if accelerator.is_local_main_process:
+                print(f"Early stopping triggered: validation loss did not improve for {args.patience} epochs.")
+            break
             
     if accelerator.is_main_process:
         writer.close()
@@ -630,6 +685,8 @@ def parse_args():
     parser.add_argument("--checkpoint-freq", type=int, default=2, help="Checkpoint frequency (epochs)")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to dynamics model checkpoint to resume from")
+    parser.add_argument("--patience", type=int, default=15,
+                        help="Early stopping patience (epochs of no improvement). 0 disables.")
     parser.add_argument(
         "--causal-masking", action="store_true", default=False,
         help="Use Transformer-native causal attention masking + learnable [START] tokens for "
