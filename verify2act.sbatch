@@ -50,7 +50,7 @@ export APPTAINER_BIND=$PWD
 
 # apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
 
-apptainer exec verify2act.sif bash -c "cd calvin/dataset && unzip task_ABCD_D.zip"
+apptainer exec verify2act.sif python3 -c "import os, zipfile; p = 'calvin/dataset/task_ABCD_D.zip' if os.path.exists('calvin/dataset/task_ABCD_D.zip') else 'task_ABCD_D.zip'; print(f'Extracting {p}...'); zipfile.ZipFile(p).extractall('calvin/dataset')"
 
 apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABCD_D/training \
