@@ -84,10 +84,10 @@ class ClutteredNutAssembly(ManipulationEnv):
         # Placement constraints to keep nuts away from pegs at initialization
         # (prevents spawning over pegs / intersecting peg geometry)
         self.peg_clearance_xy = 0.1 #0.07  # meters, min XY distance from peg center
-        self.min_nut_distance = 0.06  # meters, min XY distance between any two nuts (relaxed to allow near-placement)
+        self.min_nut_distance = 0.08 #0.06 - For inference  # meters, min XY distance between any two nuts (relaxed to allow near-placement)
         self.placement_max_x = 0.15  # Max x-coordinate (keep nuts on robot side of pegs at x=0.23)
         self.placement_y_range = 0.20  # Max absolute y-coordinate (keep nuts within reach)
-        self.placement_max_attempts = 50
+        self.placement_max_attempts = 200 #50 - For inference
         
         print(f"NUT TYPE MODE: {self.nut_type_mode}, CURRENT NUT TYPE: {self.current_nut_type}")  # DEBUG
         # settings for table top

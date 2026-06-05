@@ -151,6 +151,8 @@ def train(args):
         weight_decay=1e-4,
     )
 
+    best_val_loss = float("inf")
+    patience_counter = 0
     start_epoch = 0
     if args.resume_from:
         if os.path.exists(args.resume_from):
@@ -159,8 +161,9 @@ def train(args):
             decoder.load_state_dict(ckpt["decoder"])
             optimizer.load_state_dict(ckpt["optimizer"])
             start_epoch = ckpt.get("epoch", 0)
+            best_val_loss = ckpt.get("val_loss", float("inf"))
             if accelerator.is_local_main_process:
-                print(f"Resumed from {args.resume_from} (epoch {start_epoch})")
+                print(f"Resumed from {args.resume_from} (epoch {start_epoch}, best val loss {best_val_loss:.5f})")
         else:
             if accelerator.is_local_main_process:
                 print(f"Warning: Checkpoint {args.resume_from} not found. Starting from scratch.")
@@ -169,8 +172,6 @@ def train(args):
         encoder, decoder, optimizer, train_dl, val_dl
     )
 
-    # ── Training loop ────────────────────────────────────────────────────────
-    best_val_loss = float("inf")
     writer = None
     if accelerator.is_main_process:
         os.makedirs(f"{args.output_dir}/ckpt", exist_ok=True)
@@ -271,6 +272,17 @@ def train(args):
                 val_loss += F.mse_loss(recon, residual_target).item()
 
         val_loss /= max(len(val_dl), 1)
+        val_loss_t = torch.tensor(val_loss, device=device)
+        val_loss = accelerator.reduce(val_loss_t, reduction="mean").item()
+
+        # Early stopping logic (runs on all processes using the reduced val_loss)
+        is_best = False
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            is_best = True
+            patience_counter = 0
+        else:
+            patience_counter += 1
 
         # ── Logging & checkpointing ────────────────────────────────────────
         if accelerator.is_main_process:
@@ -289,11 +301,11 @@ def train(args):
                 "decoder":   unwrapped_dec.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "epoch":     epoch + 1,
+                "val_loss":  val_loss,
                 "args":      vars(args),
             }
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if is_best:
                 torch.save(ckpt, f"{args.output_dir}/ckpt/delta_encoder_best.pt")
                 # Also save encoder-only for easy loading in train_dynamics.py
                 torch.save(
@@ -304,6 +316,11 @@ def train(args):
 
             if (epoch + 1) % args.checkpoint_freq == 0:
                 torch.save(ckpt, f"{args.output_dir}/ckpt/delta_encoder_ep{epoch+1}.pt")
+
+        if args.patience > 0 and patience_counter >= args.patience:
+            if accelerator.is_local_main_process:
+                print(f"Early stopping triggered: validation loss did not improve for {args.patience} epochs.")
+            break
 
     if accelerator.is_main_process and writer:
         writer.close()
@@ -338,8 +355,10 @@ def parse_args():
     p.add_argument("--num-epochs",       type=int,   default=30)
     p.add_argument("--lr",               type=float, default=1e-4)
     p.add_argument("--seed",             type=int,   default=42)
-    p.add_argument("--checkpoint-freq",  type=int,   default=5)
+    p.add_argument("--checkpoint-freq",  type=int,   default=10)
     p.add_argument("--resume-from",      type=str,   default=None)
+    p.add_argument("--patience",         type=int,   default=15,
+                   help="Early stopping patience (epochs of no improvement). 0 disables.")
     p.add_argument("--output-dir",       type=str,
                    default="verify2act/output/delta_encoder")
     p.add_argument("--no-cache", action="store_true", default=False,
