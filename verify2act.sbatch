@@ -50,6 +50,8 @@ export APPTAINER_BIND=$PWD
 
 # apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
 
+apptainer exec verify2act.sif bash -c "cd calvin/dataset && unzip task_ABCD_D.zip"
+
 apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
   --input-dir calvin/dataset/task_ABCD_D/training \
   --output-dir calvin/dataset/task_ABCD_D_filtered/training \
