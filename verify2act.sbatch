@@ -15,7 +15,7 @@ export APPTAINER_BIND=$PWD
 for seed in 76 77 78 79 80; do
     apptainer exec --nv apptainerfile.sif xvfb-run -a python3 robosuite/data_capture/batch_collect.py \
             --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
-            --output-dir robosuite/data_capture_wm/dataset/nut_assembly \
+            --output-dir robosuite/data_capture/dataset/nut_assembly \
             --num-round 3 --num-square 2 \
             --nut-type-mode random --num-episodes 5000 \
             --image-size 512 --seed $seed &
