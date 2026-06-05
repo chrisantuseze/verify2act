@@ -192,8 +192,8 @@ class HeuristicNutAssemblyPolicy:
     NUT_EEF_ATTACH_THRESH = 0.04  # Max distance (m) between nut and EEF to consider it attached
     
     # Counter thresholds
-    GRASP_DURATION = 25
-    RELEASE_DURATION = 20
+    GRASP_DURATION = 30
+    RELEASE_DURATION = 30
     ALIGN_DURATION = 40  # For aligning nut over peg
     PRE_GRASP_ALIGN_DURATION = 15  # Min steps to spend aligning orientation before lowering to nut
     ORIENTATION_RESET_DURATION = 150  # Max steps for resetting gripper back to init pose (increased to allow travel time)
@@ -247,6 +247,9 @@ class HeuristicNutAssemblyPolicy:
         self.reset_counter = 0
         # Yaw offset between nut and gripper, captured at grasp time
         self.nut_gripper_yaw_offset = None
+        # Flag: when True, reset_orientation should transition to "done" (not "move_to_nut")
+        # after parking the gripper home post-final-placement, so the goal image is clean.
+        self._parking_before_done = False
         
         # Calculate safe z height
         self.table_z = self.env.table_offset[2]
@@ -1173,7 +1176,7 @@ class HeuristicNutAssemblyPolicy:
                 # Just placed a target nut on peg
                 # Don't remove from queue - let environment tracking handle it
                 # The environment will determine if nut is on peg or off table
-                
+
                 # Move to next nut or complete episode. If there is a next nut,
                 # first transition to `reset_orientation` so the gripper recenters
                 # before starting the next approach.
@@ -1181,7 +1184,13 @@ class HeuristicNutAssemblyPolicy:
                 print(f"Stage: retract -> {next_stage}, {self.current_nut} next")
                 if next_stage == "move_to_nut":
                     next_stage = "reset_orientation"
-            
+                elif next_stage == "done":
+                    # Park the gripper at home before declaring done so that the
+                    # goal image is captured with the arm fully clear of the pegs.
+                    print("  Parking gripper at home before episode end (clean goal image)")
+                    self._parking_before_done = True
+                    next_stage = "reset_orientation"
+
             self.retract_target = None
         
         return action, next_stage
@@ -1263,8 +1272,14 @@ class HeuristicNutAssemblyPolicy:
                 print(f"  reset_orientation timeout (pos_err={pos_error:.3f}m, "
                       f"yaw_ready={yaw_ready}) after {self.reset_counter} steps")
             self.reset_counter = 0
-            next_stage = "move_to_nut"
-            print(f"Stage: reset_orientation -> {next_stage}")
+            if self._parking_before_done:
+                # Final placement: gripper is home, now cleanly end the episode.
+                self._parking_before_done = False
+                next_stage = "done"
+                print("Stage: reset_orientation -> done (parked, goal image captured)")
+            else:
+                next_stage = "move_to_nut"
+                print(f"Stage: reset_orientation -> {next_stage}")
 
         return action, next_stage
 
