@@ -556,15 +556,15 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                 self._reflect_count = 0
                 self._last_reflected_plan = []
         
-        # Convert action to torch.Tensor if it is a numpy array, as expected by CalvinEnvWrapper
-        if not isinstance(action, torch.Tensor):
-            action = torch.from_numpy(action).to(self.device)
+        # Convert action to numpy array, as expected by the unwrapped Gym environment
+        if isinstance(action, torch.Tensor):
+            action = action.cpu().numpy()
             
         if self._step_count <= 2:
             logger.info(
                 "Step %d action: %s, rollout_step_counter: %d",
                 self._step_count,
-                action.cpu().numpy().tolist(),
+                action.tolist() if hasattr(action, "tolist") else list(action),
                 self.low_level_policy.model.rollout_step_counter
             )
         return action

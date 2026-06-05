@@ -64,8 +64,12 @@ class MoDEPolicyWrapper:
             
         from mode.evaluation.utils import get_default_mode_and_env
         
+        # Ensure dataset_path is absolute so that MoDE's HulcDataModule
+        # does not prepend its own package parent path when checking for relative paths.
+        abs_dataset_path = str(Path(dataset_path).resolve())
+        
         # The MoDE loader expects the train_folder to be the parent and checkpoint to be the dir name.
-        checkpoint_dir = Path(checkpoint_path)
+        checkpoint_dir = Path(checkpoint_path).resolve()
         train_folder = str(checkpoint_dir.parent)
         checkpoint_name = checkpoint_dir.name
         
@@ -76,18 +80,28 @@ class MoDEPolicyWrapper:
             
         model, env, data_module, lang_embeddings = get_default_mode_and_env(
             train_folder=train_folder,
-            dataset_path=dataset_path,
+            dataset_path=abs_dataset_path,
             checkpoint=checkpoint_name,
             env=None,
-            lang_embeddings=None,
+            lang_embeddings="dummy",
             device_id=device_id,
+            eval_cfg_overwrite={"use_extracted_rel_actions": False},
         )
         model = model.to(device)
         model.eval()
         
         # Save env, data_module and dataset info
         self.model = model
-        self.env = env
+        
+        # HulcWrapper wraps the raw gym environment.
+        # We unwrap it to return standard numpy observations to the CALVIN evaluation loop,
+        # which our agent proxy wrapper then transforms correctly during step.
+        from mode.wrappers.hulc_wrapper import HulcWrapper
+        if isinstance(env, HulcWrapper):
+            self.env = env.env
+        else:
+            self.env = env
+            
         self.data_module = data_module
         
         dataloader = data_module.val_dataloader()
