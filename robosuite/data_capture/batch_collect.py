@@ -40,9 +40,9 @@ Usage:
         --headless --no-offscreen 
 """
 
-# import os
-# if 'MUJOCO_GL' not in os.environ:
-#     os.environ['MUJOCO_GL'] = 'glx'
+import os
+if 'MUJOCO_GL' not in os.environ:
+    os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time
