@@ -200,7 +200,7 @@ class HeuristicNutAssemblyPolicy:
     # End-effector stagnation detection (if EEF stays within `EEF_STAGNATION_THRESH`
     # meters for `EEF_STAGNATION_MAX_STEPS` steps, reset the episode)
     EEF_STAGNATION_THRESH = 0.0015  # meters (2 mm)
-    EEF_STAGNATION_MAX_STEPS = 200 #50
+    EEF_STAGNATION_MAX_STEPS = 350 #200
     
     def __init__(self, env, data_collection_mode: bool = True, disable_reactive_blocking: bool = False, obs: Optional[dict] = None):
         """
@@ -1481,7 +1481,7 @@ class HeuristicNutAssemblyPolicy:
 def create_environment(env_name: str = "NutAssembly",
                       num_round_nuts: int = 3,
                       num_square_nuts: int = 3,
-                      guarantee_overlap: bool = True,
+                      guarantee_overlap: bool = False,
                       nut_type_mode: str = "random",
                       has_renderer: bool = True,
                       has_offscreen_renderer: bool = False,

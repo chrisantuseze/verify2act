@@ -14,33 +14,35 @@ Usage:
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 3 --num-square 3 --initial-stacking-prob 1.0 \
+        --num-round 3 --num-square 3 \
         --nut-type-mode random --num-episodes 20 \
-        --image-size 512 --seed 44
+        --image-size 512 --seed 44 \
+        --headless --no-offscreen 
 
     # Expert episodes --headless
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
+        --num-round 2 --num-square 2 \
         --nut-type-mode random --num-episodes 3000 \
         --image-size 512 --seed 12 \
-        --headless 
+        --headless --no-offscreen 
 
     # Noisy episodes (sigma=0.05)
     xvfb-run -a python batch_collect.py \
         --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 2 --num-square 2 --initial-stacking-prob 0.5 \
-        --nut-type-mode random --num-episodes 3000 \
-        --image-size 512 --seed 0
+        --num-round 3 --num-square 2 \
+        --nut-type-mode random --num-episodes 5000 \
+        --image-size 512 --seed 75 \
+        --headless --no-offscreen 
 """
 
-import os
-if 'MUJOCO_GL' not in os.environ:
-    os.environ['MUJOCO_GL'] = 'glx'
+# import os
+# if 'MUJOCO_GL' not in os.environ:
+#     os.environ['MUJOCO_GL'] = 'glx'
 
 import sys
 import time
@@ -296,7 +298,6 @@ def build_env_factory(args):
             "env_name": "ClutteredNutAssembly",
             "num_round_nuts": args.num_round,
             "num_square_nuts": args.num_square,
-            "initial_stacking_prob": args.initial_stacking_prob,
             "nut_type_mode": args.nut_type_mode,
             "horizon": args.max_timesteps,
         }
@@ -306,11 +307,10 @@ def build_env_factory(args):
                 env_name="ClutteredNutAssembly",
                 num_round_nuts=args.num_round,
                 num_square_nuts=args.num_square,
-                initial_stacking_prob=args.initial_stacking_prob,
                 nut_type_mode=args.nut_type_mode,
                 horizon=args.max_timesteps,
-                # has_renderer=not args.headless,
-                # has_offscreen_renderer=True,
+                has_renderer=not args.headless,
+                has_offscreen_renderer=not args.no_offscreen,
             )
 
         return env_factory, create_nut_assembly_policy, env_name, env_config
@@ -327,8 +327,8 @@ def build_env_factory(args):
         def env_factory():
             return create_environment(
                 env_name,
-                # has_renderer=not args.headless,
-                # has_offscreen_renderer=True,
+                has_renderer=not args.headless,
+                has_offscreen_renderer=not args.no_offscreen,
             )
 
         return env_factory, create_stack_policy, env_name, env_config
@@ -345,8 +345,8 @@ def build_env_factory(args):
         def env_factory():
             return create_environment(
                 "PickPlaceCan",
-                # has_renderer=not args.headless,
-                # has_offscreen_renderer=True,
+                has_renderer=not args.headless,
+                has_offscreen_renderer=not args.no_offscreen,
             )
 
         return env_factory, create_pickplace_policy, env_name, env_config
@@ -388,8 +388,13 @@ def main():
         "--headless",
         action="store_true",
         default=False,
-        help="Run without GUI viewer (faster-than-realtime). "
-             "Offscreen rendering for image capture is always enabled.",
+        help="Run without GUI viewer (faster-than-realtime).",
+    )
+    parser.add_argument(
+        "--no-offscreen",
+        action="store_true",
+        default=False,
+        help="Disable offscreen rendering (images will not be captured).",
     )
 
     args = parser.parse_args()

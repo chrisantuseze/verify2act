@@ -11,16 +11,15 @@
 module load apptainer/1.2.2
 export APPTAINER_BIND=$PWD
 
-# # Run 10 data collection processes in parallel (you can add more seeds to the list)
-# for seed in 63 64 65 66 67; do
-#     apptainer exec --nv apptainerfile.sif xvfb-run -a python3 robosuite/data_capture_wm/batch_collect.py \
-#             --env ClutteredNutAssembly --policy-mode expert \
-#             --transition-mode keyframe \
-#             --output-dir robosuite/data_capture_wm/dataset/nut_assembly \
-#             --num-round 1 --num-square 2 --initial-stacking-prob 0.0 \
-#             --nut-type-mode random --num-episodes 5000 \
-#             --image-size 512 --seed $seed &
-# done
+# Run 10 data collection processes in parallel (you can add more seeds to the list)
+for seed in 76 77 78 79 80; do
+    apptainer exec --nv apptainerfile.sif xvfb-run -a python3 robosuite/data_capture_wm/batch_collect.py \
+            --env ClutteredNutAssembly --policy-mode noisy --noise-sigma 0.05 \
+            --output-dir robosuite/data_capture_wm/dataset/nut_assembly \
+            --num-round 3 --num-square 2 \
+            --nut-type-mode random --num-episodes 5000 \
+            --image-size 512 --seed $seed &
+done
 
 # # Wait for all background processes to finish before ending the slurm job
 # wait
@@ -49,16 +48,16 @@ export APPTAINER_BIND=$PWD
 
 # apptainer exec --nv verify2act.sif python3 unzip.py
 
-apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
+# apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
 
-apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-  --input-dir calvin/dataset/task_ABCD_D/training \
-  --output-dir calvin/dataset/task_ABCD_D_filtered/training \
-  --history-len 10 &
+# apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+#   --input-dir calvin/dataset/task_ABCD_D/training \
+#   --output-dir calvin/dataset/task_ABCD_D_filtered/training \
+#   --history-len 10 &
 
-apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-  --input-dir calvin/dataset/task_ABCD_D/validation \
-  --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
-  --history-len 10 &
+# apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+#   --input-dir calvin/dataset/task_ABCD_D/validation \
+#   --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
+#   --history-len 10 &
 
-wait
+# wait
