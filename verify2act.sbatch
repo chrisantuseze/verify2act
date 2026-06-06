@@ -24,42 +24,20 @@ export APPTAINER_BIND=$PWD
 # # Wait for all background processes to finish before ending the slurm job
 # wait
 
-# apptainer exec --nv verify2act.sif python3 verify2act/latent_wm/train_dynamics.py \
-#   --dataset-type calvin \
-#   --dataset-dir calvin/dataset/task_ABC_D/training \
-#   --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
-#   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 5 \
-#   --causal-masking \
-#   --resume-from verify2act/output/v2a_wm/calvin/task_ABC_D/ckpt/latent_dynamics_best.pt
-
-# apptainer exec --nv verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-#   --input-dir calvin/dataset/task_ABC_D/validation \
-#   --output-dir calvin/dataset/task_ABC_D_filtered/validation \
-#   --history-len 5
-
-# apptainer exec --nv verify2act.sif accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 verify2act/latent_wm/train_dynamics.py \
-#   --dataset-type calvin \
-#   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-#   --output-dir verify2act/output/v2a_wm/calvin/task_ABC_D \
-#   --num-epochs 10 \
-#   --batch-size 16 \
-#   --lr 1e-4 \
-#   --causal-masking
-
-# apptainer exec --nv verify2act.sif python3 unzip.py
-
 # apptainer exec verify2act.sif bash -c "cd calvin/dataset && bash download_data.sh ABCD"
 
-apptainer exec verify2act.sif python3 -c "import os, zipfile; p = 'calvin/dataset/task_ABCD_D.zip' if os.path.exists('calvin/dataset/task_ABCD_D.zip') else 'task_ABCD_D.zip'; print(f'Extracting {p}...'); zipfile.ZipFile(p).extractall('calvin/dataset')"
+# apptainer exec verify2act.sif python3 -c "import os, zipfile; p = 'calvin/dataset/task_ABCD_D.zip' if os.path.exists('calvin/dataset/task_ABCD_D.zip') else 'task_ABCD_D.zip'; print(f'Extracting {p}...'); zipfile.ZipFile(p).extractall('calvin/dataset')"
 
-apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-  --input-dir calvin/dataset/task_ABCD_D/training \
-  --output-dir calvin/dataset/task_ABCD_D_filtered/training \
-  --history-len 10 &
+# apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+#   --input-dir calvin/dataset/task_ABCD_D/training \
+#   --output-dir calvin/dataset/task_ABCD_D_filtered/training \
+#   --history-len 10 &
 
-apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
-  --input-dir calvin/dataset/task_ABCD_D/validation \
-  --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
-  --history-len 10 &
+# apptainer exec verify2act.sif python3 verify2act/utils/filter_calvin_dataset.py \
+#   --input-dir calvin/dataset/task_ABCD_D/validation \
+#   --output-dir calvin/dataset/task_ABCD_D_filtered/validation \
+#   --history-len 10 &
 
-wait
+# wait
+
+apptainer exec verify2act.sif python3 -c "import os, shutil; p = 'calvin/dataset/task_ABCD_D_filtered'; print(f'Zipping {p}...') if os.path.exists(p) else print(f'Directory {p} not found.'); shutil.make_archive(p, 'zip', root_dir='calvin/dataset', base_dir='task_ABCD_D_filtered') if os.path.exists(p) else None"
