@@ -193,7 +193,7 @@ class StackMulti(ManipulationEnv):
         # Check if task is complete (all target nuts placed)
         success = self._check_success()
 
-        self.done = success
+        self.done = success and not self.ignore_done
         
         info = {"success": success}
         
