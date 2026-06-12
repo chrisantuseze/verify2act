@@ -1,3 +1,6 @@
 [submodule "calvin"]
 	path = calvin
 	url = https://github.com/chrisantuseze/calvin.git
+[submodule "third_party/MoDE_Diffusion_Policy"]
+	path = third_party/MoDE_Diffusion_Policy
+	url = https://github.com/intuitive-robots/MoDE_Diffusion_Policy.git
