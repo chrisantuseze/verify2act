@@ -1501,7 +1501,8 @@ def create_environment(env_name: str = "NutAssembly",
                       has_renderer: bool = True,
                       has_offscreen_renderer: bool = False,
                       use_camera_obs: bool = False,
-                      horizon: int = 2500):
+                      horizon: int = 2500,
+                      ignore_done: bool = False):
     """
     Create and configure the robosuite ClutteredNutAssembly environment.
 
@@ -1517,6 +1518,7 @@ def create_environment(env_name: str = "NutAssembly",
         render_camera: Camera used by on-screen renderer (e.g., agentview)
         use_camera_obs: Enable camera observations
         horizon: Episode horizon
+        ignore_done: Whether the environment should ignore early done signals (e.g., for parking)
 
     Returns:
         Configured environment instance
@@ -1534,7 +1536,7 @@ def create_environment(env_name: str = "NutAssembly",
         use_object_obs=True,
         control_freq=20,
         horizon=horizon,
-        ignore_done=False,
+        ignore_done=ignore_done,
         num_round_nuts=num_round_nuts,
         num_square_nuts=num_square_nuts,
         nut_type_mode=nut_type_mode,

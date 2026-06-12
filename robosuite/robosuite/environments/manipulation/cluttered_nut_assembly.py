@@ -557,7 +557,7 @@ class ClutteredNutAssembly(ManipulationEnv):
         # Success requires every target nut to be properly inserted (strict on_peg check).
         success = self._check_success() if all_processed else False
 
-        self.done = all_processed or ((self.timestep >= self.horizon) and not self.ignore_done)
+        self.done = (all_processed or (self.timestep >= self.horizon)) and not self.ignore_done
 
         info = {"success": success, "all_target_nuts_processed": all_processed}
 
