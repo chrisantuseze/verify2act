@@ -14,9 +14,9 @@ Usage:
         --env ClutteredNutAssembly --policy-mode expert \
         --transition-mode keyframe \
         --output-dir dataset/nut_assembly \
-        --num-round 3 --num-square 3 \
-        --nut-type-mode random --num-episodes 20 \
-        --image-size 512 --seed 44 \
+        --num-round 2 --num-square 2 \
+        --nut-type-mode random --num-episodes 20000 \
+        --image-size 512 --seed 82 \
         --headless --no-offscreen 
 
     # Expert episodes --headless
