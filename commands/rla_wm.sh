@@ -23,7 +23,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/rla_wm/nut_assembly/wm_causal \
   --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 5 \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --resume-from verify2act/output/rla_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best.pt
  
 # -------- CALVIN --------
@@ -33,10 +33,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/rla_wm/calvin/wm \
   --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 \
-  --batch-size 32 \
-  --lr 1e-4 \
-  --checkpoint-freq 5 \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --resume-from verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 # ==============================================================================

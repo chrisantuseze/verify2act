@@ -839,9 +839,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--critic-ckpt", default="verify2act/output/contrastive/best_contrastive_critic.pt")
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
-    parser.add_argument("--planner-model", default="gpt-4o")
+    parser.add_argument("--planner-model", default="gemini-2.5-flash")
     parser.add_argument("--planner-max-tokens", type=int, default=512)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--no-gemini-retry-warn",
+        action="store_true",
+        default=False,
+        help="Suppress rate-limit retry warnings when using Gemini (equivalent to GEMINI_WARN_ON_RETRY=0).",
+    )
 
     parser.add_argument("--wm-mode", choices=["oracle", "diffusion", "v2a_wm", "rla_wm", "dino_wm", "vlm_only"], default="v2a_wm")
     parser.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
@@ -947,6 +953,7 @@ def main() -> int:
         model=args.planner_model,
         max_tokens=args.planner_max_tokens,
         temperature=args.planner_temperature,
+        warn_on_retry=not args.no_gemini_retry_warn,
     )
     # Load VAE encoder unless in VLM-Only mode
     if args.wm_mode == "vlm_only":

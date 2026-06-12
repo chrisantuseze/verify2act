@@ -42,25 +42,17 @@ python verify2act/critic/train_contrastive.py \
 # Calvin Critic Training
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=bf16 \
   verify2act/critic/train_contrastive.py \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/contrastive/calvin \
   --dataset-type calvin \
-  --epochs 20 \
-  --batch-size 8 \
+  --epochs 25 \
+  --batch-size 16 \
   --learning-rate 1e-4 \
-  --lambda1 0.4 \
-  --lambda2 0.8 \
+  --lambda1 0.5 \
+  --lambda2 0.7 \
   --kl-weight 5e-4 \
+  --cached-dino-dir "verify2act/output/v2a_wm/calvin/dino_features" \
   --resume-from verify2act/output/contrastive/calvin/best_contrastive_critic.pt
-
-python verify2act/critic/train_contrastive.py \
-  --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/contrastive/calvin \
-  --epochs 30 \
-  --freeze-backbone-epochs 30 \
-  --learning-rate 1e-4 \
-  --cached-dino-dir "verify2act/output/rla_wm/dino_features/calvin"
 
 # ==============================================================================
 # LATENT WM TRAINING (v2a_wm - Flow Matching)
@@ -76,7 +68,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
-  --num-epochs 200 --batch-size 64 --lr 1e-4 \
+  --num-epochs 300 --batch-size 32 --lr 1e-4 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
@@ -84,16 +76,10 @@ python verify2act/latent_wm/train_decoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --batch-size 64 \
-  --num-epochs 100 \
+  --num-epochs 100 --batch-size 32 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt
 
-# Stage 2: Flow Matching (v2 — weight_decay + cosine LR)
-# NEW output dir preserves wm_causal/ as the baseline run for comparison.
-# No --resume-from: weight_decay and cosine schedule must apply from epoch 0.
-# On first batch of epoch 0, LATENT_SCALE diagnostic will print to stdout:
-#   [LATENT SCALE DIAGNOSTIC] gt_tokens std=X.XXXX mean=X.XXXX ...
-# If std/LATENT_SCALE is far from 1.0, adjust LATENT_SCALE in train_dynamics.py.
+# Stage 2: Flow Matching 
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
@@ -116,28 +102,29 @@ python3 verify2act/utils/filter_calvin_dataset.py \
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_encoder.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/encoder \
-  --num-epochs 100 --batch-size 16 --lr 1e-4 \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
+  --output-dir verify2act/output/v2a_wm/calvin/encoder_wider \
+  --token-dim 128 --num-latent-tokens 32 \
+  --num-epochs 300 --batch-size 32 --lr 1e-4 \
   --resume-from verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
 python verify2act/latent_wm/train_decoder.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/v2a_wm/calvin/decoder \
-  --batch-size 32 \
-  --num-epochs 100 \
+  --num-epochs 100 --batch-size 32 \
   --resume-from verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt
 
 # Stage 2: Flow Matching
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/wm \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
-  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 10 \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
+  --output-dir verify2act/output/v2a_wm/calvin/wm_wider \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/encoder_only_best.pt \
+  --token-dim 128 --num-latent-tokens 32 \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --causal-masking \
   --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
@@ -159,11 +146,12 @@ python verify2act/latent_wm/visualize_wm.py \
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
-  --wm-ckpt verify2act/output/v2a_wm/calvin/wm_history_1_sparsity_01/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
+  --wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
   --history-len 3 \
-  --num-samples 10
+  --num-samples 10 \
+  --token-dim 128 --num-latent-tokens 32 
 
 # ==============================================================================
 # INFERENCE PIPELINE
@@ -295,7 +283,7 @@ python3 verify2act/pipeline/inference_calvin.py \
 # Calvin Inference (using vlm_only baseline)
 python3 verify2act/pipeline/inference_calvin.py \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
@@ -308,7 +296,7 @@ python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \

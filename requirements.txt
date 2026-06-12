@@ -24,3 +24,10 @@ einops
 openai-clip
 gym
 networkx
+hydra-core
+pybullet
+GitPython
+numpy-quaternion
+rich
+pytorch-lightning
+pyhash

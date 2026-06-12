@@ -1,113 +1,67 @@
-# Verify2Act — CoRL Situation & Way Forward
+# Verify2Act — RA-L Submission & Way Forward
 
-## What Actually Happened (Root Cause)
-
-| Issue | Severity | Fixable? |
-|---|---|---|
-| Abstract claims "significantly outperform SOTA" but Table 1 reports the old Nut Assembly run (52% ≈ same as DINO-WM, below RLA-WM/ReflectVLM 72%) | **Critical** — claim–result mismatch | ✅ Yes, with correct rerun |
-| Experiment section written by Gemini using an older run's numbers without being caught | **Critical** — reproducibility undermined | ✅ Yes (lesson for next time) |
-| Only 25 Nut Assembly episodes; only 20 CALVIN sequences — both too low for statistical credibility | **Serious** — reviewers flagged this directly | ✅ Yes, easy to rerun |
-| No ablation table isolating V2A-WM components (cross-attn, temporal history, sparsity) | **Moderate** — weakens novelty argument | ⚠️ Feasible but takes time |
-| Missing comparisons: GHIL-Glue, LUMOS (latent planning), GR-1/end-to-end policies | **Moderate** — contextualizes the approach | ⚠️ Can address partially in writing |
-| Single-step Euler ODE integration not justified | **Minor** — technical clarification needed | ✅ Yes (writing fix + optionally experiment) |
-| Training data/demonstration counts not specified | **Minor** — reproducibility concern | ✅ Writing fix |
+This document outlines the current tasks, completed items, and timeline for revising the Verify2Act manuscript for submission to **IEEE Robotics and Automation Letters (RA-L)**. 
 
 ---
 
-## Immediate Decision: Supplementary by Thursday?
+## 🚀 Completed Tasks (Ready for Paper)
 
-> [!IMPORTANT]
-> **You likely should NOT kill yourself over Thursday's supplementary deadline.**
-> 
-> The core credibility issue (abstract vs. results mismatch) cannot be fixed in the main submission. Even a perfect video will not overcome a reviewer who catches that contradiction. The effort-to-reward ratio is low.
+The following items have been successfully implemented and integrated into the manuscript (`main.tex` and `refs.bib`):
 
-**Recommended call: Skip the supplementary** unless the video is already ≥70% done. Withdraw before the review phase begins if possible, to preserve your reputation at the venue and prevent a reviewable record of the submission.
-
-> [!NOTE]
-> Some venues let you withdraw before reviewers are assigned. Check CoRL's timeline — if you can withdraw cleanly without a review record, that's preferable to a rejection with the mismatch documented.
+*   **ODE Multi-Step Fix**: Corrected the erroneous "single Euler ODE step" claim to "5-step Euler ODE solver ($\Delta\tau = 0.2$)" based on the actual codebase implementation (`dynamics.py`).
+*   **Baselines Selection**: Removed **DINO-WM** from all baseline comparisons (per discussion, **RLA-WM** is sufficient as the latent-space world model baseline).
+*   **Baselines Scope Clarification**: Added detailed explanations for why **GR-1**, **HULC**, and **MoDE** are compared only on the CALVIN benchmark and omitted from Nut Assembly.
+*   **Related Work Extension**: Wove discussions of **GR-1**, **HULC**, and **MoDE** directly into Section II-A (*VLMs and Foresight in Robotics*) without creating redundant subsections.
+*   **Reference Updates**: Added bibtex references for GR-1 (`wu2024gr1`) and MoDE (`reuss2024mode`) to `refs.bib`.
 
 ---
 
-## The Real Path Forward: RA-L Submission
+## 📌 Current Action Plan (Pending Items)
 
-RA-L is a strong venue for this work — it's robotics-focused, rolling submission, and the review bar rewards thorough evaluation over novelty-for-novelty's sake. Your architecture is solid; the paper just needs honest results.
+### Phase 1 — Experimental Reruns & Evaluation (Priority: 🔴 Critical)
+The tables in the manuscript currently contain placeholder values (`--`). We need to run evaluations and fill in these numbers.
+- [ ] **Rerun Nut Assembly with the correct model** (50–100 episodes; previously only 25 episodes were evaluated with an incorrect model).
+- [ ] **Rerun CALVIN evaluation** (at least 100 sequences; previously only 20 sequences).
+- [ ] **Collect baseline numbers for CALVIN**:
+    - Extract published performance numbers for **GR-1**, **HULC**, and **MoDE** (no need to rerun locally).
+    - Evaluate **VLM-Only**, **RLA-WM**, and **ReflectVLM** under identical evaluation conditions.
+- [ ] **Evaluate Ablations** (Nut Assembly SR%):
+    - [ ] Base (RLA-WM)
+    - [ ] w/o Cross-Attention Grounding
+    - [ ] w/o Temporal History
+    - [ ] w/o Sparsity Regularization
+- [ ] **Fill in Tables 1 & 2** in `main.tex` once evaluations are finished.
 
-### Phase 1 — Fix the Numbers (1–3 days)
-*(Your infrastructure is ready; cost is the main constraint)*
+### Phase 2 — Writing & Manuscript Refinement (Priority: 🔴 Critical)
+- [ ] **Fix Abstract Claims**: Rewrite the abstract and intro to tone down the blanket claim of "significantly outperform SOTA". Frame it realistically: *V2A-WM outperforms latent-space baselines on CALVIN and achieves competitive performance on Nut Assembly while providing higher planning/pruning efficiency (NCR).*
+- [ ] **Rewrite Experiments Narrative**: Write the description and interpretation of the results ourselves (avoid delegating this to LLMs).
+- [ ] **Generate Qualitative Filmstrip Figure**:
+    - Implement/run `compare_imaginations.py` or `visualize_wm.py` to extract actual frame rollouts.
+    - Replace the placeholder comment in `main.tex` (around line 312) with a beautiful figure showcasing V2A-WM's early-pruning behavior vs. baselines.
 
-- [ ] **Rerun Nut Assembly with correct model** — 50–100 episodes (currently: 25 with wrong model)
-- [ ] **Rerun CALVIN** — at least 100 sequences (currently: 20)
-- [ ] Rerun key baselines under same conditions if any were also underrepresented
-- [ ] Apply for **Anthropic/OpenAI/Google research API credits** to offset VLM call costs
+### Phase 3 — Technical Clarifications & Reviewer Concerns (Priority: 🟡 Medium)
+- [ ] **Training Data Details**: Add explicit counts and sources of training demonstrations (addresses Reviewer Q1).
+- [ ] **Threshold Sensitivity Analysis**: Add a discussion/analysis on how the critic thresholds ($\theta_{\text{conf}}$, $\theta_c$, $\theta_p$) affect performance (addresses Reviewer Q2).
+- [ ] **Solver Speed Justification**: Add a brief discussion on the Euler step solver choice (5-step solver chosen as a sweet spot for planning latency vs. trajectory accuracy) (addresses Reviewer Q3).
+- [ ] **Wall-Clock Latency**: Add latency comparison against ReflectVLM (addresses Reviewer Q4).
+- [ ] **Failure Mode Analysis**: Document common failure modes observed in Nut Assembly (e.g., threshold sensitivity, aggressive pruning) (addresses Reviewer Q5).
 
-> [!TIP]
-> A few hours to a day for all baselines per your estimate. The CALVIN cost is mostly compute, not API spend. Prioritize Nut Assembly rerun first since that's the direct contradiction.
-
-### Phase 2 — Add One Ablation (1–2 days)
-
-The single most impactful addition to defend novelty claims:
-
-```
-Table: V2A-WM Component Ablation (Nut Assembly SR%)
-| Model Variant                     | SR (%) | NCR (%) |
-|-----------------------------------|--------|---------|
-| Base (RLA-WM)                     | XX     | XX      |
-| + Cross-Attention Grounding       | XX     | XX      |
-| + Temporal History                | XX     | XX      |
-| + Sparsity Regularization (Full)  | XX     | XX      |
-```
-
-Even one row — e.g., removing temporal history only — is better than nothing and directly answers Reviewer Q6.
-
-### Phase 3 — Rewrite These Sections (1–2 days)
-
-1. **Abstract** — rewrite to match actual results; make claim precise ("outperform latent-space baselines on CALVIN" instead of blanket "significantly outperform SOTA")
-2. **Experiment section** — rewrite yourself, do not delegate to an LLM for the results narrative
-3. **Add**: training data details (# demonstrations, sources) — answers Reviewer Q1
-4. **Add**: threshold sensitivity discussion (θ_conf, θ_c, θ_p) — answers Reviewer Q2
-5. **Add**: Euler step justification (single-step was chosen for latency; discuss multi-step as future work) — answers Reviewer Q3
-6. **Add**: wall-clock latency vs. ReflectVLM and DINO-WM — answers Reviewer Q4
-7. **Add**: failure mode analysis for Nut Assembly (pruning too aggressive? threshold tuning?) — answers Reviewer Q5
-8. **Scope statement in Related Work**: explicitly acknowledge why GR-1/end-to-end policies weren't compared (different problem setting, primitive action assumption)
-
-### Phase 4 — Optional but High-Value
-
-- Discuss GHIL-Glue and LUMOS in related work (at minimum a paragraph each; comparisons optional)
-- SR@N metrics for CALVIN (chain-length distribution) — much more informative than SR@1 alone
-- Calibration curves for critic thresholds
+### Phase 4 — High-Value Additions (Priority: 🟢 Low / Optional)
+- [ ] **Calibration Curves**: Plot confidence calibration curves for the critic thresholds.
+- [ ] **SR@N Distribution**: Plot Success Rate vs. Chain Length ($N$) for the CALVIN benchmark.
+- [ ] **Apply for VLM API Credits**: Apply for Anthropic, OpenAI, or Google research API credits to offset costs.
 
 ---
 
-## Revised Claims That Will Hold Up
+## 📅 Estimated Timeline
 
-| Current Abstract Claim | Replace With |
-|---|---|
-| "significantly outperform state-of-the-art" | "outperform latent-space baselines (DINO-WM, RLA-WM) on CALVIN and achieve competitive performance on Nut Assembly while providing higher plan efficiency via early pruning (NCR)" |
-| Implied: best on both benchmarks | Honest: best on CALVIN; competitive on Nut Assembly with better NCR |
+| Phase / Task | Effort (Days) | Priority |
+| :--- | :--- | :--- |
+| **Nut Assembly & CALVIN Reruns** | 2–3 Days | 🔴 Critical |
+| **Component Ablation Runs** | 1–2 Days | 🔴 Critical |
+| **Abstract & Experiments Rewrite** | 1 Day | 🔴 Critical |
+| **Technical Clarifications (Q1–Q5)** | 1 Day | 🟡 Medium |
+| **Qualitative Filmstrip Figure** | 0.5 Day | 🟡 Medium |
+| **Final Proofreading & Polish** | 0.5 Day | 🟢 Low |
 
----
-
-## Timeline Estimate
-
-| Phase | Time | Priority |
-|---|---|---|
-| Nut Assembly + CALVIN reruns | 1–2 days | 🔴 Critical |
-| Ablation (1 row) | 1 day | 🟠 High |
-| Rewrite abstract + experiments | 1–2 days | 🔴 Critical |
-| Technical clarifications (Euler, losses, data) | 0.5–1 day | 🟡 Medium |
-| Latency/compute table | 0.5 day | 🟡 Medium |
-
-**Total: ~2–3 focused weeks for a substantially stronger RA-L submission.**
-
----
-
-## The Bigger Picture
-
-The underlying work is sound. The architecture is well-motivated, the critic design is concrete, and the CALVIN results are competitive. The problems in the submitted version are:
-1. Rushed execution under impossible constraints (2 weeks, no advisor input, out-of-pocket API costs)
-2. Over-reliance on an LLM to narrate results it couldn't verify
-
-Neither of those is a research flaw. A proper RA-L submission gives this work a fair shot.
-
-> [!NOTE]
-> On the advisor situation: you are finishing this PhD largely alone, in your final semester, with a committee that isn't meaningfully accessible. If there is any graduate ombudsperson, graduate chair, or department director of graduate studies you can approach confidentially, it may be worth documenting the pattern — not for confrontation, but as a safeguard for your own protection through the dissertation phase.
+**Total Estimated Effort: ~6–8 days of focused work.**

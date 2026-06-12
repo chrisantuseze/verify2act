@@ -1,13 +1,28 @@
-"""VLM Planner — wraps GPT-4o for propose and reflect calls.
+"""VLM Planner — wraps Gemini (default) or GPT-4o for propose and reflect calls.
+
+The backend is selected automatically from the model name:
+  - ``gemini-*`` → Google Gemini via ``gemini_backend.call_gemini``
+  - ``gpt-*``    → OpenAI Chat Completions (unchanged)
 
 Usage::
 
+    # Default: Gemini 2.5 Flash (free tier)
     planner = VLMPlanner.from_yaml("configs/prompts/planner.yaml")
+
+    # Explicit GPT-4o fallback
+    planner = VLMPlanner.from_yaml("configs/prompts/planner.yaml", model="gpt-4o")
+
     plan = planner.propose(current_img, goal_img, history, obj_labels, horizon=5)
     # plan: ["pick round nut", "insert round nut", ...]
 
     revised = planner.reflect(current_img, goal_img, history, obj_labels, old_plan, ctx)
     # revised: {"analysis": "...", "revised_plan": [...]}
+
+Environment variables
+---------------------
+  GEMINI_API_KEY        — required when using any ``gemini-*`` model
+  OPENAI_API_KEY        — required when using any ``gpt-*`` model
+  GEMINI_WARN_ON_RETRY  — set to ``0`` to silence rate-limit retry warnings
 """
 
 from __future__ import annotations
@@ -33,41 +48,72 @@ class VLMRefusalError(ValueError):
 
 
 class VLMPlanner:
-    """GPT-4o based planner with YAML-driven prompt templates."""
+    """VLM-based planner with YAML-driven prompt templates.
+
+    Supports Gemini (default) and GPT-4o backends, selected by model name prefix:
+    - ``gemini-*`` → Google Gemini API (``GEMINI_API_KEY`` env var)
+    - ``gpt-*``    → OpenAI Chat Completions API (``OPENAI_API_KEY`` env var)
+    """
 
     def __init__(
         self,
         prompt_manager: PromptManager,
-        model: str = "gpt-4o",
+        model: str = "gemini-2.5-flash",
         max_tokens: int = 512,
         temperature: float = 0.2,
+        warn_on_retry: bool = True,
     ) -> None:
         self._pm = prompt_manager
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
+        # Respect GEMINI_WARN_ON_RETRY=0 env override
+        env_warn = os.environ.get("GEMINI_WARN_ON_RETRY", "")
+        self._warn_on_retry = warn_on_retry and (env_warn not in ("0", "false", "no"))
 
-        self._api_key = os.environ.get("OPENAI_API_KEY")
-        # Allow mock mode for testing if MOCK_API_KEY is set
-        if self._api_key is None:
-            if os.environ.get("MOCK_API_KEY"):
-                logger.warning("Using mock API key for testing purposes")
-                self._api_key = "mock-key-for-testing"
-            else:
-                raise ValueError("API key must be provided.")
+        self._client = None  # OpenAI client — only created for gpt-* models
 
-        self._client = openai.OpenAI(api_key=self._api_key, http_client=httpx.Client())  # uses OPENAI_API_KEY env var
+        is_gemini = model.startswith("gemini")
+        is_mock = bool(os.environ.get("MOCK_API_KEY"))
+
+        if is_mock:
+            logger.warning("Using mock API key for testing purposes")
+            self._api_key = "mock-key-for-testing"
+        elif is_gemini:
+            self._api_key = os.environ.get("GEMINI_API_KEY")
+            if self._api_key is None:
+                raise ValueError(
+                    "GEMINI_API_KEY environment variable is not set. "
+                    "Get a free key at https://aistudio.google.com/app/apikey"
+                )
+        else:
+            # OpenAI path
+            self._api_key = os.environ.get("OPENAI_API_KEY")
+            if self._api_key is None:
+                raise ValueError(
+                    "OPENAI_API_KEY environment variable is not set."
+                )
+            self._client = openai.OpenAI(
+                api_key=self._api_key, http_client=httpx.Client()
+            )
 
     @classmethod
     def from_yaml(
         cls,
         prompt_config: Union[str, pathlib.Path],
-        model: str = "gpt-4o",
+        model: str = "gemini-2.5-flash",
         max_tokens: int = 512,
         temperature: float = 0.2,
+        warn_on_retry: bool = True,
     ) -> "VLMPlanner":
         pm = PromptManager.from_yaml(prompt_config)
-        return cls(pm, model=model, max_tokens=max_tokens, temperature=temperature)
+        return cls(
+            pm,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            warn_on_retry=warn_on_retry,
+        )
 
     # -- internal -----------------------------------------------------------
 
@@ -90,19 +136,35 @@ class VLMPlanner:
     )
 
     def _call(self, messages: List[Dict[str, Any]], temperature: Optional[float] = None) -> str:
-        """Call the chat-completion API and return the raw text content.
+        """Call the appropriate VLM API and return the raw text content.
+
+        Dispatches to Gemini or OpenAI based on ``self._model`` prefix.
 
         Raises
         ------
         VLMRefusalError
-            When the model's finish_reason is ``"content_filter"`` or the
-            response text matches a known safety-refusal pattern.
+            When the model's finish_reason signals a safety/content-policy block,
+            or the response text matches a known refusal pattern.
         """
         if self._api_key == "mock-key-for-testing":
             logger.warning("Mock mode: returning dummy response for testing")
             return '{"plan": ["mock_action_1", "mock_action_2"], "analysis": "Mock response for testing"}'
 
         temp = self._temperature if temperature is None else temperature
+
+        # ── Gemini path ────────────────────────────────────────────────────
+        if self._model.startswith("gemini"):
+            from verify2act.pipeline.gemini_backend import call_gemini
+            return call_gemini(
+                messages=messages,
+                model=self._model,
+                max_output_tokens=self._max_tokens,
+                temperature=temp,
+                api_key=self._api_key,
+                warn_on_retry=self._warn_on_retry,
+            )
+
+        # ── OpenAI path (unchanged) ────────────────────────────────────────
         resp = self._client.chat.completions.create(
             model=self._model,
             messages=messages,

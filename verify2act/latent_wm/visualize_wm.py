@@ -55,6 +55,8 @@ def visualize(args):
         clip_channels=512,
         history_len=args.history_len,
         num_patches=256,
+        token_dim=args.token_dim,
+        num_latent_tokens=args.num_latent_tokens,
     ).to(device)
     
     if os.path.exists(args.wm_ckpt):
@@ -191,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--wm-ckpt", type=str, default="verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt", help="Path to trained World Model checkpoint")
     parser.add_argument("--encoder-ckpt", type=str, default="", help="Path to encoder+decoder checkpoint from train_encoder.py (for DeltaDecoder)")
     parser.add_argument("--token-dim", type=int, default=64, help="Compact latent token dim (must match checkpoint)")
+    parser.add_argument("--num-latent-tokens", type=int, default=16, help="Number of compact latent tokens (must match checkpoint)")
     parser.add_argument("--decoder-ckpt", type=str, default="", help="Path to trained rla-wm DINO-to-image decoder checkpoint (e.g. runs/xxx.pt)")
     parser.add_argument("--output-dir", type=str, default="verify2act/output/visualizations")
     parser.add_argument("--num-samples", type=int, default=5, help="Number of samples to visualize")

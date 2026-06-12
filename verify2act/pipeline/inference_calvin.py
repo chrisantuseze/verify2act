@@ -258,9 +258,15 @@ def main() -> int:
     
     # Planner configuration
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
-    parser.add_argument("--planner-model", default="gpt-4o")
+    parser.add_argument("--planner-model", default="gemini-2.5-flash")
     parser.add_argument("--planner-max-tokens", type=int, default=512)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--no-gemini-retry-warn",
+        action="store_true",
+        default=False,
+        help="Suppress rate-limit retry warnings when using Gemini (equivalent to GEMINI_WARN_ON_RETRY=0).",
+    )
     
     # Hyperparameters
     parser.add_argument("--theta-c", type=float, default=0.7, help="Consistency threshold")
@@ -308,6 +314,7 @@ def main() -> int:
         model=args.planner_model,
         max_tokens=args.planner_max_tokens,
         temperature=args.planner_temperature,
+        warn_on_retry=not args.no_gemini_retry_warn,
     )
 
     if args.wm_mode == "vlm_only":

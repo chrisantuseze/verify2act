@@ -337,7 +337,7 @@ def train(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
 
     # Cosine LR decay: ramps LR from `lr` → eta_min over num_epochs.
-    # Helps escape the flat-LR plateau that causes val loss to diverge after ~ep48.
+    # Using T_max = num_epochs so LR reaches eta_min at end of full training budget.
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-6)
     
     best_val_loss = float('inf')
@@ -436,6 +436,10 @@ def train(args):
                 residual_raw = F_t1 - F_t                         # (B, 256, 1024)
                 gt_tokens = delta_encoder(residual_raw)           # (B, N, token_dim)
 
+            # Print diagnostic std on the first batch of training
+            if epoch == start_epoch and batch_idx == 0 and accelerator.is_local_main_process:
+                print(f"\n[LATENT SCALE DIAGNOSTIC] gt_tokens std={gt_tokens.std().item():.4f} mean={gt_tokens.mean().item():.4f}\n")
+
             # --- Stage 2: Flow Matching in compact latent token space ---
             # 1. Normalize latents into flow space. (#1)
             # Encoder latents can have std >> 1.  Dividing by LATENT_SCALE brings
@@ -521,6 +525,11 @@ def train(args):
         val_sparse_loss = 0.0
         
         pbar_val = tqdm(val_dataloader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]", dynamic_ncols=True, disable=not accelerator.is_local_main_process)
+        # # Save training RNG state, run validation with a fixed seed for a stable
+        # # metric, then restore so the next training epoch gets fresh randomness.
+        # _rng_cpu = torch.get_rng_state()
+        # _rng_cuda = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+        # set_seed(args.seed)
         with torch.no_grad():
             for batch_idx, batch in enumerate(pbar_val):
                 if isinstance(batch, dict):
@@ -578,7 +587,11 @@ def train(args):
                 val_sparse_loss += loss_sparsity.item()
                 
                 pbar_val.set_postfix({"loss": f"{loss.item():.4f}"})
-                
+        # # Restore training RNG so the next epoch sees different noise/timesteps
+        # torch.set_rng_state(_rng_cpu)
+        # if _rng_cuda is not None:
+        #     torch.cuda.set_rng_state(_rng_cuda)
+            
         num_val_batches = len(val_dataloader)
         if num_val_batches > 0:
             val_loss /= num_val_batches
@@ -677,15 +690,15 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, default="verify2act/output/v2a_wm/nut_assembly")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--batch-size", type=int, default=16, help="Batch size")
-    parser.add_argument("--num-epochs", type=int, default=5, help="Number of epochs")
+    parser.add_argument("--num-epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--sparsity-weight", type=float, default=0.0,
                         help="Sparsity regularization weight (0 = disabled). "
                              "Applied as a global latent-activity penalty on static patches.")
-    parser.add_argument("--checkpoint-freq", type=int, default=2, help="Checkpoint frequency (epochs)")
+    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Checkpoint frequency (epochs)")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to dynamics model checkpoint to resume from")
-    parser.add_argument("--patience", type=int, default=15,
+    parser.add_argument("--patience", type=int, default=20,
                         help="Early stopping patience (epochs of no improvement). 0 disables.")
     parser.add_argument(
         "--causal-masking", action="store_true", default=False,
