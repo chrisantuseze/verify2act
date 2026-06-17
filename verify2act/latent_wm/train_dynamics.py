@@ -695,7 +695,7 @@ def parse_args():
     parser.add_argument("--sparsity-weight", type=float, default=0.0,
                         help="Sparsity regularization weight (0 = disabled). "
                              "Applied as a global latent-activity penalty on static patches.")
-    parser.add_argument("--checkpoint-freq", type=int, default=10, help="Checkpoint frequency (epochs)")
+    parser.add_argument("--checkpoint-freq", type=int, default=20, help="Checkpoint frequency (epochs)")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to dynamics model checkpoint to resume from")
     parser.add_argument("--patience", type=int, default=20,

@@ -31,3 +31,9 @@ numpy-quaternion
 rich
 pytorch-lightning
 pyhash
+seaborn
+wandb
+torchsde
+torchdiffeq
+timm
+optree

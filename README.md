@@ -20,3 +20,7 @@ pip install -e calvin/calvin_models --no-deps
 pip install pytorch-lightning gym pyhash
 
 Note: Activate env before running mjpython ...
+
+
+# third_party
+pip install -e third_party/MoDE_Diffusion_Policy

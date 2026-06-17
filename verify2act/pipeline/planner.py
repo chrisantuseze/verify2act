@@ -59,14 +59,16 @@ class VLMPlanner:
         self,
         prompt_manager: PromptManager,
         model: str = "gemini-2.5-flash",
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
         temperature: float = 0.2,
         warn_on_retry: bool = True,
+        call_delay: float = 0.0,
     ) -> None:
         self._pm = prompt_manager
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._call_delay = call_delay
         # Respect GEMINI_WARN_ON_RETRY=0 env override
         env_warn = os.environ.get("GEMINI_WARN_ON_RETRY", "")
         self._warn_on_retry = warn_on_retry and (env_warn not in ("0", "false", "no"))
@@ -81,11 +83,17 @@ class VLMPlanner:
             self._api_key = "mock-key-for-testing"
         elif is_gemini:
             self._api_key = os.environ.get("GEMINI_API_KEY")
+            print("GEMINI_API_KEY:", self._api_key, ", Model name:", model)
             if self._api_key is None:
-                raise ValueError(
-                    "GEMINI_API_KEY environment variable is not set. "
-                    "Get a free key at https://aistudio.google.com/app/apikey"
-                )
+                adc_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
+                if adc_path and os.path.exists(adc_path):
+                    logger.info("GEMINI_API_KEY not set, but GCP ADC found. Defaulting to 'vertex-ai' backend.")
+                    self._api_key = "vertex-ai"
+                else:
+                    raise ValueError(
+                        "GEMINI_API_KEY environment variable is not set. "
+                        "Get a free key at https://aistudio.google.com/app/apikey"
+                    )
         else:
             # OpenAI path
             self._api_key = os.environ.get("OPENAI_API_KEY")
@@ -102,9 +110,10 @@ class VLMPlanner:
         cls,
         prompt_config: Union[str, pathlib.Path],
         model: str = "gemini-2.5-flash",
-        max_tokens: int = 512,
+        max_tokens: int = 1024,
         temperature: float = 0.2,
         warn_on_retry: bool = True,
+        call_delay: float = 0.0,
     ) -> "VLMPlanner":
         pm = PromptManager.from_yaml(prompt_config)
         return cls(
@@ -113,6 +122,7 @@ class VLMPlanner:
             max_tokens=max_tokens,
             temperature=temperature,
             warn_on_retry=warn_on_retry,
+            call_delay=call_delay,
         )
 
     # -- internal -----------------------------------------------------------
@@ -146,6 +156,10 @@ class VLMPlanner:
             When the model's finish_reason signals a safety/content-policy block,
             or the response text matches a known refusal pattern.
         """
+        if os.environ.get("GEMINI_API_KEY") == "vertex-ai" and self._api_key != "vertex-ai":
+            logger.info("Syncing planner api_key with environment fallback to 'vertex-ai'")
+            self._api_key = "vertex-ai"
+
         if self._api_key == "mock-key-for-testing":
             logger.warning("Mock mode: returning dummy response for testing")
             return '{"plan": ["mock_action_1", "mock_action_2"], "analysis": "Mock response for testing"}'
@@ -161,7 +175,9 @@ class VLMPlanner:
                 max_output_tokens=self._max_tokens,
                 temperature=temp,
                 api_key=self._api_key,
+                max_retries=24,
                 warn_on_retry=self._warn_on_retry,
+                call_delay=self._call_delay,
             )
 
         # ── OpenAI path (unchanged) ────────────────────────────────────────
@@ -214,14 +230,44 @@ class VLMPlanner:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            # Fallback: extract the first JSON object or array substring.
-            match = re.search(r"(\{[\s\S]*?\}|\[[\s\S]*?\])", text)
-            if match is None:
-                raise ValueError(f"Failed to parse JSON from model response: {text!r}")
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Extracted JSON substring is invalid: {match.group(0)!r}") from e
+            # Fallback: extract the outermost JSON object or array substring.
+            # Use greedy *  (not non-greedy *?) so we capture the last closing
+            # brace/bracket rather than stopping at the very first one found.
+            match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+            if match is not None:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Extracted JSON substring is invalid: {match.group(0)!r}") from e
+
+            # ── Truncation repair ─────────────────────────────────────────────
+            # The model response was cut off before the closing brace (e.g. due
+            # to hitting MAX_TOKENS). Salvage any *complete* key-value pairs that
+            # are already present so the caller can still function.
+            # Matches: "key": true/false/null, numbers, or fully-quoted strings.
+            if text.lstrip().startswith("{"):
+                partial: dict = {}
+                for m in re.finditer(
+                    r'"(\w+)"\s*:\s*(true|false|null|-?\d+(?:\.\d+)?|"(?:[^"\\]|\\.)*")',
+                    text,
+                ):
+                    try:
+                        partial[m.group(1)] = json.loads(m.group(2))
+                    except Exception:
+                        pass
+                if partial:
+                    logger.warning(
+                        "_parse_json: response appears truncated (no closing '}'); "
+                        "salvaged %d complete field(s): %s. "
+                        "Consider increasing --planner-max-tokens.",
+                        len(partial), list(partial.keys()),
+                    )
+                    return partial
+
+            raise ValueError(
+                f"Failed to parse JSON from model response (response may be "
+                f"truncated — try increasing --planner-max-tokens): {text!r}"
+            )
 
     # -- public API ---------------------------------------------------------
 
@@ -357,6 +403,16 @@ class VLMPlanner:
         revised = result.get("revised_plan")
         if not isinstance(revised, list) or not all(isinstance(a, (str, dict)) for a in revised):
             raise ValueError(f"Invalid 'revised_plan' output from model: {revised}")
+        
+        # Clean revised_plan to ensure all elements are strings (extracting 'label' if it's a dict)
+        cleaned = []
+        for step in revised:
+            if isinstance(step, dict):
+                cleaned.append(step.get("label", step.get("action", str(step))))
+            else:
+                cleaned.append(str(step))
+        result["revised_plan"] = cleaned
+
         if "analysis" not in result:
             result["analysis"] = ""
         logger.info("Reflect analysis: %s", result.get("analysis"))

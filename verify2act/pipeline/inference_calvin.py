@@ -259,7 +259,7 @@ def main() -> int:
     # Planner configuration
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gemini-2.5-flash")
-    parser.add_argument("--planner-max-tokens", type=int, default=512)
+    parser.add_argument("--planner-max-tokens", type=int, default=1024)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
     parser.add_argument(
         "--no-gemini-retry-warn",
@@ -267,11 +267,20 @@ def main() -> int:
         default=False,
         help="Suppress rate-limit retry warnings when using Gemini (equivalent to GEMINI_WARN_ON_RETRY=0).",
     )
+    parser.add_argument(
+        "--planner-call-delay",
+        type=float,
+        default=3.0,
+        metavar="SECONDS",
+        help="Seconds to sleep before each Gemini API call to reduce RPM pressure on the free tier (e.g. 3.0).",
+    )
     
     # Hyperparameters
     parser.add_argument("--theta-c", type=float, default=0.7, help="Consistency threshold")
     parser.add_argument("--max-replans", type=int, default=2, help="Max replanning rounds per failure")
     parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
+    parser.add_argument("--token-dim", type=int, default=128, help="Compact latent token dimension")
+    parser.add_argument("--num-latent-tokens", type=int, default=32, help="Number of compact latent tokens")
     parser.add_argument("--wm-mode", choices=["v2a_wm", "rla_wm", "dino_wm", "diffusion", "vlm_only"], default="v2a_wm", help="World Model mode")
     
     # Diffusion world model arguments
@@ -315,6 +324,7 @@ def main() -> int:
         max_tokens=args.planner_max_tokens,
         temperature=args.planner_temperature,
         warn_on_retry=not args.no_gemini_retry_warn,
+        call_delay=args.planner_call_delay,
     )
 
     if args.wm_mode == "vlm_only":
@@ -351,6 +361,19 @@ def main() -> int:
             
         logger.info("ReflectVLM (Diffusion mode) selected. Bypassing Critic loading.")
         critic = None
+    elif args.wm_mode == "rla_wm":
+        logger.info("Loading RLA World Model...")
+        from verify2act.pipeline.world_model import RLAWorldModel
+        world_model = RLAWorldModel(
+            device=args.device,
+            dynamics_weights_path=args.latent_wm_ckpt,
+            encoder_ckpt=args.encoder_ckpt,
+            history_len=args.history_len,
+            token_dim=args.token_dim,
+            num_latent_tokens=args.num_latent_tokens,
+        )
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
     elif args.wm_mode == "dino_wm":
         logger.info("Loading DINO World Model...")
         from verify2act.pipeline.world_model import DINOWorldModel
@@ -368,6 +391,8 @@ def main() -> int:
             dynamics_weights_path=args.latent_wm_ckpt,
             encoder_ckpt=args.encoder_ckpt,
             history_len=args.history_len,
+            token_dim=args.token_dim,
+            num_latent_tokens=args.num_latent_tokens,
         )
         if device.type == "cuda":
             torch.cuda.empty_cache()

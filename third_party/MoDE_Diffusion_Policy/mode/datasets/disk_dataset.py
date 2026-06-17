@@ -96,6 +96,31 @@ class DiskDataset(BaseDataset):
             episode["language"] = self.lang_ann[self.lang_lookup[idx]][0]  # TODO check  [0]
         return episode
 
+    def _load_lang_data(self, abs_datasets_dir: Path) -> Dict[str, Any]:
+        """
+        Load language annotations from the dataset directory.
+        Checks multiple possible paths for compatibility:
+        1. abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy"
+        2. abs_datasets_dir / "lang_annotations" / "auto_lang_ann.npy"
+        3. abs_datasets_dir / "auto_lang_ann.npy"
+        """
+        paths_to_try = [
+            abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy",
+            abs_datasets_dir / "lang_annotations" / "auto_lang_ann.npy",
+            abs_datasets_dir / "auto_lang_ann.npy"
+        ]
+        
+        for path in paths_to_try:
+            if path.exists():
+                try:
+                    logger.info(f"Loading lang data from: {path}")
+                    return np.load(path, allow_pickle=True).item()
+                except Exception as e:
+                    logger.warning(f"Failed to load lang data from {path}: {e}")
+                    
+        # Fallback to the first path if none exist/succeeded
+        return np.load(paths_to_try[0], allow_pickle=True).item()
+
     def _build_file_indices_lang(self, abs_datasets_dir: Path) -> Tuple[np.ndarray, List, np.ndarray]:
         """
         This method builds the mapping from index to file_name used for loading the episodes of the language dataset.
@@ -112,12 +137,7 @@ class DiskDataset(BaseDataset):
 
         episode_lookup = []
 
-        try:
-            print("trying to load lang data from: ", abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy")
-            lang_data = np.load(abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy", allow_pickle=True).item()
-        except Exception:
-            print("Exception, trying to load lang data from: ", abs_datasets_dir / "auto_lang_ann.npy")
-            lang_data = np.load(abs_datasets_dir / "auto_lang_ann.npy", allow_pickle=True).item()
+        lang_data = self._load_lang_data(abs_datasets_dir)
 
         ep_start_end_ids = lang_data["info"]["indx"]  # each of them are 64
         lang_ann = lang_data["language"]["emb"]  # length total number of annotations
@@ -340,7 +360,7 @@ class LabeledSubsetDiskDataset(ExtendedDiskDataset):
             np.random.seed(subset_seed)
             
         # Get language annotations
-        lang_data = np.load(self.abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy", allow_pickle=True).item()
+        lang_data = self._load_lang_data(self.abs_datasets_dir)
         labeled_episodes = lang_data["info"]["indx"]
         
         # Get indices of labeled episodes
@@ -380,7 +400,7 @@ class BalancedLabeledSubsetDataset(ExtendedDiskDataset):
             np.random.seed(subset_seed)
             
         # Load language annotations
-        lang_data = np.load(self.abs_datasets_dir / self.lang_folder / "auto_lang_ann.npy", allow_pickle=True).item()
+        lang_data = self._load_lang_data(self.abs_datasets_dir)
         
         # Create mapping of tasks to episodes
         task_to_episodes = defaultdict(list)

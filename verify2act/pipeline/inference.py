@@ -761,6 +761,8 @@ def _build_world_model(args: argparse.Namespace):
             dynamics_weights_path=args.latent_wm_ckpt,
             encoder_ckpt=args.encoder_ckpt,
             history_len=args.history_len,
+            token_dim=args.token_dim,
+            num_latent_tokens=args.num_latent_tokens,
         )
         return wm
         
@@ -771,6 +773,8 @@ def _build_world_model(args: argparse.Namespace):
             dynamics_weights_path=args.latent_wm_ckpt,
             encoder_ckpt=args.encoder_ckpt,
             history_len=args.history_len,
+            token_dim=args.token_dim,
+            num_latent_tokens=args.num_latent_tokens,
         )
         return wm
 
@@ -839,7 +843,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--critic-ckpt", default="verify2act/output/contrastive/best_contrastive_critic.pt")
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
-    parser.add_argument("--planner-model", default="gemini-2.5-flash")
+    parser.add_argument("--planner-model", default="gemini-2.5-pro")
     parser.add_argument("--planner-max-tokens", type=int, default=512)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
     parser.add_argument(
@@ -856,6 +860,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latent-wm-ckpt", default=None, help="Path to LatentDynamicsModel checkpoint")
     parser.add_argument("--encoder-ckpt", default=None, help="Path to pre-trained DeltaEncoder checkpoint (encoder_only_best.pt)")
     parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
+    parser.add_argument("--token-dim", type=int, default=128, help="Compact latent token dimension")
+    parser.add_argument("--num-latent-tokens", type=int, default=32, help="Number of compact latent tokens")
     parser.add_argument("--beam-width", type=int, default=3)
     parser.add_argument("--wm-steps", type=int, default=30)
     parser.add_argument("--wm-image-guidance", type=float, default=2.8)

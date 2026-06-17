@@ -23,8 +23,12 @@ Rate-limit retry
 ----------------
 Free-tier Gemini endpoints return HTTP 429 when RPM quota is exceeded.
 ``call_gemini`` retries up to ``max_retries`` times with exponential back-off
-(2 s → 4 s → 8 s).  Each retry emits ``logger.warning`` unless
-``warn_on_retry=False`` (or ``GEMINI_WARN_ON_RETRY=0``).
+capped at 60 s per wait (2 s → 4 s → … → 60 s).  Each retry emits
+``logger.warning`` unless ``warn_on_retry=False`` (or
+``GEMINI_WARN_ON_RETRY=0``).
+
+An optional ``call_delay`` (seconds) is inserted *before* every API call to
+pace requests and reduce RPM pressure on the free tier.
 """
 
 from __future__ import annotations
@@ -128,8 +132,9 @@ def call_gemini(
     max_output_tokens: int,
     temperature: float,
     api_key: str,
-    max_retries: int = 3,
+    max_retries: int = 8,
     warn_on_retry: bool = True,
+    call_delay: float = 0.0,
 ) -> str:
     """Call the Gemini ``generateContent`` REST endpoint and return raw text.
 
@@ -146,10 +151,15 @@ def call_gemini(
     api_key:
         Google AI Studio API key (from ``GEMINI_API_KEY`` env var).
     max_retries:
-        Retry attempts on HTTP 429 (rate-limit) responses.
+        Retry attempts on HTTP 429 (rate-limit) responses.  Default is 8,
+        which provides roughly 4 minutes of cumulative back-off before giving up.
     warn_on_retry:
         Emit ``logger.warning`` on each retry if ``True`` (default).
         Set to ``False`` or ``GEMINI_WARN_ON_RETRY=0`` to suppress.
+    call_delay:
+        Seconds to sleep *before* the first attempt of every call.  A value of
+        2–5 s is sufficient to stay well under the free-tier RPM quota when
+        running many planning calls in sequence.
 
     Returns
     -------
@@ -163,13 +173,35 @@ def call_gemini(
     VLMRefusalError (from verify2act.pipeline.planner)
         When the response ``finishReason`` indicates a safety/policy block.
     """
-    url = f"{_BASE_URL}/{model}:generateContent"
-    params = {"key": api_key}
-    headers = {"Content-Type": "application/json"}
+    if api_key == "vertex-ai":
+        import google.auth
+        import google.auth.transport.requests
+        creds, project_id = google.auth.default()
+        if not project_id:
+            project_id = getattr(creds, "quota_project_id", "verify2act")
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+        token = creds.token
+        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{project_id}/locations/us-central1/publishers/google/models/{model}:generateContent"
+        params = {}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}"
+        }
+    else:
+        url = f"{_BASE_URL}/{model}:generateContent"
+        params = {"key": api_key}
+        headers = {"Content-Type": "application/json"}
 
     body = _build_request_body(messages, max_output_tokens, temperature)
 
     last_exc: Optional[Exception] = None
+
+    # Optional inter-call delay to reduce RPM pressure on the free tier.
+    if call_delay > 0:
+        logger.debug("call_gemini: pre-call delay %.1f s", call_delay)
+        time.sleep(call_delay)
+
     with httpx.Client(timeout=60.0) as client:
         for attempt in range(max_retries):
             try:
@@ -177,22 +209,78 @@ def call_gemini(
 
                 # ── Rate limit ───────────────────────────────────────────────
                 if resp.status_code == 429:
-                    wait = 2 ** (attempt + 1)
-                    if attempt < max_retries - 1:
-                        if warn_on_retry:
-                            logger.warning(
-                                "Gemini rate limit hit (HTTP 429) on attempt %d/%d "
-                                "— retrying in %d s. "
-                                "Pass --no-gemini-retry-warn or set GEMINI_WARN_ON_RETRY=0 "
-                                "to suppress this message.",
-                                attempt + 1, max_retries, wait,
+                    is_depleted = False
+                    try:
+                        err_msg = resp.json().get("error", {}).get("message", "")
+                        if "prepayment credits" in err_msg.lower() or "depleted" in err_msg.lower():
+                            is_depleted = True
+                    except Exception:
+                        pass
+
+                    if is_depleted and api_key != "vertex-ai":
+                        logger.warning(
+                            "AI Studio prepayment credits are depleted. "
+                            "Automatically falling back to GCP Vertex AI."
+                        )
+                        import os
+                        os.environ["GEMINI_API_KEY"] = "vertex-ai"
+                        api_key = "vertex-ai"
+                        
+                        import google.auth
+                        import google.auth.transport.requests
+                        creds, project_id = google.auth.default()
+                        if not project_id:
+                            project_id = getattr(creds, "quota_project_id", "verify2act")
+                        auth_req = google.auth.transport.requests.Request()
+                        creds.refresh(auth_req)
+                        token = creds.token
+                        url = f"https://us-central1-aiplatform.googleapis.com/v1/projects/{project_id}/locations/us-central1/publishers/google/models/{model}:generateContent"
+                        params = {}
+                        headers = {
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {token}"
+                        }
+                        
+                        # Retry immediately with Vertex AI
+                        resp = client.post(url, params=params, headers=headers, json=body)
+                        if resp.status_code == 200:
+                            pass
+                        elif resp.status_code == 429:
+                            wait = min(2 ** (attempt + 1), 60)
+                            if attempt < max_retries - 1:
+                                if warn_on_retry:
+                                    logger.warning(
+                                        "Vertex AI rate limit hit (HTTP 429) on attempt %d/%d "
+                                        "— retrying in %d s. "
+                                        "Response body: %s",
+                                        attempt + 1, max_retries, wait, resp.text
+                                    )
+                                time.sleep(wait)
+                                continue
+                            raise RuntimeError(
+                                f"Vertex AI rate limit exhausted after {max_retries} attempt(s)."
                             )
-                        time.sleep(wait)
-                        continue
-                    raise RuntimeError(
-                        f"Gemini rate limit exhausted after {max_retries} attempt(s). "
-                        "Consider reducing --beam-width or switching to a paid-tier model."
-                    )
+                        else:
+                            raise RuntimeError(
+                                f"Vertex AI returned HTTP {resp.status_code}: {resp.text[:300]}"
+                            )
+                    else:
+                        # Capped exponential back-off: 2s, 4s, 8s … up to 60s.
+                        wait = min(2 ** (attempt + 1), 60)
+                        if attempt < max_retries - 1:
+                            if warn_on_retry:
+                                logger.warning(
+                                    "Gemini rate limit hit (HTTP 429) on attempt %d/%d "
+                                    "— retrying in %d s. "
+                                    "Response body: %s",
+                                    attempt + 1, max_retries, wait, resp.text
+                                )
+                            time.sleep(wait)
+                            continue
+                        raise RuntimeError(
+                            f"Gemini rate limit exhausted after {max_retries} attempt(s). "
+                            "Consider adding --planner-call-delay 3 or switching to a paid-tier model."
+                        )
 
                 # ── Other HTTP errors ────────────────────────────────────────
                 if resp.status_code != 200:
@@ -223,6 +311,14 @@ def call_gemini(
                         f"Gemini content policy blocked the response "
                         f"(finishReason={finish_reason!r}). "
                         "The prompt may have triggered the model's safety filters."
+                    )
+
+                if finish_reason == "MAX_TOKENS":
+                    logger.warning(
+                        "Gemini response was cut short by the output token limit "
+                        "(finishReason=MAX_TOKENS). The JSON response may be truncated. "
+                        "Consider increasing --planner-max-tokens (current: %d).",
+                        max_output_tokens,
                     )
 
                 # Extract text from the first part of the first candidate.

@@ -355,7 +355,7 @@ def parse_args():
     p.add_argument("--num-epochs",       type=int,   default=30)
     p.add_argument("--lr",               type=float, default=1e-4)
     p.add_argument("--seed",             type=int,   default=42)
-    p.add_argument("--checkpoint-freq",  type=int,   default=10)
+    p.add_argument("--checkpoint-freq",  type=int,   default=25)
     p.add_argument("--resume-from",      type=str,   default=None)
     p.add_argument("--patience",         type=int,   default=15,
                    help="Early stopping patience (epochs of no improvement). 0 disables.")

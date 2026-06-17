@@ -68,7 +68,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/encoder \
-  --num-epochs 300 --batch-size 32 --lr 1e-4 \
+  --token-dim 128 --num-latent-tokens 32 \
+  --num-epochs 300 --batch-size 128 --lr 1e-4 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
@@ -86,6 +87,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/wm_causal_v2 \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --token-dim 128 --num-latent-tokens 32 \
   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --causal-masking \
   --resume-from verify2act/output/v2a_wm/nut_assembly/wm_causal_v2/ckpt/latent_dynamics_ep60.pt
@@ -241,14 +243,16 @@ xvfb-run -a python verify2act/pipeline/inference.py \
 # Calvin Inference (using v2a_wm)
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode v2a_wm \
-  --num-sequences 25 \
+  --num-sequences 100 \
   --debug
 
 # Calvin Inference (using rla_wm baseline)
@@ -258,7 +262,7 @@ python3 verify2act/pipeline/inference_calvin.py \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
@@ -272,7 +276,7 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-adapter-dir verify2act/output/diffusion_wm/calvin/wm/best/unet_lora \
   --wm-decoder-dir verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000 \
   --train-folder calvin/models/hulc_baseline \
-  --dataset-path calvin/dataset/task_ABC_D_filtered \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \

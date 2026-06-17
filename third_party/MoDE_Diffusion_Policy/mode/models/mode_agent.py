@@ -546,6 +546,15 @@ class MoDEAgent(pl.LightningModule):
         return perceptual_emb, latent_goal
     
     def embed_visual_obs(self, rgb_static, rgb_gripper, latent_goal):
+        # Repeat visual observations if goal conditioning has a larger batch size (e.g. during CFG inference)
+        if latent_goal is not None:
+            b_goal = latent_goal.shape[0]
+            b_img = rgb_static.shape[0]
+            if b_goal > b_img:
+                repeat_factor = b_goal // b_img
+                rgb_static = rgb_static.repeat(repeat_factor, 1, 1, 1, 1)
+                rgb_gripper = rgb_gripper.repeat(repeat_factor, 1, 1, 1, 1)
+
         # reshape rgb_static and rgb_gripper
         rgb_static = einops.rearrange(rgb_static, 'b t c h w -> (b t) c h w')
         rgb_gripper = einops.rearrange(rgb_gripper, 'b t c h w -> (b t) c h w')

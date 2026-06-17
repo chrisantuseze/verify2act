@@ -22,12 +22,13 @@ class MCILLowLevelPolicy:
         checkpoint = get_last_checkpoint(train_folder_path)
         
         # Load the model using CALVIN's built-in loader
+        path_to_use = extra_dataset_path if extra_dataset_path else dataset_path
+        abs_dataset_path = str(Path(path_to_use).resolve())
         self.model, self.env, self.data_module = get_default_model_and_env(
             train_folder=train_folder,
-            dataset_path=dataset_path,
+            dataset_path=abs_dataset_path,
             checkpoint=checkpoint,
             device_id=device.index if device.index is not None else 0,
-            extra_dataset_path=extra_dataset_path,
         )
         self.model.eval()
         logger.info("MCIL baseline policy loaded successfully.")
@@ -62,11 +63,13 @@ class MoDEPolicyWrapper:
         if mode_repo_path not in sys.path:
             sys.path.insert(0, mode_repo_path)
             
+        from mode.evaluation.agent_proxy import CalvinAgentWrapper
         from mode.evaluation.utils import get_default_mode_and_env
         
         # Ensure dataset_path is absolute so that MoDE's HulcDataModule
         # does not prepend its own package parent path when checking for relative paths.
-        abs_dataset_path = str(Path(dataset_path).resolve())
+        path_to_use = extra_dataset_path if extra_dataset_path else dataset_path
+        abs_dataset_path = str(Path(path_to_use).resolve())
         
         # The MoDE loader expects the train_folder to be the parent and checkpoint to be the dir name.
         checkpoint_dir = Path(checkpoint_path).resolve()

@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--lpips-weight", type=float, default=0.5)
-    parser.add_argument("--checkpoint-freq", type=int, default=5)
+    parser.add_argument("--checkpoint-freq", type=int, default=20)
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Path to decoder checkpoint to resume from")
     parser.add_argument("--dino-channels", type=int, default=1024)
