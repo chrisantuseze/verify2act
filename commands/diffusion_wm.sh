@@ -47,14 +47,15 @@ python3 verify2act/critic/train_contrastive.py \
 # ==============================================================================
 
 # -------- NUT ASSEMBLY (RoboSuite) --------
-python verify2act/diffusion_wm/train_wm.py \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/diffusion_wm/train_wm.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/diffusion_wm/nut_assembly/wm \
-  --max-steps 20000 \
+  --max-steps 16000 \
   --eval-every 1000 \
-  --train-batch-size 16 \
-  --gradient-accumulation-steps 2 \
+  --train-batch-size 8 \
+  --gradient-accumulation-steps 4 \
   --learning-rate 5e-5 \
   --lora-rank 32 \
   --lora-alpha 32 \
@@ -66,17 +67,20 @@ python verify2act/diffusion_wm/train_wm.py \
   --noise-offset 0.05 \
   --val-frac 0.1 \
   --mixed-precision fp16 \
-  --device cuda
+  --enable-gradient-checkpointing \
+  --device cuda \
+  --resume-from verify2act/output/diffusion_wm/nut_assembly/wm/checkpoint-12000
 
 # -------- CALVIN --------
-python verify2act/diffusion_wm/train_wm.py \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/diffusion_wm/train_wm.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/diffusion_wm/calvin/wm \
-  --max-steps 20000 \
+  --max-steps 16000 \
   --eval-every 1000 \
-  --train-batch-size 16 \
-  --gradient-accumulation-steps 2 \
+  --train-batch-size 8 \
+  --gradient-accumulation-steps 4 \
   --learning-rate 5e-5 \
   --lora-rank 32 \
   --lora-alpha 32 \
@@ -88,14 +92,17 @@ python verify2act/diffusion_wm/train_wm.py \
   --noise-offset 0.05 \
   --val-frac 0.1 \
   --mixed-precision fp16 \
-  --device cuda
+  --enable-gradient-checkpointing \
+  --device cuda \
+  --resume-from verify2act/output/diffusion_wm/calvin/wm/checkpoint-12000
 
 # ==============================================================================
 # VAE DECODER TRAINING
 # ==============================================================================
 
 # -------- NUT ASSEMBLY (RoboSuite) --------
-python verify2act/diffusion_wm/train_decoder.py \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/diffusion_wm/train_decoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/diffusion_wm/nut_assembly/decoder \
@@ -106,9 +113,10 @@ python verify2act/diffusion_wm/train_decoder.py \
   --device cuda
 
 # -------- CALVIN --------
-python verify2act/diffusion_wm/train_decoder.py \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/diffusion_wm/train_decoder.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/diffusion_wm/calvin/decoder \
   --max-steps 5000 \
   --eval-every 500 \

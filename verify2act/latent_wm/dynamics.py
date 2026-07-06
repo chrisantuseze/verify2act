@@ -62,7 +62,12 @@ class LatentDynamicsModel(nn.Module):
         num_latent_tokens: int = 16,    # Number of compact latent tokens
         # ── Latent normalization (#1) ────────────────────────────────────────
         latent_scale: float = 1.0,     # Matches RLA-WM latent_scalar_normalization
+        # ── Action conditioning strategy (ablation) ──────────────────────────
+        action_conditioning: str = "cross_attn",  # "cross_attn" | "adaln"
     ):
+        assert action_conditioning in ("cross_attn", "adaln"), (
+            f"action_conditioning must be 'cross_attn' or 'adaln', got '{action_conditioning}'"
+        )
         super().__init__()
         self.dino_channels = dino_channels
         self.clip_channels = clip_channels
@@ -73,6 +78,7 @@ class LatentDynamicsModel(nn.Module):
         self.num_latent_tokens = num_latent_tokens
         self.latent_scale = float(latent_scale)  # (#1) stored for step() denorm
         self.dtype = torch.float16 if use_fp16 else torch.float32
+        self.action_conditioning = action_conditioning
 
         # ── Stage 1: Conditioning Transformer ────────────────────────────────
         # Receives the full temporal history [F_{t-H+1}, ..., F_t] plus CLIP
@@ -86,17 +92,39 @@ class LatentDynamicsModel(nn.Module):
         self.temporal_emb = nn.Parameter(torch.zeros(1, history_len, 1, model_channels))
         self.spatial_emb  = nn.Parameter(torch.zeros(1, 1, num_patches, model_channels))
 
-        self.cond_blocks = nn.ModuleList([
-            ModCrossAttentionBlock(
-                channels=model_channels,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-                cond_channels=model_channels,
-                use_fp16=use_fp16,
-            ) for _ in range(num_cond_blocks)
-        ])
-        # Learnable modulation seed for the conditioning blocks
-        self.cond_mod_emb = nn.Parameter(torch.zeros(1, model_channels))
+        if action_conditioning == "cross_attn":
+            # Full CLIP token sequence via cross-attention (V2A-WM default)
+            self.cond_blocks = nn.ModuleList([
+                ModCrossAttentionBlock(
+                    channels=model_channels,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    cond_channels=model_channels,
+                    use_fp16=use_fp16,
+                ) for _ in range(num_cond_blocks)
+            ])
+            # Learnable modulation seed for the cross-attn conditioning blocks
+            self.cond_mod_emb = nn.Parameter(torch.zeros(1, model_channels))
+            self.action_pool_proj = None  # unused in cross_attn mode
+        else:  # adaln
+            # Mean-pooled CLIP → AdaLN modulation, self-attention only (ablation)
+            self.cond_blocks = nn.ModuleList([
+                AttentionBlock(
+                    channels=model_channels,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    use_fp16=use_fp16,
+                    cond_channels=model_channels,
+                    use_condition=True,
+                ) for _ in range(num_cond_blocks)
+            ])
+            # Projects pooled CLIP vector into AdaLN modulation space
+            self.action_pool_proj = nn.Sequential(
+                nn.Linear(clip_channels, model_channels),
+                nn.SiLU(),
+                nn.Linear(model_channels, model_channels),
+            )
+            self.cond_mod_emb = None  # unused in adaln mode
 
         # Learnable [START] token substituted for padded history slots
         # (B×H×num_patches×dino_channels — broadcasts over batch and time)
@@ -143,8 +171,15 @@ class LatentDynamicsModel(nn.Module):
     ) -> Tensor:
         """
         Processes history context and grounds it with the VLM action.
-        If history_mask is provided, padded slots are replaced with a learned [START]
-        token and are blocked from self-attention via key_padding_mask.
+
+        Two conditioning modes controlled by ``self.action_conditioning``:
+
+        - ``'cross_attn'`` (default): self-attention over flattened history tokens
+          followed by cross-attention over the full CLIP token sequence.  Temporal
+          masking via ``key_padding_mask`` is respected.
+        - ``'adaln'`` (ablation): self-attention over history tokens only; the
+          CLIP sequence is mean-pooled and injected as an AdaLN modulation signal.
+          Matches the original RLA-WM action-grounding design.
         """
         B, H = xt_history.shape[:2]
 
@@ -156,13 +191,12 @@ class LatentDynamicsModel(nn.Module):
 
         # 2. Project inputs and add spatio-temporal embeddings
         h = self.history_proj(xt_history)   # (B, H, P, C)
-        a = self.action_proj(action_tokens) # (B, Seq, C)
         h = h + self.temporal_emb + self.spatial_emb
 
-        # 3. Flatten history for self-attention: (B, H*P, C)
+        # 3. Flatten history for attention: (B, H*P, C)
         h = rearrange(h, 'b h p c -> b (h p) c')
 
-        # 4. Build key_padding_mask for self-attention
+        # 4. Build key_padding_mask (shared by both modes)
         #    history_mask: (B, H); each frame covers num_patches patches.
         #    key_padding_mask: (B, H*P), True = ignore this key token.
         if history_mask is not None:
@@ -172,12 +206,20 @@ class LatentDynamicsModel(nn.Module):
         else:
             key_padding_mask = None
 
-        # 5. Dummy modulation for cond blocks
-        mod = self.cond_mod_emb.expand(B, -1)
-
-        # 6. Apply cond blocks: self-attention respects the mask
-        for block in self.cond_blocks:
-            h = block(h, mod=mod, cond=a, key_padding_mask=key_padding_mask)
+        if self.action_conditioning == "cross_attn":
+            # --- Cross-attention mode (V2A-WM default) ---
+            # Project CLIP tokens into model space for cross-attention keys/values.
+            a = self.action_proj(action_tokens)  # (B, Seq, C)
+            mod = self.cond_mod_emb.expand(B, -1)
+            for block in self.cond_blocks:
+                h = block(h, mod=mod, cond=a, key_padding_mask=key_padding_mask)
+        else:
+            # --- AdaLN mode (ablation — mirrors original RLA-WM grounding) ---
+            # Mean-pool the CLIP sequence and project to a single modulation vector.
+            pooled_action = action_tokens.mean(dim=1)           # (B, clip_channels)
+            action_mod = self.action_pool_proj(pooled_action)   # (B, model_channels)
+            for block in self.cond_blocks:
+                h = block(h, cond=action_mod, key_padding_mask=key_padding_mask)
 
         return h  # (B, H*P, C)
 

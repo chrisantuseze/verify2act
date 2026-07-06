@@ -21,18 +21,22 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/rla_wm_baseline/train_baseline.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/rla_wm/nut_assembly/wm_causal \
-  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --output-dir verify2act/output/rla_wm/nut_assembly/wm \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
+  --cache-dir verify2act/output/v2a_wm/nut_assembly/dino_features \
+  --token-dim 128 --num-latent-tokens 32 \
   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
-  --resume-from verify2act/output/rla_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best.pt
+  --resume-from verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
  
 # -------- CALVIN --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/rla_wm_baseline/train_baseline.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/rla_wm/calvin/wm \
-  --encoder-ckpt verify2act/output/rla_wm/calvin/encoder/ckpt/encoder_only_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/encoder_only_best.pt \
+  --cache-dir verify2act/output/v2a_wm/calvin/dino_features \
+  --token-dim 128 --num-latent-tokens 32 \
   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --resume-from verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 

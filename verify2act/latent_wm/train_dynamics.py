@@ -332,6 +332,7 @@ def train(args):
         token_dim=args.token_dim,
         num_latent_tokens=args.num_latent_tokens,
         latent_scale=LATENT_SCALE,
+        action_conditioning=args.action_conditioning,
     ).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -700,6 +701,13 @@ def parse_args():
                         help="Path to dynamics model checkpoint to resume from")
     parser.add_argument("--patience", type=int, default=20,
                         help="Early stopping patience (epochs of no improvement). 0 disables.")
+    parser.add_argument(
+        "--action-conditioning", type=str, default="cross_attn",
+        choices=["cross_attn", "adaln"],
+        help="Action conditioning strategy. 'cross_attn' (default): full CLIP token sequence "
+             "via cross-attention — V2A-WM's core contribution. 'adaln': CLIP tokens are "
+             "mean-pooled and injected as AdaLN modulation (ablation, mirrors original RLA-WM)."
+    )
     parser.add_argument(
         "--causal-masking", action="store_true", default=False,
         help="Use Transformer-native causal attention masking + learnable [START] tokens for "

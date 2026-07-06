@@ -57,15 +57,16 @@ def train(args):
         print(f"Sparsity Weight: {sparsity_weight}")
     
     # ── Automatic Cache Checking & Generation ─────────────────────────────────
+    # Resolve cache_dir on ALL ranks so it is always defined.
+    if args.cache_dir is None:
+        cache_dir = str(Path(args.output_dir).parent / "dino_features")
+    else:
+        cache_dir = args.cache_dir
+
     if not args.no_cache:
         if accelerator.is_local_main_process:
             from verify2act.critic.cache_utils import ensure_cache_complete, ensure_calvin_cache_complete
             
-            if args.cache_dir is None:
-                cache_dir = str(Path(args.output_dir).parent / "dino_features")
-            else:
-                cache_dir = args.cache_dir
-                
             if args.dataset_type == "calvin":
                 ensure_calvin_cache_complete(args.dataset_dir, cache_dir=cache_dir, device=str(device))
             else:
@@ -239,9 +240,8 @@ def train(args):
             noisy_latent = (1 - t_expand) * noise + t_expand * x_0
             velocity_target = x_0 - noise
 
-            # Baseline forward_cond uses only F_t (last frame) — ignores history
-            cond = model.forward_cond(F_history, A_clip)
-            velocity_pred = model.forward_flow(cond, noisy_latent, t)
+            # Route through DDP-compatible forward() which combines forward_cond + forward_flow
+            velocity_pred = model(F_history, A_clip, noisy_latent, t)
 
             loss_cfm = F.mse_loss(velocity_pred, velocity_target)
 
@@ -324,8 +324,8 @@ def train(args):
                 noisy_latent    = (1 - t_expand) * noise + t_expand * x_0
                 velocity_target = x_0 - noise
 
-                cond          = model.forward_cond(F_history, A_clip)
-                velocity_pred = model.forward_flow(cond, noisy_latent, t)
+                # Route through DDP-compatible forward() which combines forward_cond + forward_flow
+                velocity_pred = model(F_history, A_clip, noisy_latent, t)
 
                 loss_cfm = F.mse_loss(velocity_pred, velocity_target)
 

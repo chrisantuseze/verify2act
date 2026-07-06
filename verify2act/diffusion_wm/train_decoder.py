@@ -84,6 +84,8 @@ def evaluate(
 ):
     """Compute mean L1 + LPIPS loss on at most *eval_batches* validation batches."""
     vae.eval()
+    # Unwrap DDP wrapper so we can call encode/decode directly
+    raw_vae_eval = accelerator.unwrap_model(vae) if accelerator is not None else vae
     vae_dtype = next(vae.parameters()).dtype
 
     loss_sum = torch.tensor(0.0, device=device)
@@ -98,8 +100,8 @@ def evaluate(
         image_t1 = batch["image_t1"].to(device=device, dtype=vae_dtype)
 
         # Encode with frozen encoder → decode with trainable decoder
-        z = vae.encode(image_t1).latent_dist.sample() * latent_scale
-        recon = vae.decode(z / latent_scale).sample  # [-1, 1]
+        z = raw_vae_eval.encode(image_t1).latent_dist.sample() * latent_scale
+        recon = raw_vae_eval.decode(z / latent_scale).sample  # [-1, 1]
 
         loss_l1 = F.l1_loss(recon.float(), image_t1.float())
         loss_lpips = lpips_fn(recon.float(), image_t1.float()).mean()
@@ -318,6 +320,8 @@ def main():
     # Re-derive trainable params from the (possibly wrapped) model so that
     # clip_grad_norm_ and the optimizer act on the correct live tensors.
     trainable_params = _get_trainable_params(accelerator.unwrap_model(vae))
+    # Unwrap once for encode/decode calls — DDP doesn't forward custom attributes.
+    raw_vae = accelerator.unwrap_model(vae)
 
     # ── Training loop ───────────────────────────────────────────────────────────
 
@@ -337,7 +341,7 @@ def main():
 
     while global_step < args.max_steps:
         vae.train()
-        _freeze_encoder(accelerator.unwrap_model(vae))
+        _freeze_encoder(raw_vae)
 
         for batch in train_loader:
             image_t1 = batch["image_t1"].to(device=device, dtype=vae_dtype, non_blocking=True)
@@ -345,11 +349,11 @@ def main():
             with accelerator.accumulate(vae):
                 # Encode (frozen) → produce latent
                 with torch.no_grad():
-                    z = vae.encode(image_t1).latent_dist.sample() * latent_scale
+                    z = raw_vae.encode(image_t1).latent_dist.sample() * latent_scale
 
                 # Decode (trainable)
                 with accelerator.autocast():
-                    recon = vae.decode(z / latent_scale).sample  # [-1, 1]
+                    recon = raw_vae.decode(z / latent_scale).sample  # [-1, 1]
 
                     loss_l1 = F.l1_loss(recon.float(), image_t1.float())
                     loss_lpips = lpips_fn(recon.float(), image_t1.float()).mean()

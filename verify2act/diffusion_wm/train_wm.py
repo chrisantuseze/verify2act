@@ -216,7 +216,7 @@ def evaluate(
     return float((loss_sum / loss_count).item())
 
 
-def save_checkpoint(unet, output_dir: Path, step: int, train_state: Dict):
+def save_checkpoint(unet, output_dir: Path, step: int, train_state: Dict, optimizer=None, lr_scheduler=None):
     ckpt_dir = output_dir / f"checkpoint-{step}"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -225,6 +225,11 @@ def save_checkpoint(unet, output_dir: Path, step: int, train_state: Dict):
 
     with open(ckpt_dir / "train_state.json", "w") as handle:
         json.dump(train_state, handle, indent=2)
+
+    if optimizer is not None:
+        torch.save(optimizer.state_dict(), ckpt_dir / "optimizer.pt")
+    if lr_scheduler is not None:
+        torch.save(lr_scheduler.state_dict(), ckpt_dir / "scheduler.pt")
 
 
 def main():
@@ -497,11 +502,53 @@ def main():
     _last_eval_step = -1
     _last_save_step = -1
 
+    # ── Optional resume ───────────────────────────────────────────────────────
+    if args.resume_from:
+        resume_path = Path(args.resume_from)
+        adapter_dir = resume_path / "unet_lora"
+        state_file  = resume_path / "train_state.json"
+
+        if not resume_path.exists():
+            accelerator.print(f"[warn] --resume-from path not found: {resume_path}. Starting from scratch.")
+        else:
+            accelerator.print(f"Resuming from checkpoint: {resume_path}")
+
+            # Load LoRA adapter weights into the (already-prepared) unet.
+            if adapter_dir.exists():
+                accelerator.unwrap_model(unet).load_adapter(str(adapter_dir), adapter_name="default")
+                accelerator.print(f"  Loaded LoRA adapter from {adapter_dir}")
+            else:
+                accelerator.print(f"  [warn] No unet_lora dir found at {adapter_dir}; model weights not restored.")
+
+            # Restore training state (step, best_val_loss, optimizer, scheduler).
+            if state_file.exists():
+                with open(state_file) as _sfh:
+                    _state = json.load(_sfh)
+                global_step   = int(_state.get("step", 0))
+                best_val_loss = float(_state.get("best_val_loss", float("inf")))
+                accelerator.print(f"  Restored global_step={global_step}, best_val_loss={best_val_loss:.6f}")
+
+            # Restore optimizer and lr_scheduler states if available.
+            _opt_file = resume_path / "optimizer.pt"
+            _sched_file = resume_path / "scheduler.pt"
+            if _opt_file.exists():
+                _opt_state = torch.load(_opt_file, map_location=device)
+                optimizer.load_state_dict(_opt_state)
+                accelerator.print(f"  Restored optimizer state from {_opt_file}")
+            if _sched_file.exists():
+                _sched_state = torch.load(_sched_file, map_location=device)
+                lr_scheduler.load_state_dict(_sched_state)
+                accelerator.print(f"  Restored lr_scheduler state from {_sched_file}")
+
+            _last_eval_step = global_step
+            _last_save_step = global_step
+
     progress = tqdm(
         total=args.max_steps,
         desc="Training",
         dynamic_ncols=True,
         disable=not accelerator.is_local_main_process,
+        initial=global_step,
     )
 
     while global_step < args.max_steps:
@@ -665,6 +712,8 @@ def main():
                             "best_val_loss": best_val_loss,
                             "is_best": True,
                         },
+                        optimizer=optimizer,
+                        lr_scheduler=lr_scheduler,
                     )
                     # Always keep a fixed-path "best/" directory so demo_wm.py
                     # can reliably point to the best-val-loss adapter.
@@ -703,6 +752,8 @@ def main():
                         "best_val_loss": best_val_loss,
                         "is_best": False,
                     },
+                    optimizer=optimizer,
+                    lr_scheduler=lr_scheduler,
                 )
                 if ema_unet is not None:
                     ema_unet.restore([p for p in accelerator.unwrap_model(unet).parameters() if p.requires_grad])
@@ -861,6 +912,9 @@ def parse_args():
     parser.add_argument("--change-mask-threshold", type=float, default=15.0,
                         help="Pixel-space difference threshold (0-255 scale) for classifying a pixel as 'changed'. "
                              "Only used when --change-mask-weight > 1.0.")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Path to a checkpoint directory (e.g. output/wm/checkpoint-5000) to resume training from. "
+                             "Restores LoRA adapter weights, optimizer/scheduler states, and global_step.")
 
     return parser.parse_args()
 

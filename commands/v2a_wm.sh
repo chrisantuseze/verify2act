@@ -22,22 +22,13 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/contrastive/nut_assembly \
   --dataset-type robosuite \
-  --epochs 20 \
-  --batch-size 2 \
+  --epochs 25 \
+  --batch-size 16 \
   --learning-rate 1e-4 \
-  --lambda1 0.4 \
-  --lambda2 0.8 \
+  --lambda1 0.5 \
+  --lambda2 0.7 \
   --kl-weight 5e-4 \
   --resume-from verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt
-
-python verify2act/critic/train_contrastive.py \
-  --dataset-type robosuite \
-  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/contrastive/nut_assembly \
-  --epochs 30 \
-  --freeze-backbone-epochs 30 \
-  --learning-rate 1e-4 \
-  --cached-dino-dir "verify2act/output/rla_wm/dino_features/nut_assembly"
 
 # Calvin Critic Training
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=bf16 \
@@ -73,11 +64,12 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --resume-from verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt
 
 # Stage 2 (aux): Train Decoder (DINO features -> image)
-python verify2act/latent_wm/train_decoder.py \
+accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
+  verify2act/latent_wm/train_decoder.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --num-epochs 100 --batch-size 32 \
+  --num-epochs 100 --batch-size 128 \
   --resume-from verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt
 
 # Stage 2: Flow Matching 
@@ -85,12 +77,13 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_causal_v2 \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_causal \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --token-dim 128 --num-latent-tokens 32 \
-  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
+  --num-epochs 100 --batch-size 96 --lr 1e-4 --checkpoint-freq 10 \
   --causal-masking \
-  --resume-from verify2act/output/v2a_wm/nut_assembly/wm_causal_v2/ckpt/latent_dynamics_ep60.pt
+  --action-conditioning adaln \
+  --resume-from verify2act/output/v2a_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_ep60.pt
 
 # -------- CALVIN --------
 
@@ -123,17 +116,57 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
-  --output-dir verify2act/output/v2a_wm/calvin/wm_wider \
+  --output-dir verify2act/output/v2a_wm/calvin/wm_non_cross_attn \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/encoder_only_best.pt \
   --token-dim 128 --num-latent-tokens 32 \
   --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --causal-masking \
+  --action-conditioning adaln \
   --resume-from verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 CUDA_VISIBLE_DEVICES=1 python # for training on gpu 1
+
+# ==============================================================================
+# ABLATION: --action-conditioning  (cross_attn vs adaln)
+# ==============================================================================
+# Two orthogonal axes control the conditioning design:
+#
+#   --action-conditioning cross_attn  (default) — full CLIP token sequence via
+#     cross-attention.  This is V2A-WM's core novelty.
+#
+#   --action-conditioning adaln       (ablation)  — CLIP tokens are mean-pooled
+#     to a single vector and injected as an AdaLN modulation signal. Mirrors the
+#     original RLA-WM action-grounding design.
+#
+# Combined with --causal-masking you get a clean 2×2 ablation table:
+#
+#   | conditioning \ history  | single-frame  | causal history |
+#   |-------------------------|---------------|----------------|
+#   | adaln                   | ≈ Baseline    | adaln + causal |
+#   | cross_attn (default)    | cross + Markov| V2A-WM (full)  |
+
+# Ablation A: AdaLN action grounding + causal history (isolates cross-attn contribution)
+# accelerate launch --num_processes=3 ... verify2act/latent_wm/train_dynamics.py \
+#   ... \
+#   --action-conditioning adaln \
+#   --causal-masking
+
+# Ablation B: AdaLN + no causal masking (≈ BaselineRLAWM, run inside train_dynamics.py)
+# accelerate launch --num_processes=3 ... verify2act/latent_wm/train_dynamics.py \
+#   ... \
+#   --action-conditioning adaln
+#   # (omit --causal-masking → forces history_len=1 internally)
+
+# Full V2A-WM (cross_attn is the default, no flag needed):
+# accelerate launch --num_processes=3 ... verify2act/latent_wm/train_dynamics.py \
+#   ... \
+#   --causal-masking
+#   # --action-conditioning cross_attn is implied
+
 # ==============================================================================
 # VISUALIZATION
 # ==============================================================================
+
 
 # RoboSuite Visualization
 python verify2act/latent_wm/visualize_wm.py \

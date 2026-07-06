@@ -220,7 +220,8 @@ class AttentionBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        cond: torch.Tensor | None=None,
+        cond: torch.Tensor | None = None,
+        key_padding_mask: Optional[torch.Tensor] = None,  # (B, L) True=ignore
     ) -> torch.Tensor:
         bsz, lp, ch = x.shape
         if self.use_condition:
@@ -237,7 +238,8 @@ class AttentionBlock(nn.Module):
 
             h = self.norm1(x)
             h = h * (1.0 + scale_msa) + shift_msa
-            h, _ = self.attn(h, h, h, need_weights=False)
+            h, _ = self.attn(h, h, h, key_padding_mask=key_padding_mask,
+                             need_weights=False)
             x = x + h * gate_msa
             h2 = self.norm2(x)
             h2 = h2 * (1.0 + scale_mlp) + shift_mlp
@@ -245,7 +247,8 @@ class AttentionBlock(nn.Module):
             x = x + h2 * gate_mlp
         else:
             h = self.norm1(x)
-            h, _ = self.attn(h, h, h, need_weights=False)
+            h, _ = self.attn(h, h, h, key_padding_mask=key_padding_mask,
+                             need_weights=False)
             x = x + h 
             h2 = self.norm2(x)
             h2 = self.mlp(h2)
