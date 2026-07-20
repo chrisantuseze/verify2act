@@ -78,6 +78,7 @@ def _build_request_body(
     messages: List[Dict[str, Any]],
     max_output_tokens: int,
     temperature: float,
+    response_mime_type: Optional[str] = None,
 ) -> dict:
     """Convert OpenAI message list to a Gemini ``generateContent`` request body."""
     system_texts: list[str] = []
@@ -113,6 +114,8 @@ def _build_request_body(
             "temperature": temperature,
         },
     }
+    if response_mime_type:
+        body["generationConfig"]["responseMimeType"] = response_mime_type
 
     if system_texts:
         body["systemInstruction"] = {
@@ -135,6 +138,7 @@ def call_gemini(
     max_retries: int = 8,
     warn_on_retry: bool = True,
     call_delay: float = 0.0,
+    response_mime_type: Optional[str] = "application/json",
 ) -> str:
     """Call the Gemini ``generateContent`` REST endpoint and return raw text.
 
@@ -176,9 +180,20 @@ def call_gemini(
     if api_key == "vertex-ai":
         import google.auth
         import google.auth.transport.requests
+        import os as _os
         creds, project_id = google.auth.default()
+        # Prefer the env var set by the user or gcloud; fall back to ADC quota project.
+        project_id = (
+            _os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or project_id
+            or getattr(creds, "quota_project_id", None)
+        )
         if not project_id:
-            project_id = getattr(creds, "quota_project_id", "verify2act")
+            raise RuntimeError(
+                "Cannot determine GCP project ID for Vertex AI. "
+                "Set the GOOGLE_CLOUD_PROJECT environment variable or run: "
+                "gcloud config set project <YOUR_PROJECT_ID>"
+            )
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
         token = creds.token
@@ -193,7 +208,7 @@ def call_gemini(
         params = {"key": api_key}
         headers = {"Content-Type": "application/json"}
 
-    body = _build_request_body(messages, max_output_tokens, temperature)
+    body = _build_request_body(messages, max_output_tokens, temperature, response_mime_type)
 
     last_exc: Optional[Exception] = None
 
@@ -226,11 +241,20 @@ def call_gemini(
                         os.environ["GEMINI_API_KEY"] = "vertex-ai"
                         api_key = "vertex-ai"
                         
+                        import os as _os
                         import google.auth
                         import google.auth.transport.requests
                         creds, project_id = google.auth.default()
+                        project_id = (
+                            _os.environ.get("GOOGLE_CLOUD_PROJECT")
+                            or project_id
+                            or getattr(creds, "quota_project_id", None)
+                        )
                         if not project_id:
-                            project_id = getattr(creds, "quota_project_id", "verify2act")
+                            raise RuntimeError(
+                                "Cannot determine GCP project ID for Vertex AI. "
+                                "Set the GOOGLE_CLOUD_PROJECT environment variable."
+                            )
                         auth_req = google.auth.transport.requests.Request()
                         creds.refresh(auth_req)
                         token = creds.token

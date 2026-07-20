@@ -13,7 +13,7 @@ def check_rollout_consistency(
     consistency_score: float,
     threshold: float,
     uncertainty: float = 0.0,
-    confidence_threshold: float = 0.02,
+    confidence_threshold: float = 0.08,
 ) -> CriticDecision:
     """Head 2 gate — called *per imagined frame*.
 
@@ -43,7 +43,9 @@ def check_rollout_consistency(
         ``temporal_sim_with_uncertainty()``).
     confidence_threshold : float
         Maximum allowed uncertainty to trust the consistency score.
-        Default 0.02 — calibrate from validation uncertainty histograms.
+        Default 0.08 — set to cover the typical MC std range of the CALVIN
+        critic model (observed: 0.030–0.065).  Decrease for stricter gating;
+        increase if the critic is never returning ``continue``.
 
     Returns
     -------
@@ -66,7 +68,7 @@ def decide_from_proximity(
     proximity_score: float,
     threshold: float,
     uncertainty: float = 0.0,
-    confidence_threshold: float = 0.02,
+    confidence_threshold: float = 0.08,
 ) -> CriticDecision:
     """Head 1 gate — called once after a *complete* imagined rollout passes.
 
@@ -94,7 +96,8 @@ def decide_from_proximity(
         Predictive std from ``goal_sim_with_uncertainty()``.
     confidence_threshold : float
         Maximum allowed uncertainty to trigger a reflect decision.
-        Default 0.02 — calibrate from validation uncertainty histograms.
+        Default 0.08 — matched to the typical MC std range of the CALVIN
+        critic model.  See ``check_rollout_consistency`` for calibration notes.
 
     Returns
     -------

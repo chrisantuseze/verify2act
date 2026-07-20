@@ -763,6 +763,7 @@ def _build_world_model(args: argparse.Namespace):
             history_len=args.history_len,
             token_dim=args.token_dim,
             num_latent_tokens=args.num_latent_tokens,
+            action_conditioning=args.action_conditioning,
         )
         return wm
         
@@ -844,7 +845,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gemini-2.5-pro")
-    parser.add_argument("--planner-max-tokens", type=int, default=512)
+    parser.add_argument("--planner-max-tokens", type=int, default=8192)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
     parser.add_argument(
         "--no-gemini-retry-warn",
@@ -862,6 +863,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
     parser.add_argument("--token-dim", type=int, default=128, help="Compact latent token dimension")
     parser.add_argument("--num-latent-tokens", type=int, default=32, help="Number of compact latent tokens")
+    parser.add_argument("--action-conditioning", choices=["cross_attn", "adaln"], default="cross_attn", help="Action conditioning strategy for latent world model")
     parser.add_argument("--beam-width", type=int, default=3)
     parser.add_argument("--wm-steps", type=int, default=30)
     parser.add_argument("--wm-image-guidance", type=float, default=2.8)
@@ -1013,7 +1015,16 @@ def main() -> int:
         if args.wm_decoder_dir:
             dec_path = Path(args.wm_decoder_dir) / "latent_decoder_best.pt"
             if dec_path.exists():
-                state_dict = torch.load(dec_path, map_location=device)
+                ckpt = torch.load(dec_path, map_location=device)
+                if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+                    state_dict = ckpt["model_state_dict"]
+                elif isinstance(ckpt, dict) and "model" in ckpt:
+                    state_dict = ckpt["model"]
+                elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+                    state_dict = ckpt["state_dict"]
+                else:
+                    state_dict = ckpt
+
                 # If keys don't have "decoder." prefix, add it (checkpoint was saved from inner decoder)
                 if "decoder.input_proj.0.weight" not in state_dict and "input_proj.0.weight" in state_dict:
                     state_dict = {f"decoder.{k}": v for k, v in state_dict.items()}
@@ -1022,7 +1033,7 @@ def main() -> int:
                 logger.warning(f"Decoder checkpoint not found at {dec_path}")
 
     # ── Multi-episode evaluation loop ────────────────────────────────────
-    eval_dir = Path(args.output_dir) / args.wm_mode / "nut_assembly"
+    eval_dir = Path(args.output_dir) / f"{args.wm_mode}_{args.action_conditioning}" / "nut_assembly"
     eval_dir.mkdir(parents=True, exist_ok=True)
     num_episodes = args.num_episodes
     base_seed = args.base_seed

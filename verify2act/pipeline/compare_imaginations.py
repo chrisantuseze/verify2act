@@ -86,7 +86,16 @@ def run_comparison(args):
     decoder.eval()
     dec_path = Path(args.decoder_dir) / "latent_decoder_best.pt"
     if dec_path.exists():
-        state_dict = torch.load(dec_path, map_location=device)
+        ckpt = torch.load(dec_path, map_location=device)
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            state_dict = ckpt["model_state_dict"]
+        elif isinstance(ckpt, dict) and "model" in ckpt:
+            state_dict = ckpt["model"]
+        elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+            state_dict = ckpt["state_dict"]
+        else:
+            state_dict = ckpt
+
         # Handle wrapped vs bare state-dict
         if "decoder.input_proj.0.weight" not in state_dict and "input_proj.0.weight" in state_dict:
             state_dict = {f"decoder.{k}": v for k, v in state_dict.items()}

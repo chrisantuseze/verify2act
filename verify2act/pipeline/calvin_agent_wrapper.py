@@ -15,7 +15,7 @@ import numpy as np
 import torch
 
 from calvin_agent.models.calvin_base_model import CalvinBaseModel
-from verify2act.critic.inference import check_rollout_consistency
+from verify2act.critic.inference import check_rollout_consistency, CriticDecision, decide_from_proximity
 from verify2act.pipeline.inference import preprocess_image_for_critic
 from verify2act.pipeline.planner import VLMRefusalError
 from calvin_agent.utils.utils import get_last_checkpoint
@@ -101,7 +101,13 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         self.critic = critic
         self.device = device
         self.theta_c = theta_c
+        # Separate threshold for Head 1 (goal proximity, DINO-to-CLIP cross-modal cosine sim).
+        # Its score range is much lower than temporal consistency, so it needs its own calibration.
+        self.theta_p: float = kwargs.pop("theta_p", 0.2)
         self.max_replans = max_replans
+        # MC uncertainty gate: predictions with std > this are treated as requery.
+        # Default 0.08 matches the observed CALVIN critic std range (0.030-0.065).
+        self.critic_unc_threshold: float = kwargs.pop("critic_unc_threshold", 0.08)
 
         self.low_level_policy = LowLevelPolicyFactory.get_policy(
             policy_type=kwargs.get("low_level_policy_type", "hulc"),
@@ -161,6 +167,16 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
         rec = self._current_subtask_rec
         rec.success = success
         rec.steps_taken = self._step_count
+
+        # Resolve pending critic accept → TP or FP based on actual outcome.
+        # TP: critic accepted the imagined plan → subtask truly succeeded.
+        # FP: critic accepted the imagined plan → subtask actually failed.
+        if self._pending_critic_accept:
+            if success:
+                rec.critic_tp += 1
+            else:
+                rec.critic_fp += 1
+
         self._current_trace.subtask_records.append(rec)
         # Roll up into sequence-level totals
         self._current_trace.total_steps += rec.steps_taken
@@ -318,91 +334,96 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                 is_latent_wm = True
 
             if is_latent_wm:
-                if self.world_model.get_history() is None:
-                    self.world_model.initialize_history(img_np)
+                # Re-anchor history from the real camera frame every verification
+                # cycle. Without this, the WM's internal F_t drifts: after the
+                # first call initialize_history() is never called again, so
+                # F_next = F_t(stale) + delta_F and decoded images look wrong.
+                # visualize_wm.py always feeds fresh GT features — we match that
+                # by re-seeding the sliding window with the current observation.
+                self.world_model.initialize_history(img_np)
                 F_next, _ = self.world_model.imagine(None, active_instruction)
-                
+
+                # Decode DINO features → RGB now so we can save + verify regardless of critic gate
+                imagined_img_next: Optional[np.ndarray] = None
+                if getattr(self, "decoder", None) is not None:
+                    imagined_img_next = self.decode_dino_features(F_next, self.decoder)
+
                 if self.critic is not None:
-                    # 4. Check temporal/physical consistency (Critic Head 2)
+                    # ── Head 2: Temporal consistency ──────────────────────────
+                    # Is the imagined transition physically plausible?
                     with torch.no_grad():
                         img_tensor = preprocess_image_for_critic(img_np).to(self.device)
                         F_prev = self.world_model.extractor.extract_dino(img_tensor)
                         emb_prev = self.critic.encode_features(F_prev)
                         emb_next = self.critic.encode_features(F_next)
                         mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
-                    
-                    from verify2act.critic.inference import CriticDecision, check_rollout_consistency, decide_from_proximity
-                    decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
 
-                    # 5. Goal proximity check via language goal (Head 1, CLIP path)
+                    tc_decision = check_rollout_consistency(
+                        mean_tc.item(), self.theta_c,
+                        uncertainty=std_tc.item(),
+                        confidence_threshold=self.critic_unc_threshold,
+                    )
+
+                    # ── Head 1: Goal proximity ────────────────────────────────
+                    # Does the imagined outcome semantically match the goal?
                     with torch.no_grad():
                         mean_prox, std_prox = self.critic.goal_sim_from_text_with_uncertainty(
                             emb_next, active_instruction
                         )
-                    
-                    if decision.action != "reflect":
-                        # Only check semantics if physics didn't break
-                        if getattr(self, "decoder", None) is not None:
-                            # Decode DINO features to image for VLM planner verification
-                            imagined_img_next = self.decode_dino_features(F_next, self.decoder)
-                            
-                            if verify_dir is not None:
-                                candidate_str = f"candidate_00" if self._reflect_count == 0 else f"replan_attempt_{self._reflect_count:02d}"
-                                horizon_dir = verify_dir / candidate_str / "horizon_01"
-                                horizon_dir.mkdir(parents=True, exist_ok=True)
-                                from PIL import Image
-                                Image.fromarray(imagined_img_next).save(horizon_dir / "imagine_frame.png")
-                                with open(horizon_dir / "action.txt", "w") as f:
-                                    f.write(active_instruction)
-                                import json
-                                with open(horizon_dir / "temporal_critic.json", "w") as f:
-                                    json.dump({
-                                        "temporal_consistency_score": mean_tc.item(),
-                                        "uncertainty": std_tc.item(),
-                                        "decision": decision.action,
-                                        "decision_reason": decision.reason,
-                                    }, f, indent=2)
-                                with open(horizon_dir / "goal_critic.json", "w") as f:
-                                    json.dump({
-                                        "goal_proximity_score": mean_prox.item(),
-                                        "uncertainty": std_prox.item(),
-                                        # (Decision saved below after proximity check)
-                                    }, f, indent=2)
 
-                            vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
-                            if not vlm_verification["achieved"]:
-                                decision.action = "reflect"
-                                decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
-                        else:
-                            # Fallback if no decoder is present: rely on goal proximity check score
-                            if mean_prox.item() < self.theta_c:
-                                decision.action = "reflect"
-                                decision.reason = f"low_goal_proximity prox={mean_prox.item():.3f}"
-                    
-                    proximity_ok = mean_prox.item() >= self.theta_c
-                    reason = decision.reason if decision.action == "reflect" \
-                        else f"low_goal_proximity prox={mean_prox.item():.3f}"
+                    gp_decision = decide_from_proximity(
+                        mean_prox.item(), self.theta_p,
+                        uncertainty=std_prox.item(),
+                        confidence_threshold=self.critic_unc_threshold,
+                    )
+
+                    # Combined decision: both heads must pass to accept.
+                    # Head 2 (temporal) failure → requery (bad physics).
+                    # Head 1 (goal proximity) failure → reflect (plan failed).
+                    if tc_decision.action == "requery":
+                        decision = tc_decision  # temporal inconsistency — requery
+                    elif gp_decision.action == "reflect":
+                        decision = gp_decision  # semantically wrong outcome — reflect
+                    elif gp_decision.action == "requery":
+                        decision = gp_decision  # uncertain proximity — requery
+                    else:
+                        decision = CriticDecision(action="continue", reason="temporal+proximity ok")
+
+                    # ── Save imagination + critic scores for inspection ───────
+                    if verify_dir is not None and imagined_img_next is not None:
+                        candidate_str = f"candidate_00" if self._reflect_count == 0 else f"replan_attempt_{self._reflect_count:02d}"
+                        horizon_dir = verify_dir / candidate_str / "horizon_01"
+                        horizon_dir.mkdir(parents=True, exist_ok=True)
+                        from PIL import Image
+                        import json as _json
+                        Image.fromarray(imagined_img_next).save(horizon_dir / "imagine_frame.png")
+                        Image.fromarray(img_np).save(horizon_dir / "real_frame.png")
+                        with open(horizon_dir / "action.txt", "w") as f:
+                            f.write(active_instruction)
+                        with open(horizon_dir / "temporal_critic.json", "w") as f:
+                            _json.dump({
+                                "temporal_consistency_score": mean_tc.item(),
+                                "uncertainty": std_tc.item(),
+                                "decision": tc_decision.action,
+                                "decision_reason": tc_decision.reason,
+                            }, f, indent=2)
+                        with open(horizon_dir / "goal_critic.json", "w") as f:
+                            _json.dump({
+                                "goal_proximity_score": mean_prox.item(),
+                                "uncertainty": std_prox.item(),
+                                "decision": gp_decision.action,
+                                "decision_reason": gp_decision.reason,
+                                "combined_decision": decision.action,
+                            }, f, indent=2)
+
+                    proximity_ok = (decision.action == "continue")
+                    reason = decision.reason
                     all_scores = [(mean_tc.item(), mean_prox.item())]
                 else:
-                    # No critic: use VLM-based verification directly (ReflectVLM path) if decoder is available
-                    if getattr(self, "decoder", None) is not None:
-                        imagined_img_next = self.decode_dino_features(F_next, self.decoder)
-                        vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
-                        if not vlm_verification["achieved"]:
-                            decision = check_rollout_consistency(0.0, self.theta_c)  # dummy failure
-                            decision.action = "reflect"
-                            decision.reason = f"Goal not achieved (VLM verified): {vlm_verification.get('reason')}"
-                            proximity_ok = False
-                            reason = decision.reason
-                        else:
-                            decision = check_rollout_consistency(1.0, self.theta_c)  # dummy success
-                            proximity_ok = True
-                            reason = "Goal achieved"
-                    else:
-                        # Fallback if neither critic nor decoder is present
-                        decision = check_rollout_consistency(1.0, self.theta_c)
-                        proximity_ok = True
-                        reason = "No verification (no critic and no decoder)"
+                    # No critic: accept by default and let the VLM planner judge during reflection.
+                    decision = CriticDecision(action="continue", reason="no critic — accepted")
+                    proximity_ok = True
+                    reason = "no critic — accepted"
                     all_scores = [(1.0, 1.0)]
             else:
                 # RGB / Image World Model path
@@ -420,7 +441,6 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                         emb_next = self.critic.encode(img_224_next)
                         mean_tc, std_tc = self.critic.temporal_sim_with_uncertainty(emb_prev, emb_next)
                         
-                    from verify2act.critic.inference import check_rollout_consistency
                     decision = check_rollout_consistency(mean_tc.item(), self.theta_c, uncertainty=std_tc.item())
 
                     # 5. Goal proximity check via language goal (Head 1, CLIP path)
@@ -457,9 +477,11 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                             decision.action = "reflect"
                             decision.reason = f"Goal not achieved: {vlm_verification.get('reason')}"
 
-                    proximity_ok = mean_prox.item() >= self.theta_c
-                    reason = decision.reason if decision.action == "reflect" \
-                        else f"low_goal_proximity prox={mean_prox.item():.3f}"
+                    # proximity_ok follows the combined verdict in decision.action:
+                    # - Decoder present: VLM is authoritative; raw score is informational.
+                    # - No decoder: decision.action was already set above if prox < theta_c.
+                    proximity_ok = (decision.action != "reflect")
+                    reason = decision.reason if decision.action == "reflect" else "accepted"
                     all_scores = [(mean_tc.item(), mean_prox.item())]
                 else:
                     vlm_verification = self.vlm_planner.verify_goal(imagined_img_next, active_instruction)
@@ -475,8 +497,11 @@ class Verify2ActCalvinAgent(CalvinBaseModel):
                         reason = "Goal achieved"
                     all_scores = [(1.0, 1.0)]
 
-            # 6. Reflection — triggered by low temporal consistency OR low goal proximity
-            if decision.action == "reflect" or not proximity_ok:
+            # 6. Reflection gate — only "reflect" (semantic failure from Head 1) triggers
+            # VLM replanning. "requery" (temporal inconsistency from Head 2) means the
+            # imagined transition was physically implausible but we can't re-sample inline,
+            # so we log the reject and let execution continue rather than calling the VLM.
+            if decision.action == "reflect":
                 logger.warning(
                     f"Rejected imagined outcome of '{active_instruction}'. Reason: {reason}"
                 )

@@ -59,7 +59,7 @@ class VLMPlanner:
         self,
         prompt_manager: PromptManager,
         model: str = "gemini-2.5-flash",
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         temperature: float = 0.2,
         warn_on_retry: bool = True,
         call_delay: float = 0.0,
@@ -110,7 +110,7 @@ class VLMPlanner:
         cls,
         prompt_config: Union[str, pathlib.Path],
         model: str = "gemini-2.5-flash",
-        max_tokens: int = 1024,
+        max_tokens: int = 2048,
         temperature: float = 0.2,
         warn_on_retry: bool = True,
         call_delay: float = 0.0,
@@ -186,6 +186,7 @@ class VLMPlanner:
             messages=messages,
             max_tokens=self._max_tokens,
             temperature=temp,
+            response_format={"type": "json_object"},
         )
 
         choice = resp.choices[0]
@@ -227,18 +228,68 @@ class VLMPlanner:
             lines = [l for l in lines if not l.strip().startswith("```")]
             text = "\n".join(lines).strip()
 
+        def repair_truncated_json(s: str) -> str:
+            s = s.strip()
+            if not (s.startswith("{") or s.startswith("[")):
+                return s
+            stack = []
+            in_string = False
+            escape = False
+            for char in s:
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif char == "\\":
+                        escape = True
+                    elif char == '"':
+                        in_string = False
+                else:
+                    if char == '"':
+                        in_string = True
+                    elif char in ("{", "["):
+                        stack.append(char)
+                    elif char == "}":
+                        if stack and stack[-1] == "{":
+                            stack.pop()
+                    elif char == "]":
+                        if stack and stack[-1] == "[":
+                            stack.pop()
+            if in_string:
+                s += '"'
+            s = s.rstrip()
+            if s.endswith(","):
+                s = s[:-1].rstrip()
+            closing_chars = []
+            for open_char in reversed(stack):
+                if open_char == "{":
+                    closing_chars.append("}")
+                elif open_char == "[":
+                    closing_chars.append("]")
+            return s + "".join(closing_chars)
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:
+            repaired = repair_truncated_json(text)
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+
             # Fallback: extract the outermost JSON object or array substring.
             # Use greedy *  (not non-greedy *?) so we capture the last closing
             # brace/bracket rather than stopping at the very first one found.
             match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
             if match is not None:
+                matched_str = match.group(0)
                 try:
-                    return json.loads(match.group(0))
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"Extracted JSON substring is invalid: {match.group(0)!r}") from e
+                    return json.loads(matched_str)
+                except json.JSONDecodeError:
+                    repaired_match = repair_truncated_json(matched_str)
+                    try:
+                        return json.loads(repaired_match)
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Extracted JSON substring is invalid: {matched_str!r}") from e
 
             # ── Truncation repair ─────────────────────────────────────────────
             # The model response was cut off before the closing brace (e.g. due
@@ -311,6 +362,11 @@ class VLMPlanner:
         plan = result.get("plan", [])
         if not isinstance(plan, list) or not all(isinstance(a, (str, dict)) for a in plan):
             raise ValueError(f"Invalid 'plan' output from model: {plan}")
+        # Filter out empty or incomplete actions (e.g. from truncation repair)
+        plan = [a for a in plan if (
+            (isinstance(a, str) and a.strip()) or
+            (isinstance(a, dict) and a.get("id") and isinstance(a.get("id"), str) and a.get("id").strip())
+        )]
         if len(plan) > horizon:
             plan = plan[:horizon]
         logger.info("Proposed plan: %s", plan)
@@ -365,6 +421,11 @@ class VLMPlanner:
         cleaned_plans = []
         for p in plans:
             if all(isinstance(step, (str, dict)) for step in p):
+                # Filter out empty or incomplete actions (e.g. from truncation repair)
+                p = [a for a in p if (
+                    (isinstance(a, str) and a.strip()) or
+                    (isinstance(a, dict) and a.get("id") and isinstance(a.get("id"), str) and a.get("id").strip())
+                )]
                 if len(p) > horizon:
                     p = p[:horizon]
                 cleaned_plans.append(p)
@@ -388,6 +449,10 @@ class VLMPlanner:
         """Diagnose a critic failure and return a revised plan.
 
         Returns ``{"analysis": str, "revised_plan": list[str]}``.
+
+        When the model response is truncated (MAX_TOKENS) and ``revised_plan``
+        cannot be parsed, logs a warning and falls back to ``full_plan`` so that
+        the caller can continue without raising an exception.
         """
         messages = self._pm.build_reflect_messages(
             current_image_np=current_image_np,
@@ -402,15 +467,36 @@ class VLMPlanner:
         result = self._parse_json(raw)
         revised = result.get("revised_plan")
         if not isinstance(revised, list) or not all(isinstance(a, (str, dict)) for a in revised):
-            raise ValueError(f"Invalid 'revised_plan' output from model: {revised}")
-        
+            # Gracefully handle truncated responses (finishReason=MAX_TOKENS) where
+            # the model emitted only 'analysis' before being cut off.  Rather than
+            # raising and losing the analysis text, fall back to the original plan.
+            logger.warning(
+                "reflect(): 'revised_plan' is missing or invalid (%r) — "
+                "likely due to MAX_TOKENS truncation. "
+                "Falling back to current plan %s. "
+                "Consider increasing --planner-max-tokens (current: %d).",
+                revised,
+                full_plan,
+                self._max_tokens,
+            )
+            result["revised_plan"] = list(full_plan)
+            if "analysis" not in result:
+                result["analysis"] = ""
+            logger.info("Reflect analysis (partial): %s", result.get("analysis"))
+            return result
+
         # Clean revised_plan to ensure all elements are strings (extracting 'label' if it's a dict)
         cleaned = []
         for step in revised:
             if isinstance(step, dict):
-                cleaned.append(step.get("label", step.get("action", str(step))))
+                # Ensure the dict has non-empty keys or at least one non-empty value
+                val = step.get("label", step.get("action", step.get("id")))
+                if val and isinstance(val, str) and val.strip():
+                    cleaned.append(val.strip())
             else:
-                cleaned.append(str(step))
+                val = str(step)
+                if val and val.strip():
+                    cleaned.append(val.strip())
         result["revised_plan"] = cleaned
 
         if "analysis" not in result:
@@ -654,9 +740,10 @@ class BeamSearchPlanner:
 
             # For the RGB path, track the evolving imagined frame explicitly.
             imagined_state = current_image_np
-            final_state = current_image_np
+            final_state = None if is_latent_wm else current_image_np
             step_failed = False
             failed_step = None
+            horizon_dir = None
 
             _wm_ctx = (
                 self.world_model.rollout_context()
@@ -829,7 +916,7 @@ class BeamSearchPlanner:
                 critic_decisions.append(decision_msg)
                 logger.info("  " + decision_msg)
                 
-                if output_dir:
+                if output_dir and horizon_dir is not None:
                     import json
                     with open(horizon_dir / "goal_critic.json", "w") as f:
                         json.dump({

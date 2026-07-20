@@ -108,7 +108,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --output-dir verify2act/output/diffusion_wm/nut_assembly/decoder \
   --max-steps 5000 \
   --eval-every 500 \
-  --batch-size 8 \
+  --batch-size 2 \
+  --gradient-accumulation-steps 4 \
   --mixed-precision fp16 \
   --device cuda
 
@@ -120,9 +121,10 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --output-dir verify2act/output/diffusion_wm/calvin/decoder \
   --max-steps 5000 \
   --eval-every 500 \
-  --batch-size 8 \
+  --batch-size 2 \
+  --gradient-accumulation-steps 4 \
   --mixed-precision fp16 \
-  --device cuda
+  --device cuda 
 
 # ==============================================================================
 # INFERENCE PIPELINE

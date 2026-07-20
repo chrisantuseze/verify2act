@@ -104,6 +104,19 @@ def build_reflection_context(
     failed_step : index into ``full_plan`` where failure was detected.
     full_plan : full list of sub-skill strings generated for this rollout.
     """
+    if not full_plan:
+        failure_pattern = classify_failure_pattern(consistency_scores, proximity_score, wm_uncertainty)
+        return {
+            "imagined_state":     imagined_state,
+            "all_scores":         all_scores,
+            "consistency_scores": consistency_scores,
+            "proximity_score":    proximity_score,
+            "failure_pattern":    failure_pattern,
+            "failed_step":        -1,
+            "failed_action":      "none",
+            "full_plan":          [],
+        }
+
     if failed_step < 0 or failed_step >= len(full_plan):
         raise IndexError(
             f"failed_step={failed_step} out of range for plan length {len(full_plan)}"

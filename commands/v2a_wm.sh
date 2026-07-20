@@ -23,7 +23,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --output-dir verify2act/output/contrastive/nut_assembly \
   --dataset-type robosuite \
   --epochs 25 \
-  --batch-size 16 \
+  --batch-size 20 \
   --learning-rate 1e-4 \
   --lambda1 0.5 \
   --lambda2 0.7 \
@@ -77,10 +77,10 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   verify2act/latent_wm/train_dynamics.py \
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
-  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_causal \
+  --output-dir verify2act/output/v2a_wm/nut_assembly/wm_non_cross_attn \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/encoder_only_best.pt \
   --token-dim 128 --num-latent-tokens 32 \
-  --num-epochs 100 --batch-size 96 --lr 1e-4 --checkpoint-freq 10 \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
   --causal-masking \
   --action-conditioning adaln \
   --resume-from verify2act/output/v2a_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_ep60.pt
@@ -176,11 +176,12 @@ python verify2act/latent_wm/visualize_wm.py \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt \
   --history-len 3 \
-  --num-samples 10
+  --num-samples 10 \
+  --token-dim 128 --num-latent-tokens 32 
 
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type calvin \
-  --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
   --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
@@ -189,91 +190,146 @@ python verify2act/latent_wm/visualize_wm.py \
   --token-dim 128 --num-latent-tokens 32 
 
 # ==============================================================================
-# INFERENCE PIPELINE
+# INFERENCE PIPELINE — Production Evaluation Commands (25 episodes each)
 # ==============================================================================
 
-# RoboSuite Inference (using v2a_wm)
+# (1) v2a_wm  — proposed method (causal world model + encoder + critic)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_history_1_sparsity_001/ckpt/latent_dynamics_best.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_causal/ckpt/latent_dynamics_best_weights.pt \
   --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
-  --history-len 1 \
   --num-round 4 \
   --num-square 3 \
   --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 25 \
+  --num-episodes 100 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode v2a_wm
+  --wm-mode v2a_wm \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --history-len 3 \
+  --action-conditioning cross_attn
 
-# RoboSuite Inference (using rla_wm baseline)
+# (2) rla_wm  — ablation: narrower (original-size) world model + encoder, same critic
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/rla_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/rla_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
-  --wm-decoder-dir verify2act/output/rla_wm/nut_assembly/decoder \
-  --history-len 1 \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
   --num-round 4 \
   --num-square 3 \
   --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 25 \
+  --num-episodes 100 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode rla_wm
+  --wm-mode rla_wm \
+  --theta-c 0.5 \
+  --theta-p 0.2
 
-# RoboSuite Inference (using diffusion baseline - ReflectVLM)
+# (3) dino_wm  — ablation: latent WM without the encoder (raw DINO features)
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
+  --randomize-nut-counts \
+  --num-episodes 100 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode dino_wm \
+  --theta-c 0.5 \
+  --theta-p 0.2 \
+  --history-len 3
+
+# (4) diffusion  — baseline: pixel-space diffusion world model (ReflectVLM-style)
 xvfb-run -a python verify2act/pipeline/inference.py \
   --wm-model timbrooks/instruct-pix2pix \
   --wm-adapter-dir verify2act/output/diffusion_wm/nut_assembly/wm/best/unet_lora \
   --wm-decoder-dir verify2act/output/diffusion_wm/nut_assembly/decoder/checkpoint-5000 \
-  --history-len 1 \
   --num-round 4 \
   --num-square 3 \
   --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 25 \
+  --num-episodes 100 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode diffusion
+  --wm-mode diffusion \
+  --history-len 1
 
-# RoboSuite Inference (using vlm_only baseline)
+# (5) vlm_only  — baseline: no world model, VLM plans and verifies directly
 xvfb-run -a python verify2act/pipeline/inference.py \
-  --history-len 1 \
   --num-round 4 \
   --num-square 3 \
   --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 25 \
+  --num-episodes 100 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode vlm_only
+  --wm-mode vlm_only \
+  --history-len 1
 
-# RoboSuite Inference (using dino_wm baseline)
-# NOTE: --history-len must match the value used during training.
-# The checkpoint at dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt was
-# trained with history_len=3 (pos_embedding shape [1,774,1024] = 3×258 patches).
+# (6) wm_non_cross_attn  — ablation: adaln action conditioning + causal history
 xvfb-run -a python verify2act/pipeline/inference.py \
   --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt \
-  --history-len 3 \
+  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_non_cross_attn/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
   --num-round 4 \
   --num-square 3 \
   --guarantee-overlap \
   --randomize-nut-counts \
-  --num-episodes 25 \
+  --num-episodes 100 \
   --base-seed 42 \
   --device cuda \
   --dtype fp16 \
-  --wm-mode dino_wm
+  --wm-mode v2a_wm \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --history-len 3 \
+  --action-conditioning adaln
 
-# Calvin Inference (using v2a_wm)
+# (7) wm_non_causal  — ablation: cross_attn action conditioning + single-frame history (history_len=1)
+xvfb-run -a python verify2act/pipeline/inference.py \
+  --critic-ckpt verify2act/output/contrastive/nut_assembly/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/nut_assembly/wm_non_causal/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/nut_assembly/encoder/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/nut_assembly/decoder \
+  --num-round 4 \
+  --num-square 3 \
+  --guarantee-overlap \
+  --randomize-nut-counts \
+  --num-episodes 100 \
+  --base-seed 42 \
+  --device cuda \
+  --dtype fp16 \
+  --wm-mode v2a_wm \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --history-len 1 \
+  --action-conditioning cross_attn
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CALVIN Inference — Production Evaluation Commands (100 sequences each)
+# ─────────────────────────────────────────────────────────────────────────────
+# TIP: find your GCP project ID with: gcloud config get-value project
+#      or set it permanently: gcloud config set project <YOUR_PROJECT_ID>
+#
+# Shared critic hyperparameters (tuned on 5-seq pilot):
+#   --theta-c 0.5        Head 2 temporal consistency gate (TC range 0.35-0.84)
+#   --theta-p 0.2        Head 1 goal proximity gate (GP range -0.17 to 0.56)
+#   --critic-unc-threshold 0.08   MC uncertainty gate (observed std 0.030-0.065)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (1) v2a_wm  — proposed method (wider world model + encoder + critic)
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
   --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
@@ -285,14 +341,19 @@ python3 verify2act/pipeline/inference_calvin.py \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode v2a_wm \
+  --gcp-project verify2act \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --critic-unc-threshold 0.08 \
   --num-sequences 100 \
-  --debug
+  --history-len 3 \
+  --action-conditioning cross_attn
 
-# Calvin Inference (using rla_wm baseline)
+# (2) rla_wm  — ablation: narrower (original-size) world model + encoder, same critic
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
-  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
+  --latent-wm-ckpt verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
   --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABCD_D_filtered \
@@ -300,10 +361,29 @@ python3 verify2act/pipeline/inference_calvin.py \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode rla_wm \
-  --num-sequences 25 \
-  --debug
+  --gcp-project verify2act \
+  --theta-c 0.5 \
+  --theta-p 0.2 \
+  --critic-unc-threshold 0.08 \
+  --num-sequences 100
 
-# Calvin Inference (using diffusion baseline - ReflectVLM)
+# (3) dino_wm  — ablation: latent WM without the encoder (raw DINO features)
+python3 verify2act/pipeline/inference_calvin.py \
+  --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
+  --device cuda \
+  --wm-mode dino_wm \
+  --gcp-project verify2act \
+  --theta-c 0.5 \
+  --theta-p 0.2 \
+  --critic-unc-threshold 0.08 \
+  --num-sequences 100
+
+# (4) diffusion  — baseline: pixel-space diffusion world model (ReflectVLM-style)
 python3 verify2act/pipeline/inference_calvin.py \
   --wm-model timbrooks/instruct-pix2pix \
   --wm-adapter-dir verify2act/output/diffusion_wm/calvin/wm/best/unet_lora \
@@ -314,10 +394,10 @@ python3 verify2act/pipeline/inference_calvin.py \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode diffusion \
-  --num-sequences 10 \
-  --debug
+  --gcp-project verify2act \
+  --num-sequences 100
 
-# Calvin Inference (using vlm_only baseline)
+# (5) vlm_only  — baseline: no world model, VLM plans and verifies directly
 python3 verify2act/pipeline/inference_calvin.py \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABCD_D_filtered \
@@ -325,22 +405,46 @@ python3 verify2act/pipeline/inference_calvin.py \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
   --wm-mode vlm_only \
-  --num-sequences 100 \
-  --debug
+  --gcp-project verify2act \
+  --num-sequences 100
 
-# Calvin Inference (using dino_wm baseline)
+# (6) wm_non_cross_attn  — ablation: adaln action conditioning + causal history
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_non_cross_attn/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
   --low-level-policy-ckpt calvin/models/diffusion_baseline \
   --device cuda \
-  --wm-mode dino_wm \
-  --num-sequences 10 \
-  --debug
+  --wm-mode v2a_wm \
+  --gcp-project verify2act \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --critic-unc-threshold 0.08 \
+  --num-sequences 100 \
+  --history-len 3 \
+  --action-conditioning adaln
 
-
-
+# (7) wm_non_causal  — ablation: cross_attn action conditioning + single-frame history (history_len=1)
+python3 verify2act/pipeline/inference_calvin.py \
+  --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
+  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_non_causal/ckpt/latent_dynamics_best_weights.pt \
+  --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder_wider/ckpt/delta_encoder_best.pt \
+  --wm-decoder-dir verify2act/output/v2a_wm/calvin/decoder \
+  --train-folder calvin/models/hulc_baseline \
+  --dataset-path calvin/dataset/task_ABCD_D_filtered \
+  --low-level-policy diffusion \
+  --low-level-policy-ckpt calvin/models/diffusion_baseline \
+  --device cuda \
+  --wm-mode v2a_wm \
+  --gcp-project verify2act \
+  --theta-c 0.5 \
+  --theta-p 0.05 \
+  --critic-unc-threshold 0.08 \
+  --num-sequences 100 \
+  --history-len 1 \
+  --action-conditioning cross_attn
 

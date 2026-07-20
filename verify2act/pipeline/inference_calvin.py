@@ -259,13 +259,23 @@ def main() -> int:
     # Planner configuration
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gemini-2.5-flash")
-    parser.add_argument("--planner-max-tokens", type=int, default=1024)
+    parser.add_argument("--planner-max-tokens", type=int, default=2048)
     parser.add_argument("--planner-temperature", type=float, default=0.2)
     parser.add_argument(
         "--no-gemini-retry-warn",
         action="store_true",
         default=False,
         help="Suppress rate-limit retry warnings when using Gemini (equivalent to GEMINI_WARN_ON_RETRY=0).",
+    )
+    parser.add_argument(
+        "--gcp-project",
+        default="verify2act",
+        metavar="PROJECT_ID",
+        help=(
+            "GCP project ID to use when calling Vertex AI (sets GOOGLE_CLOUD_PROJECT). "
+            "Required when ADC credentials do not embed a project (e.g. user credentials "
+            "obtained via 'gcloud auth application-default login')."
+        ),
     )
     parser.add_argument(
         "--planner-call-delay",
@@ -276,11 +286,32 @@ def main() -> int:
     )
     
     # Hyperparameters
-    parser.add_argument("--theta-c", type=float, default=0.7, help="Consistency threshold")
+    parser.add_argument("--theta-c", type=float, default=0.6, help="Head 2 temporal consistency threshold (cosine sim). Observed CALVIN range: 0.35-0.84; default 0.5 separates poor from plausible transitions.")
+    parser.add_argument(
+        "--theta-p", type=float, default=0.2,
+        help=(
+            "Head 1 goal proximity threshold (cosine sim, DINO-to-CLIP cross-modal). "
+            "Observed CALVIN range is 0.1-0.44; default 0.2 accepts well-aligned imaginations "
+            "while rejecting clearly off-goal ones. Tune this separately from --theta-c."
+        ),
+    )
+    parser.add_argument(
+        "--critic-unc-threshold",
+        type=float,
+        default=0.08,
+        metavar="UNC",
+        help=(
+            "MC uncertainty gate for the critic (confidence_threshold). "
+            "Predictions with std > this value are treated as 'requery' regardless of score. "
+            "Observed CALVIN critic std is 0.030-0.065; default 0.08 clears this range. "
+            "Lower → stricter gating; raise if critic still returns all requery."
+        ),
+    )
     parser.add_argument("--max-replans", type=int, default=2, help="Max replanning rounds per failure")
     parser.add_argument("--history-len", type=int, default=3, help="Number of historical frames for world model context")
     parser.add_argument("--token-dim", type=int, default=128, help="Compact latent token dimension")
     parser.add_argument("--num-latent-tokens", type=int, default=32, help="Number of compact latent tokens")
+    parser.add_argument("--action-conditioning", choices=["cross_attn", "adaln"], default="cross_attn", help="Action conditioning strategy for latent world model")
     parser.add_argument("--wm-mode", choices=["v2a_wm", "rla_wm", "dino_wm", "diffusion", "vlm_only"], default="v2a_wm", help="World Model mode")
     
     # Diffusion world model arguments
@@ -300,6 +331,13 @@ def main() -> int:
     parser.add_argument("--num-sequences", type=int, default=20, help="Number of evaluation sequences to run")
 
     args = parser.parse_args()
+
+    # Apply GCP project ID before any VLM/Vertex AI calls are made.
+    if args.gcp_project:
+        os.environ["GOOGLE_CLOUD_PROJECT"] = args.gcp_project
+        logging.getLogger(__name__).info(
+            "GCP project set to '%s' (via --gcp-project)", args.gcp_project
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -393,10 +431,12 @@ def main() -> int:
             history_len=args.history_len,
             token_dim=args.token_dim,
             num_latent_tokens=args.num_latent_tokens,
+            action_conditioning=args.action_conditioning,
         )
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
+    if args.wm_mode not in ["vlm_only", "diffusion"]:
         logger.info("Loading Critic...")
         critic = _build_critic(args, device)
         if device.type == "cuda":
@@ -412,13 +452,23 @@ def main() -> int:
         decoder.eval()
         dec_path = Path(args.wm_decoder_dir) / "latent_decoder_best.pt"
         if dec_path.exists():
-            state_dict = torch.load(dec_path, map_location=device)
+            ckpt = torch.load(dec_path, map_location=device)
+            # Unwrap checkpoint wrapper keys, matching the logic in visualize_wm.py.
+            if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+                state_dict = ckpt["model_state_dict"]
+            elif isinstance(ckpt, dict) and "model" in ckpt:
+                state_dict = ckpt["model"]
+            elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+                state_dict = ckpt["state_dict"]
+            else:
+                state_dict = ckpt
+
             # If keys don't have "decoder." prefix, add it (checkpoint was saved from inner decoder)
             if "decoder.input_proj.0.weight" not in state_dict and "input_proj.0.weight" in state_dict:
                 state_dict = {f"decoder.{k}": v for k, v in state_dict.items()}
             decoder.load_state_dict(state_dict)
         else:
-            logger.warning(f"Decoder checkpoint not found at {dec_path}")
+            logger.warning(f"DECODER CHECKPOINT NOT FOUND AT {dec_path}")
         if device.type == "cuda":
             torch.cuda.empty_cache()
 
@@ -432,9 +482,11 @@ def main() -> int:
         train_folder=args.low_level_policy_ckpt if args.low_level_policy_ckpt else args.train_folder,
         dataset_path=args.dataset_path,
         theta_c=args.theta_c,
+        theta_p=args.theta_p,
         max_replans=args.max_replans,
         extra_dataset_path=args.full_dataset_path,
         low_level_policy_type=args.low_level_policy,
+        critic_unc_threshold=args.critic_unc_threshold,
     )
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -477,8 +529,14 @@ def main() -> int:
     total_critic_tp    = sum(t.critic_tp          for t in traces)
     total_critic_fp    = sum(t.critic_fp          for t in traces)
 
-    critic_precision   = total_critic_tp / total_critic_acc if total_critic_acc else None
-    critic_fp_rate     = total_critic_fp / total_critic_acc if total_critic_acc else None
+    # Critic precision: TP and FP are credited at subtask granularity (one per subtask).
+    # Use (TP+FP) as denominator — the number of subtasks that had a pending critic accept
+    # and were subsequently resolved. total_critic_acc is raw accept-events and is a
+    # misleading denominator since multiple accepts can occur within one subtask.
+    critic_classified  = total_critic_tp + total_critic_fp   # subtasks with resolved accept
+    critic_precision   = total_critic_tp / critic_classified if critic_classified else None
+    critic_fp_rate     = total_critic_fp / critic_classified if critic_classified else None
+    # Raw event-level reject rate (still meaningful as a throughput metric)
     critic_reject_rate = (
         total_critic_rej / (total_critic_acc + total_critic_rej)
         if (total_critic_acc + total_critic_rej) else None
@@ -560,9 +618,9 @@ def main() -> int:
         print(f"  --- Critic Quality (online) ---")
         print(f"  Critic Accepts:                {total_critic_acc}")
         print(f"  Critic Rejects:                {total_critic_rej}")
-        print(f"  Critic Precision (TP/acc):     {_pct(critic_precision)}")
-        print(f"  Critic FP Rate  (FP/acc):      {_pct(critic_fp_rate)}")
         print(f"  Critic Reject Rate:            {_pct(critic_reject_rate)}")
+        print(f"  Critic Precision (TP/classified): {_pct(critic_precision)}  [TP={total_critic_tp} FP={total_critic_fp} of {critic_classified} subtasks]")
+        print(f"  Critic FP Rate   (FP/classified): {_pct(critic_fp_rate)}")
     print(f"  Results:                       {summary_path}")
     print("=" * 60 + "\n")
 

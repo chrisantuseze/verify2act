@@ -28,8 +28,9 @@ class LangClip(nn.Module):
         self.clip_rn50 = build_model(model.state_dict()).to(self.device)
 
     def forward(self, x: List) -> torch.Tensor:
+        device = next(self.clip_rn50.parameters()).device
         with torch.no_grad():
-            tokens = tokenize(x).to(self.device)
+            tokens = tokenize(x).to(device)
             tokens = tokens.long()  # Ensure tokens are of type Long
             # print('token dtype:', tokens.dtype)
             # print('clip_rn50 dtype:', self.clip_rn50.dtype)

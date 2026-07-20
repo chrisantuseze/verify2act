@@ -385,6 +385,7 @@ class LatentWorldModel(WorldModelBase):
         token_dim: int = 64,
         num_patches: int = 256,
         num_latent_tokens: int = 16,
+        action_conditioning: str = "cross_attn",
     ) -> None:
         from verify2act.latent_wm.dynamics import LatentDynamicsModel
         from verify2act.latent_wm.train_dynamics import FeatureExtractor
@@ -404,6 +405,7 @@ class LatentWorldModel(WorldModelBase):
             token_dim=token_dim,
             num_patches=num_patches,
             num_latent_tokens=num_latent_tokens,
+            action_conditioning=action_conditioning,
         )
         self.dynamics.eval()
         self.dynamics = self.dynamics.to(self.device)
