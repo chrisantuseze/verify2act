@@ -44,6 +44,32 @@ import numpy as np
 import torch
 np.float = float
 
+# pyhash is broken on Python 3.12 (uses removed distutils use_2to3).
+# Inject a pure-Python stub that satisfies the only usage in calvin_agent:
+#   hasher = pyhash.fnv1_32()
+#   seed   = hasher(str(...))
+import sys as _sys
+import types as _types
+if "pyhash" not in _sys.modules:
+    def _fnv1_32_hash(data: str, seed: int = 0) -> int:
+        """FNV-1a 32-bit hash (matches pyhash.fnv1_32 behaviour)."""
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        hval = (2166136261 + seed) & 0xFFFFFFFF
+        for byte in data:
+            hval ^= byte
+            hval = (hval * 16777619) & 0xFFFFFFFF
+        return hval
+
+    class _FNV1_32:
+        """Callable object matching pyhash.fnv1_32() interface."""
+        def __call__(self, data: str, seed: int = 0) -> int:
+            return _fnv1_32_hash(data, seed)
+
+    _pyhash_stub = _types.ModuleType("pyhash")
+    _pyhash_stub.fnv1_32 = _FNV1_32
+    _sys.modules["pyhash"] = _pyhash_stub
+
 repo_root = Path(__file__).resolve().parents[2]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))

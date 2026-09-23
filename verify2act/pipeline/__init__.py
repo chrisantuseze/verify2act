@@ -1,4 +1,8 @@
-from verify2act.pipeline.planner import VLMPlanner
+try:
+    from verify2act.pipeline.planner import VLMPlanner
+except ImportError:
+    VLMPlanner = None
+
 from verify2act.pipeline.prompt_utils import PromptManager
 from verify2act.pipeline.reflection import build_reflection_context
 

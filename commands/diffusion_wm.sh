@@ -107,7 +107,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/diffusion_wm/nut_assembly/decoder \
   --max-steps 5000 \
-  --eval-every 500 \
+  --eval-every 1000 \
   --batch-size 2 \
   --gradient-accumulation-steps 4 \
   --mixed-precision fp16 \
@@ -120,8 +120,8 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
   --output-dir verify2act/output/diffusion_wm/calvin/decoder \
   --max-steps 5000 \
-  --eval-every 500 \
-  --batch-size 2 \
+  --eval-every 1000 \
+  --batch-size 4 \
   --gradient-accumulation-steps 4 \
   --mixed-precision fp16 \
   --device cuda 

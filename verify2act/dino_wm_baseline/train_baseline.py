@@ -17,7 +17,8 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator, DataLoaderConfiguration, DistributedDataParallelKwargs
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, InitProcessGroupKwargs
+from datetime import timedelta
 
 import sys
 root_dir = Path(__file__).resolve().parent.parent.parent
@@ -35,7 +36,15 @@ def train(args):
     # Disable RNG sync to avoid mt19937 state errors in distributed training
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     dataloader_config = DataLoaderConfiguration(dispatch_batches=False)
-    accelerator = Accelerator(dataloader_config=dataloader_config, rng_types=[], kwargs_handlers=[ddp_kwargs])
+    # Increase NCCL timeout to 3 hours: rank 0 may spend ~1-2 hours precomputing
+    # DINOv2 features before the barrier; the default 10-min timeout causes ranks
+    # 1 and 2 to crash while rank 0 is still running ensure_calvin_cache_complete.
+    init_kwargs = InitProcessGroupKwargs(timeout=timedelta(hours=3))
+    accelerator = Accelerator(
+        dataloader_config=dataloader_config,
+        rng_types=[],
+        kwargs_handlers=[ddp_kwargs, init_kwargs],
+    )
     
     batch_size = args.batch_size
     num_epochs = args.num_epochs
@@ -296,6 +305,11 @@ def parse_args():
     parser.add_argument("--resume-from", type=str, default=None)
     parser.add_argument("--no-cache", action="store_true", default=False)
     parser.add_argument("--cache-dir", type=str, default=None)
+
+    # v2a-compatible args (accepted but unused by the DINO-WM baseline)
+    parser.add_argument("--encoder-ckpt", type=str, default=None, help="(Unused) v2a encoder checkpoint path")
+    parser.add_argument("--token-dim", type=int, default=128, help="(Unused) v2a latent token dimension")
+    parser.add_argument("--num-latent-tokens", type=int, default=32, help="(Unused) v2a number of latent tokens")
 
     return parser.parse_args()
 

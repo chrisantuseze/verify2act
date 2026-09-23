@@ -52,10 +52,10 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type robosuite \
   --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
   --output-dir verify2act/output/dino_wm/nut_assembly/wm \
-  --num-epochs 100 \
-  --batch-size 16 \
-  --lr 1e-4 \
-  --checkpoint-freq 5
+  --cache-dir verify2act/output/v2a_wm/nut_assembly/dino_features \
+  --num-epochs 100 --batch-size 16 --lr 1e-4 --checkpoint-freq 10 \
+  --history-len 1 \
+  --resume-from verify2act/output/dino_wm/nut_assembly/wm/ckpt/latent_dynamics_best.pt
 
 # -------- CALVIN --------
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
@@ -63,10 +63,10 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   --dataset-type calvin \
   --dataset-dir calvin/dataset/task_ABC_D_filtered/training \
   --output-dir verify2act/output/dino_wm/calvin/wm \
-  --num-epochs 100 \
-  --batch-size 8 \
-  --lr 1e-4 \
-  --checkpoint-freq 5
+  --cache-dir verify2act/output/v2a_wm/calvin/dino_features \
+  --num-epochs 100 --batch-size 32 --lr 1e-4 --checkpoint-freq 10 \
+  --history-len 1 \
+  --resume-from verify2act/output/dino_wm/calvin/wm/ckpt/latent_dynamics_best.pt
 
 # ==============================================================================
 # INFERENCE & EVALUATION PIPELINES

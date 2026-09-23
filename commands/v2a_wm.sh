@@ -177,7 +177,8 @@ python verify2act/latent_wm/visualize_wm.py \
   --decoder-ckpt verify2act/output/v2a_wm/nut_assembly/decoder/latent_decoder_best.pt \
   --history-len 3 \
   --num-samples 10 \
-  --token-dim 128 --num-latent-tokens 32 
+  --token-dim 128 --num-latent-tokens 32 \
+  --causal-masking
 
 python verify2act/latent_wm/visualize_wm.py \
   --dataset-type calvin \
@@ -187,7 +188,30 @@ python verify2act/latent_wm/visualize_wm.py \
   --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
   --history-len 3 \
   --num-samples 10 \
-  --token-dim 128 --num-latent-tokens 32 
+  --token-dim 128 --num-latent-tokens 32 \
+  --causal-masking
+
+
+python verify2act/pipeline/compare_imaginations.py \
+  --dataset-type robosuite \
+  --dataset-dir robosuite/data_capture/dataset/nut_assembly_merged \
+  --min-steps 6 \
+  --num-samples 1 \
+  --horizon 6 \
+  --compose-figure \
+  --episode-id ep_25462 \
+  --no-diffusion
+
+python verify2act/pipeline/compare_imaginations.py \
+  --dataset-type calvin \
+  --dataset-dir calvin/dataset/task_ABCD_D_filtered/training \
+  --horizon 4 \
+  --min-steps 4 \
+  --num-samples 1 \
+  --compose-figure \
+  --episode-id ep_07919 \
+  --no-diffusion
+
 
 # ==============================================================================
 # INFERENCE PIPELINE — Production Evaluation Commands (25 episodes each)
@@ -245,8 +269,10 @@ xvfb-run -a python verify2act/pipeline/inference.py \
   --dtype fp16 \
   --wm-mode dino_wm \
   --theta-c 0.5 \
-  --theta-p 0.2 \
-  --history-len 3
+  --theta-p 0.05 \
+  --history-len 1 \
+  --resume 
+
 
 # (4) diffusion  — baseline: pixel-space diffusion world model (ReflectVLM-style)
 xvfb-run -a python verify2act/pipeline/inference.py \
@@ -367,10 +393,10 @@ python3 verify2act/pipeline/inference_calvin.py \
   --critic-unc-threshold 0.08 \
   --num-sequences 100
 
-# (3) dino_wm  — ablation: latent WM without the encoder (raw DINO features)
+# (3) dino_wm  — baseline: raw DINOv2 feature space dynamics (no bottleneck encoder)
 python3 verify2act/pipeline/inference_calvin.py \
   --critic-ckpt verify2act/output/contrastive/calvin/best_contrastive_critic.pt \
-  --latent-wm-ckpt verify2act/output/v2a_wm/calvin/wm_wider/ckpt/latent_dynamics_best_weights.pt \
+  --latent-wm-ckpt verify2act/output/dino_wm/calvin/wm/ckpt/latent_dynamics_best.pt \
   --train-folder calvin/models/hulc_baseline \
   --dataset-path calvin/dataset/task_ABCD_D_filtered \
   --low-level-policy diffusion \
@@ -379,9 +405,10 @@ python3 verify2act/pipeline/inference_calvin.py \
   --wm-mode dino_wm \
   --gcp-project verify2act \
   --theta-c 0.5 \
-  --theta-p 0.2 \
+  --theta-p 0.05 \
   --critic-unc-threshold 0.08 \
-  --num-sequences 100
+  --num-sequences 100 \
+  --history-len 1
 
 # (4) diffusion  — baseline: pixel-space diffusion world model (ReflectVLM-style)
 python3 verify2act/pipeline/inference_calvin.py \

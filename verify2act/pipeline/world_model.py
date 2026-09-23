@@ -437,6 +437,15 @@ class LatentWorldModel(WorldModelBase):
         self._history: Optional[torch.Tensor] = None
 
     def initialize_history(self, start_img_np: np.ndarray) -> None:
+        """Reset the rolling history window to match training-time causal padding.
+
+        At the start of an episode, LatentDynamicsDataset constructs history by
+        repeating the initial frame (frame 0) into early slots and passing a validity
+        mask history_mask=[False, ..., True] to mark padding slots.
+
+        We repeat F_start across all history slots and set history_mask with only
+        the last slot valid.
+        """
         import torchvision.transforms as T
         img = Image.fromarray(start_img_np).resize((224, 224))
         tensor = T.ToTensor()(img)
@@ -445,7 +454,14 @@ class LatentWorldModel(WorldModelBase):
 
         with torch.no_grad():
             F_start = self.extractor.extract_dino(tensor)  # (1, 256, dino_channels)
-        self._history = F_start.unsqueeze(1).repeat(1, self.history_len, 1, 1)
+
+        H = self.history_len
+        self._history = F_start.unsqueeze(1).repeat(1, H, 1, 1)  # (1, H, P, D)
+
+        # Validity mask: False = padding slot, True = real frame
+        # Only the last slot holds a real observation at t=0.
+        self._history_mask = torch.zeros(1, H, dtype=torch.bool, device=self.device)
+        self._history_mask[:, -1] = True
 
     def set_history(self, history: torch.Tensor) -> None:
         self._history = history
@@ -476,10 +492,18 @@ class LatentWorldModel(WorldModelBase):
                 )
             self.initialize_history(current_image_np)
 
+        # Build validity mask (falls back to all-valid if attribute missing for
+        # backwards compatibility with code that calls set_history() directly).
+        history_mask = getattr(self, "_history_mask", None)
+
         with torch.no_grad():
             action_emb = self.extractor.extract_clip([action_text])
-            # dynamics.step returns predicted compact latent tokens (1, num_latent_tokens, token_dim)
-            pred_latent = self.dynamics.step(self._history, action_emb, num_steps=5)
+            # Pass the validity mask so the model uses the same conditioning
+            # it was trained with (causal masking + [START] token padding).
+            pred_latent = self.dynamics.step(
+                self._history, action_emb, num_steps=5,
+                history_mask=history_mask,
+            )
 
             # Decode compact tokens -> DINO feature difference
             delta_F = self.delta_decoder(pred_latent)          # (1, 256, dino_channels)
@@ -488,8 +512,19 @@ class LatentWorldModel(WorldModelBase):
             F_t = self._history[:, -1, :, :]                   # (1, 256, dino_channels)
             F_next = F_t + delta_F                             # (1, 256, dino_channels)
 
-            # Update history sliding window
-            self._history = torch.cat([self._history[:, 1:, :, :], F_next.unsqueeze(1)], dim=1)
+            # Slide history window: drop oldest slot, append predicted frame.
+            self._history = torch.cat(
+                [self._history[:, 1:, :, :], F_next.unsqueeze(1)], dim=1
+            )
+
+            # Slide validity mask: the new slot is always a real (predicted) frame.
+            if history_mask is not None:
+                self._history_mask = torch.cat(
+                    [self._history_mask[:, 1:],
+                     torch.ones(1, 1, dtype=torch.bool, device=self.device)],
+                    dim=1,
+                )
+
             uncertainty = 0.0
 
         return F_next, uncertainty
@@ -530,6 +565,7 @@ class RLAWorldModel(LatentWorldModel):
             token_dim=token_dim,
             num_latent_tokens=num_latent_tokens,
             num_patches=num_patches,
+            latent_scale=1.0,
         ).to(self.device)
         self.dynamics.eval()
 
@@ -577,6 +613,28 @@ class DINOWorldModel(LatentWorldModel):
         from verify2act.latent_wm.train_dynamics import FeatureExtractor
 
         self.device = torch.device(device)
+
+        # ── Auto-detect history_len from checkpoint ───────────────────
+        # ViTPredictor stores pos_embedding with shape [1, predictor_patches * history_len, dim].
+        # predictor_patches = num_patches(256) + 2 extra tokens (proprio + action) = 258.
+        # Peek at the checkpoint before building the model so we use the right size.
+        if dynamics_weights_path:
+            _ckpt_peek = torch.load(dynamics_weights_path, map_location="cpu", weights_only=False)
+            _pe_shape = _ckpt_peek.get("predictor.pos_embedding", _ckpt_peek.get("v_wm.predictor.pos_embedding", None))
+            if _pe_shape is not None:
+                _seq_len = _pe_shape.shape[1]   # e.g. 774
+                _predictor_patches = 258         # 256 patches + 2 conditioning tokens
+                _detected_history = _seq_len // _predictor_patches
+                if _detected_history != history_len:
+                    logger.warning(
+                        "DINOWorldModel: --history-len %d does not match checkpoint "
+                        "(pos_embedding seq_len=%d → history_len=%d). "
+                        "Using history_len=%d from checkpoint.",
+                        history_len, _seq_len, _detected_history, _detected_history,
+                    )
+                    history_len = _detected_history
+            del _ckpt_peek
+
         self.history_len = history_len
 
         logger.info("Initializing Feature Extractor (DINOv2 + CLIP)...")

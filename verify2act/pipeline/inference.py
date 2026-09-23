@@ -206,6 +206,29 @@ def _save_trace(trace: EpisodeTrace, output_dir: Path) -> None:
     logger.info("Episode trace saved to %s", path)
 
 
+def _load_trace(output_dir: Path) -> EpisodeTrace:
+    """Reload a previously saved EpisodeTrace from JSON."""
+    path = output_dir / "episode_trace.json"
+    with open(path) as f:
+        data = json.load(f)
+    # Drop fields not in EpisodeTrace (e.g. steps/history which are verbose)
+    trace = EpisodeTrace(
+        success=data.get("success", False),
+        total_steps=data.get("total_steps", 0),
+        total_replans=data.get("total_replans", 0),
+        nuts_placed=data.get("nuts_placed", 0),
+        total_target_nuts=data.get("total_target_nuts", 0),
+        obstacles_blocking_at_start=data.get("obstacles_blocking_at_start", 0),
+        obstacles_cleared=data.get("obstacles_cleared", 0),
+        total_vlm_calls=data.get("total_vlm_calls", 0),
+        critic_accepts=data.get("critic_accepts", 0),
+        critic_rejects=data.get("critic_rejects", 0),
+        critic_tp=data.get("critic_tp", 0),
+        critic_fp=data.get("critic_fp", 0),
+    )
+    return trace
+
+
 def _save_image(img_np: np.ndarray, output_dir: Path, name: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(img_np).save(output_dir / name)
@@ -870,10 +893,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wm-text-guidance", type=float, default=7.5)
     parser.add_argument("--wm-seed", type=int, default=None)
 
-    parser.add_argument("--horizon", type=int, default=4)
-    parser.add_argument("--max-steps", type=int, default=7)
-    parser.add_argument("--theta-c", type=float, default=0.7)
-    parser.add_argument("--theta-p", type=float, default=0.7)
+    parser.add_argument("--horizon", type=int, default=4, help="Horizon for VLM planning")
+    parser.add_argument("--max-steps", type=int, default=7, help="Maximum number of steps per episode")
+    parser.add_argument("--theta-c", type=float, default=0.7, help="Temporal threshold for replanning")
+    parser.add_argument("--theta-p", type=float, default=0.7, help="Goal proximity threshold for replanning")
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--max-replans", type=int, default=2)
     parser.add_argument("--seed", type=int, default=None)
@@ -884,6 +907,12 @@ def parse_args() -> argparse.Namespace:
                         help="Number of evaluation episodes to run")
     parser.add_argument("--base-seed", type=int, default=42,
                         help="Base seed; episode i uses base_seed + i")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an interrupted eval: skip episodes whose episode_trace.json "
+             "already exists and reload their results instead of re-running them.",
+    )
 
     # Nut assembly params
     parser.add_argument("--num-round", type=int, default=4)
@@ -1033,7 +1062,8 @@ def main() -> int:
                 logger.warning(f"Decoder checkpoint not found at {dec_path}")
 
     # ── Multi-episode evaluation loop ────────────────────────────────────
-    eval_dir = Path(args.output_dir) / f"{args.wm_mode}_{args.action_conditioning}" / "nut_assembly"
+    # eval_dir = Path(args.output_dir) / f"{args.wm_mode}_{args.action_conditioning}" / "nut_assembly"
+    eval_dir = Path(args.output_dir) / args.wm_mode / "nut_assembly"
     eval_dir.mkdir(parents=True, exist_ok=True)
     num_episodes = args.num_episodes
     base_seed = args.base_seed
@@ -1047,6 +1077,17 @@ def main() -> int:
     for ep_idx in range(num_episodes):
         ep_seed = base_seed + ep_idx
         ep_dir = eval_dir / f"episode_{ep_idx:03d}"
+
+        # ── Resume: reload completed episodes without re-running them ────
+        trace_path = ep_dir / "episode_trace.json"
+        if args.resume and trace_path.exists():
+            trace = _load_trace(ep_dir)
+            traces.append(trace)
+            logger.info(
+                "Episode %d/%d SKIPPED (resume): loaded from %s",
+                ep_idx + 1, num_episodes, trace_path,
+            )
+            continue
 
         logger.info(
             "\n" + "=" * 60 + "\n"

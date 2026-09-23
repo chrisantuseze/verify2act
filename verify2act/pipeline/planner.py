@@ -35,7 +35,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import openai
+# openai is lazily imported below — only needed for the GPT-4o backend
 import httpx
 
 from verify2act.pipeline.prompt_utils import PromptManager
@@ -101,6 +101,13 @@ class VLMPlanner:
                 raise ValueError(
                     "OPENAI_API_KEY environment variable is not set."
                 )
+            try:
+                import openai
+            except ImportError as exc:
+                raise ImportError(
+                    "The 'openai' package is required for GPT backends. "
+                    "Install it with: pip install openai"
+                ) from exc
             self._client = openai.OpenAI(
                 api_key=self._api_key, http_client=httpx.Client()
             )

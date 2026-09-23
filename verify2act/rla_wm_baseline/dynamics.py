@@ -50,7 +50,7 @@ class BaselineRLAWM(nn.Module):
         token_dim: int = 64,
         num_latent_tokens: int = 16,
         # ── Latent normalization (#1) ────────────────────────────────────────
-        latent_scale: float = 10.0,
+        latent_scale: float = 1.0,
     ):
         super().__init__()
         self.dino_channels = dino_channels
@@ -156,6 +156,7 @@ class BaselineRLAWM(nn.Module):
         xt_history: Tensor,
         action_tokens: Tensor,
         num_steps: int = 5,
+        history_mask: Optional[Tensor] = None,
     ) -> Tensor:
         """Inference rollout — returns predicted latent tokens.
 
