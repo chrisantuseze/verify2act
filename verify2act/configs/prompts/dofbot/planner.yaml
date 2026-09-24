@@ -1,0 +1,6 @@
+# Real DOFBOT block tasks (verify2act/robot/). User messages are built by robot.prompts.RobotPromptManager.
+prompt: PromptManager
+prompt_kwargs:
+  system_prompts:
+    propose: system/propose.yaml
+    reflect: system/reflect.yaml
