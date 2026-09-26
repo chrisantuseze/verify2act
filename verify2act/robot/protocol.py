@@ -8,22 +8,25 @@ on the lab PC and the Jetson opens no extra ports.
     /v2a/response  lab PC -> Jetson   {"id", "ok", "error"?, ...}
 
 ops
-    ping    {}                                   -> {}
+    ping    {}                                   -> {wm_mode, theta_c, theta_p, max_replans, max_requery}
     reset   {session}                            -> {}      new episode: restart the planning-call counter
-    plan    {session, image, goal, history?, obj_labels?, horizon?}
+    plan    {session, image, goal, history?, obj_labels?, horizon?, feedback?}
             -> {plan[str], accepted, score, all_scores[[tc, prox]], failed_step, replan_attempts,
                 reflection_analyses[str], critic_decisions[str], invalid_steps[str], done,
                 evaluations[{plan, tc, goal, accepted, temporal_rejected, goal_rejected, requeries}],
                 stats{vlm_calls, plans_evaluated, requeries, temporal_rejections, goal_rejections},
-                planning_call, elapsed_s}
+                wm_mode, planning_call, elapsed_s}
 
 ``plan`` runs the same loop as the sim (``BeamSearchPlanner.plan``): the VLM proposes candidate subtask
 plans, the latent world model imagines each horizon from the current frame, the critic's temporal head
 gates every horizon and its goal head gates the final one, and a rejected plan goes through the
 reflect -> replan loop (fixed budget). ``image`` is the robot's CURRENT frame (receding horizon), and
 ``history`` is the list of subtasks already executed, with failed ones prefixed ``[FAILED] ``.
-When the VLM judges the goal already satisfied (and the goal head agrees), the reply has ``done: true`` and an
-empty ``plan``; the Jetson loop already treats an empty plan as "nothing left to do".
+``feedback`` (re-plan calls only) is the operator's note on the previous attempt; it goes into the propose and reflect
+prompts of every variant.
+When the VLM judges the goal already satisfied, the reply has ``done: true`` and an empty ``plan``. ``done`` is the VLM's
+claim; whether the goal head agreed on the real frame is in ``accepted``. The server runs one variant (``--wm-mode``
+v2a_wm | rla_wm | diffusion_wm | vlm_only, see backend.py); diffusion_wm and vlm_only have no critic and always reply ``accepted: true``.
 
 Timeouts (Jetson side): a ``plan`` call makes up to 1 + max_replans VLM calls (plus Gemini rate-limit retries) and up
 to beam_width + max_replans imagined rollouts, so it takes tens of seconds to a few minutes. Wait at least

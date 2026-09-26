@@ -344,3 +344,112 @@ def build_contrastive_datasets(
         cached_dino_dir=cached_dino_dir,
     )
     return train_ds, val_ds
+
+
+class DofbotContrastiveDataset(ContrastivePairDataset):
+    """Twin dataset (``verify2act/twin/generate.py``) for the dual-head critic.
+
+    Mode 0 (goal proximity): anchor = final frame of a goal-directed episode, positive = its ``goal.png`` (the final state
+    re-rendered with another camera/photometric draw), negative = a not-yet-achieved frame of the **same** episode with
+    probability ``p_hard``, else a frame of another episode. The language goal is the episode's own (``lang_goal``).
+    Mode 1 (temporal consistency): as ``ContrastivePairDataset`` (random-walk episodes included).
+    """
+
+    def __init__(
+        self,
+        dataset_dir: str,
+        rows: List[ContrastiveRow],
+        all_rows: List[ContrastiveRow],
+        image_size: int = 224,
+        mode0_prob: float = 0.5,
+        seed: int = 42,
+        cached_dino_dir: Optional[str] = None,
+        p_hard: float = 0.7,
+    ):
+        self.root = Path(dataset_dir)
+        self.mode0_prob = mode0_prob
+        self.p_hard = p_hard
+        self.rng = np.random.RandomState(seed)
+        self.cached_dino_dir = Path(cached_dino_dir) if cached_dino_dir is not None else None
+        self.transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+        ])
+
+        ep_map: Dict[str, List[ContrastiveRow]] = {}
+        for row in rows:
+            ep_map.setdefault(row.episode_id, []).append(row)
+        self._positive_anchors = []
+        self._negative_anchors = list(rows)                          # any image_t: not the episode's goal state
+        self._hard: Dict[str, List[str]] = {}
+        for ep, ep_rows in ep_map.items():
+            ep_rows.sort(key=lambda r: r.timestep)
+            if ep_rows[-1].episode_success and ep_rows[-1].has_lang_goal:
+                self._positive_anchors.append(ep_rows[-1])
+                self._hard[ep] = [r.image_t for r in ep_rows]
+        self._tc_rows = list(rows)
+        self._cross_rows = list(all_rows)
+        if not self._positive_anchors:
+            raise RuntimeError("No goal-directed episodes (episode_success with a lang_goal) in the twin dataset.")
+
+    def _sample_mode0(self):
+        anchor_row = self._positive_anchors[self.rng.randint(0, len(self._positive_anchors))]
+        hard = self._hard[anchor_row.episode_id]
+        if self.rng.random() < self.p_hard:
+            neg = hard[self.rng.randint(0, len(hard))]
+        else:
+            neg_row = anchor_row
+            for _ in range(20):
+                neg_row = self._negative_anchors[self.rng.randint(0, len(self._negative_anchors))]
+                if neg_row.episode_id != anchor_row.episode_id:
+                    break
+            neg = neg_row.image_t
+        return {
+            "anchor": self._load(anchor_row.image_t1),
+            "positive": self._load(anchor_row.goal_image),
+            "negative": self._load(neg),
+            "mode": torch.tensor(0, dtype=torch.long),
+            "lang_goal": anchor_row.lang_goal,
+            "has_lang_goal": torch.tensor(True, dtype=torch.bool),
+        }
+
+
+def build_dofbot_contrastive_datasets(
+    dataset_dir: str,
+    transitions_file: str = "transitions.jsonl",
+    val_frac: float = 0.1,
+    seed: int = 42,
+    image_size: int = 224,
+    mode0_prob: float = 0.5,
+    cached_dino_dir: Optional[str] = None,
+) -> Tuple[DofbotContrastiveDataset, DofbotContrastiveDataset]:
+    """Episode-level train/val split of a twin dataset for contrastive critic training."""
+    root = Path(dataset_dir)
+    all_rows: List[ContrastiveRow] = []
+    with open(root / transitions_file) as f:
+        for line in f:
+            t = json.loads(line)
+            goal = _resolve_goal_image(t, root)
+            if not (t.get("image_t") and t.get("image_t1") and goal):
+                continue
+            lang = (t.get("lang_goal") or "").strip()
+            all_rows.append(ContrastiveRow(
+                episode_id=t["episode_id"], timestep=int(t["timestep"]), image_t=t["image_t"], image_t1=t["image_t1"],
+                goal_image=goal, episode_success=bool(t.get("episode_success", False)),
+                lang_goal=lang, has_lang_goal=bool(lang),
+            ))
+    if not all_rows:
+        raise RuntimeError(f"No valid rows in {root / transitions_file}.")
+    all_rows.sort(key=lambda r: (r.episode_id, r.timestep))
+
+    episodes = sorted({r.episode_id for r in all_rows})
+    rng = np.random.RandomState(seed)
+    rng.shuffle(episodes)
+    val_eps = set(episodes[:max(1, int(len(episodes) * val_frac))])
+    train_rows = [r for r in all_rows if r.episode_id not in val_eps]
+    val_rows = [r for r in all_rows if r.episode_id in val_eps]
+    kw = dict(dataset_dir=dataset_dir, all_rows=all_rows, image_size=image_size, mode0_prob=mode0_prob,
+              cached_dino_dir=cached_dino_dir)
+    return (DofbotContrastiveDataset(rows=train_rows, seed=seed, **kw),
+            DofbotContrastiveDataset(rows=val_rows, seed=seed + 1, **kw))

@@ -1,0 +1,100 @@
+# DOFBOT digital twin (verify2act/twin, DIGITAL_TWIN_PLAN.md).
+# World frame: origin at the sheet centre on the table top, x away from the robot (up in the image), y = image left, z up.
+# Lengths in metres, angles in degrees.
+
+blocks:
+  colors: [red, green, blue, yellow]
+  # 30x30x60 mm, lying on the table on a 60 mm side (user, 2026-09-25). The long side is x in the block frame.
+  size: [0.06, 0.03, 0.03]          # length, width, height
+  mass: 0.05
+  friction: 1.0
+  # Fallback albedo when no texture is built (textures.py writes assets/<color>_*.png and overrides these).
+  rgba:
+    red:    [0.72, 0.13, 0.11, 1.0]
+    green:  [0.10, 0.36, 0.22, 1.0]
+    blue:   [0.13, 0.40, 0.78, 1.0]
+    yellow: [0.93, 0.80, 0.18, 1.0]
+
+sheet:
+  size: [0.279, 0.216]              # US Letter, portrait (x = away from the robot); the robot base stands on its near part
+  offset: [0.0, 0.0]                # sheet centre in the world frame (it is the origin by definition)
+  rgba: [0.86, 0.87, 0.88, 1.0]
+
+table:
+  rgba: [0.40, 0.24, 0.14, 1.0]
+
+camera:
+  # Arm camera at the home/observation pose: median of the poses fit_camera.py fitted to the logged real frames
+  # (known block and sheet sizes fix the scale; one shared fovy). calibrate.py (checkerboard) is an alternative.
+  pos: [-0.1271, 0.0212, 0.2699]
+  lookat: [0.0387, 0.0115, 0.0]
+  fovy: 36.86
+  roll: 2.46
+  # Home poses fitted to real frames (fit_camera.py); each episode samples one, then adds jitter_episode.
+  poses:
+    - {pos: [-0.1702, 0.0157, 0.2661], lookat: [0.0, 0.0051, 0.0], roll: 2.63}
+    - {pos: [-0.1183, 0.0327, 0.275], lookat: [0.0338, 0.0133, 0.0], roll: 5.45}
+    - {pos: [-0.1306, 0.0247, 0.2619], lookat: [0.0326, 0.0112, 0.0], roll: 3.21}
+    - {pos: [-0.1754, 0.0266, 0.2467], lookat: [0.0238, 0.0143, -0.0], roll: 2.62}
+    - {pos: [-0.1365, 0.0114, 0.2668], lookat: [0.0355, 0.0121, 0.0], roll: -0.93}
+    - {pos: [-0.1395, 0.0189, 0.274], lookat: [0.0538, 0.0127, 0.0], roll: 1.11}
+    - {pos: [-0.1169, 0.0211, 0.2719], lookat: [0.0413, 0.0133, 0.0], roll: 2.27}
+    - {pos: [-0.1236, 0.021, 0.2694], lookat: [0.0394, 0.0132, 0.0], roll: 2.11}
+    - {pos: [-0.1215, 0.0214, 0.2703], lookat: [0.0393, 0.0123, 0.0], roll: 2.33}
+    - {pos: [-0.1158, 0.0221, 0.2713], lookat: [0.041, 0.0124, 0.0], roll: 2.58}
+  width: 640
+  height: 480
+  # Optional calibrated pinhole (calibrate.py). When set, fovy is ignored.
+  intrinsics: null                  # {fx, fy, cx, cy}
+  # On top of the sampled fitted pose (the poses already cover the session-to-session spread): per episode, then per frame.
+  jitter_episode: {pos: 0.005, lookat: 0.006, fovy: 0.0, roll: 1.0}
+  jitter_frame:   {pos: 0.0015, lookat: 0.002, fovy: 0.0, roll: 0.2}
+
+placement:
+  region_margin: 0.015              # keep block footprints this far inside the sheet
+  image_margin_px: 8                # every block fully in view, this far from the image border
+  yaw_std: 20.0                     # initial yaw around the long-axis-along-x pose (real frames: up to ~40 deg)
+  yaw_max: 50.0
+  # Tag end face toward the camera; the rest face away. Real frames: under half of the blocks show their tag.
+  p_tag_toward_camera: 0.4
+  side_distance: [0.06, 0.09]       # left/right of: centre-to-centre along y
+  side_x_std: 0.008
+  side_yaw_std: 8.0
+  stack_xy_std: 0.004
+  stack_yaw_std: 6.0
+  min_gap: 0.008                    # footprints of blocks on the table stay this far apart
+  p_fail: 0.0                       # optional real-robot style misplacement (0 = the WM learns the intended effect)
+  fail_offset: [0.015, 0.03]
+
+physics:
+  timestep: 0.002
+  settle_steps: 250
+
+render:
+  lights:
+    dir_elevation: [60.0, 88.0]
+    dir_azimuth: [-180.0, 180.0]
+    diffuse: [0.25, 0.45]           # the lab light is diffuse: soft, faint shadows
+    ambient: [0.45, 0.60]
+    shadows: true
+
+augment:
+  brightness: [-0.08, 0.08]
+  contrast: [0.85, 1.12]
+  saturation: [0.75, 1.1]
+  gamma: [0.85, 1.15]
+  wb_gain: [0.92, 1.08]             # per channel
+  blur_sigma: [0.0, 1.1]
+  noise_std: [0.005, 0.02]
+  vignette: [0.0, 0.25]
+  jpeg_quality: [55, 92]
+
+episodes:
+  n_blocks: [2, 4]
+  p_n_blocks_4: 0.6                 # the eval scenes always have all four blocks
+  prelude_steps: [0, 2]
+  p_prelude: 0.35
+  random_walk_frac: 0.2
+  # Goal-directed episodes by family (eval = the real eval tasks 1a-1d, 2a/2b, 3a verbatim; the others paraphrase them).
+  family_weights: {eval: 0.3, bin: 0.3, side: 0.17, stack: 0.15, compound: 0.08}
+  random_walk_steps: [1, 3]

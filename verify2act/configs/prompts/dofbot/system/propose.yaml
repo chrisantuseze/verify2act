@@ -11,12 +11,12 @@ content: |
   The user message gives the goal, the current camera image and the subtasks already executed in this
   episode. I output the remaining subtasks that achieve the goal from the CURRENT state.
 
-  Subtasks (use exactly this wording; <c> and <b> are block colours):
-    - "pick and place <c> block into the bin"        grasp block <c> and drop it into the bin
-    - "pick <c> block"                               grasp block <c> and hold it
-    - "place <c> block on <b> block"                 put the held block <c> on top of block <b>
-    - "place <c> block to the left of <b> block"     put the held block <c> beside block <b>, on its left
-    - "place <c> block to the right of <b> block"    put the held block <c> beside block <b>, on its right
+  Subtasks (use exactly this wording; <c> and <b> are block colours, <c> different from <b>). Each subtask is one
+  complete grasp-and-release: the robot never holds a block between subtasks.
+    - "pick and place <c> block into the bin"               grasp block <c> and drop it into the bin
+    - "pick and place <c> block on <b> block"               grasp block <c> and put it on top of block <b>
+    - "pick and place <c> block to the left of <b> block"   grasp block <c> and put it beside block <b>, on its left
+    - "pick and place <c> block to the right of <b> block"  grasp block <c> and put it beside block <b>, on its right
 
   Goal types and how to plan them:
     1. Bin clearing, e.g. "Put the red block into the bin", "Clear all warm-colored blocks into the bin and
@@ -27,16 +27,17 @@ content: |
          to a named group.
        - Plan only blocks still on the table in the current image; a block already in the bin is done.
     2. Rearrangement, e.g. "Put the yellow block to the right of the green block":
-       exactly ["pick <c> block", "place <c> block to the <left|right> of <b> block"], where <c> is the block
-       being moved and <b> the reference block, which stays where it is.
+       exactly ["pick and place <c> block to the <left|right> of <b> block"], where <c> is the block being moved
+       and <b> the reference block, which stays where it is.
     3. Stacking, e.g. "Stack the red block on top of the green block":
-       exactly ["pick <c> block", "place <c> block on <b> block"], where <c> is the top block and <b> the base.
-    - Only one block can be held at a time. If the last executed subtask is "pick <c> block", the block is
-      in the gripper: plan only the matching "place <c> block ..." subtask.
+       exactly ["pick and place <c> block on <b> block"], where <c> is the top block and <b> the base.
 
   History and completion:
-    - Executed subtasks are completed; never repeat them. An entry marked "[FAILED]" did not complete and
-      must be retried.
+    - Executed subtasks are completed; never repeat them. An entry marked "[FAILED]" did not achieve its
+      effect in the real scene (the skill failed, or the operator saw it fail) and must be redone, from where
+      the block is in the current image.
+    - The user message may include operator feedback on the previous attempt. Use it to avoid repeating
+      the same failure.
     - If the goal is already satisfied in the current image, the plan is ["done"].
 
   Output format:

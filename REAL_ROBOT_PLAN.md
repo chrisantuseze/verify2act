@@ -41,21 +41,35 @@ No edits were made to `verify2act/pipeline/`. `roslibpy` was pip-installed into 
 
 | op | request | reply |
 |---|---|---|
-| `ping` | – | `{}` |
+| `ping` | – | `wm_mode, theta_c, theta_p, max_replans, max_requery` (never takes the model lock) |
 | `reset` | `session` | `{}` (restarts that session's planning-call counter) |
-| `plan` | `session, image` (b64 JPEG of a BGR cv2 frame), `goal, history?` (executed subtask strings, as the Jetson loop records them), `obj_labels?` (e.g. `["red","blue"]`, default all 4), `horizon?` | `plan` [subtask str], `accepted`, `score` (goal head, null if not reached), `all_scores` [[tc, prox]], `failed_step`, `replan_attempts`, `reflection_analyses`, `critic_decisions`, `invalid_steps`, `done`, `planning_call`, `elapsed_s` |
+| `plan` | `session, image` (b64 JPEG of a BGR cv2 frame), `goal, history?` (executed subtask strings, as the Jetson loop records them; `[FAILED] ` = skill failed or the operator saw it fail), `obj_labels?` (e.g. `["red","blue"]`, default all 4), `horizon?`, `feedback?` (operator note on the previous attempt, re-plan calls only; goes into every propose/reflect prompt of the call) | `plan` [subtask str], `accepted`, `score` (goal head, null if not reached), `all_scores` [[tc, prox]], `failed_step`, `replan_attempts`, `reflection_analyses`, `critic_decisions`, `invalid_steps`, `done`, `planning_call`, `elapsed_s` |
 
-When the VLM answers `["done"]`, the goal head judges the real frame (there are no imagination steps). The reply is then `done: true` with an **empty** `plan`, which is the Jetson loop's existing "nothing left to do" signal.
+When the VLM answers `["done"]`, the goal head judges the real frame (there are no imagination steps). The reply is then `done: true` with an **empty** `plan`. `done` is the VLM's claim only; the goal head's verdict is in `accepted`. Since 09-26 the Jetson does not end the episode on `done`. The operator answers y/n once per executed plan, like `is_done()` in the sim, and unverified plans are executed anyway, as in `run_episode`. On "n" the operator marks the failed horizons (→ `[FAILED]` in `history`) and can add a note (→ `feedback`), and the Jetson re-plans. `--max_steps` is 2, so an episode makes at most 2 `plan` calls.
+
+### Variants (`--wm-mode`, 2026-09-26, `PLAN_SERVER_VARIANTS.md`)
+One server process = one variant, built like `pipeline/inference_calvin.py`. Every `plan` reply carries `wm_mode`. Logs go to
+`verify2act/output/real/<wm_mode>/<session>/`.
+- `v2a_wm` (default): as before.
+- `rla_wm`: `RLAWorldModel`, `rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt`, with the same v2a encoder, decoder and critic (as the sim's CALVIN rla_wm run).
+- `diffusion_wm` (the sim's `diffusion`, ReflectVLM): InstructPix2Pix + `diffusion_wm/calvin/wm/best/unet_lora` + VAE decoder
+  `diffusion_wm/calvin/decoder/checkpoint-5000`. **No critic**, as in the sim: 1 propose → imagine → always 1 reflection → accepted.
+  `score` / `all_scores` are null / empty (the sim's dummy 1.0 scores are not sent).
+- `vlm_only`: 1 `propose`, `accepted: true`, no WM/critic loaded, no warm-up.
+- The thresholds are the same for all variants (θ_c 0.5, θ_p 0.05). Note: the sim's CALVIN `rla_wm` command used θ_p 0.2. Pass `--theta-p 0.2` to match it.
 
 **Jetson-side reply timeout: `protocol.PLAN_REPLY_TIMEOUT_S = 600 s`** for `plan` (5 s for `ping`). Measured after warm-up, one 3-step
 imagine + critic pass takes about 0.2–0.4 s, so a `plan` call is dominated by Gemini: at most 1 + max_replans = 3 VLM calls, each
 with a 60 s HTTP timeout, plus rate-limit backoff. That is about 3 min normally, and 600 s leaves room for backoffs. The Jetson's
 `ServerLink` currently defaults to 60 s, so that value has to change in the Jetson session.
 
-Subtask vocabulary (validated by `is_valid_subtask`; `invalid_steps` lists any the VLM got wrong):
-`pick and place <c> block into the bin` · `pick <c> block` · `place <c> block on <b> block` ·
-`place <c> block to the left of <b> block` · `place <c> block to the right of <b> block` · `done`.
-The Jetson handles `locate` (before a pick in stack/rearrangement tasks) and `reset`/homing itself.
+Subtask vocabulary (validated by `is_valid_subtask`; `invalid_steps` lists any the VLM got wrong). **Revised 2026-09-25**
+(`PLAN_SERVER_VOCAB_CHANGE.md`): one subtask = one WM horizon = one complete pick-and-place that ends with nothing held,
+because the arm cannot hold a block through a `plan` call:
+`pick and place <c> block into the bin` · `pick and place <c> block on <b> block` ·
+`pick and place <c> block to the left of <b> block` · `pick and place <c> block to the right of <b> block` · `done`,
+with `<c>` ≠ `<b>`. The retired `pick <c> block` / `place <c> block ...` are rejected. The Jetson runs each compound
+subtask as `locate <b>` → `pick <c>` → `place_on|place_at` back to back, and handles `reset`/homing itself.
 
 ### Defaults (`server.py --help`)
 - Checkpoints (CALVIN **wider**):
@@ -68,7 +82,9 @@ The Jetson handles `locate` (before a pick in stack/rearrangement tasks) and `re
 - θ_c 0.5 / θ_p 0.05 are the values every sim v2a_wm run in `commands/v2a_wm.sh` uses (the user confirmed: use the sim's). The handoff's stub value θ_p 0.6 would reject everything with this critic.
 
 ### Verified so far
-- `python -m pytest verify2act/robot/test_robot_server.py -q` → 15 passed. Covers: accept path; reflect→replan; budget exhausted after
+- `python -m pytest verify2act/robot/test_robot_server.py -q` → 22 passed (09-26: + vlm_only, diffusion_wm, ping settings, per-mode args, feedback).
+- 09-26, on `lear` (192.168.0.116, no GPU): the `rla_wm` CALVIN checkpoint loads into `RLAWorldModel` (strict) on CPU. `diffusion_wm` and a
+  GPU run of each variant are still unchecked; do them on the lab GPU PC (.113). Covers: accept path; reflect→replan; budget exhausted after
   exactly 2 reflections; `done` → verified empty plan; best candidate chosen; request round trip; session counter; vocabulary;
   prompt building (checks the eval-task rules are in the system prompt); the expected plan for each eval task is in vocabulary.
 - Real checkpoints load, and startup runs a warm-up pass that loads the critic's lazy DINOv2-L (load + warm-up ≈ 110 s). After that,
@@ -78,9 +94,8 @@ The Jetson handles `locate` (before a pick in stack/rearrangement tasks) and `re
 These follow `dofbot-controller` `origin/main:verify2act/EVAL_TASKS.md` and its stub planner `v2a_vlm_planner.py`:
 - **Family 1, bin clearing (task1a–d):** one `pick and place <c> block into the bin` per block. Warm = red/yellow, cool = green/blue.
   Never move a leave/keep/except block. Plan only blocks still on the table.
-- **Family 2, rearrangement (task2a/b):** `pick <c> block` → `place <c> block to the <side> of <b> block`.
-- **Family 3, stacking (task3a, deferred):** `pick <c> block` → `place <c> block on <b> block`.
-- If the last history entry is `pick <c> block`, the block is held, so only the matching place is planned.
+- **Family 2, rearrangement (task2a/b):** the single subtask `pick and place <c> block to the <side> of <b> block`.
+- **Family 3, stacking (task3a, deferred):** the single subtask `pick and place <c> block on <b> block`.
 - Goal already met → `["done"]`.
 - The prompt's few-shot goals deliberately use **different colours** from the eval goals, so the eval tasks are not given away.
 
@@ -127,5 +142,5 @@ CALVIN-wider and Nut-Assembly WM + critic were compared on the real frame, plus 
   - The Nut decoder keeps the real layout (sheet, block positions), but maps the colours into the robosuite palette.
 - Recommendation given: CALVIN (coloured blocks + natural-language goals are the closest match). Off the shelf, neither critic
   separates good plans from bad on real frames, so expect every plan to come back as not accepted until at least the critic heads are adapted.
-- Server note: the Nut WM on disk has only `latent_dynamics_best.pt` (a full checkpoint). `LatentWorldModel` expects the `_weights`
-  file, so `model_state_dict` would need extracting first.
+- Server note: the Nut WM now also has `wm_causal/ckpt/latent_dynamics_best_weights.pt`, so the server can load it through
+  `--latent-wm-ckpt` / `--encoder-ckpt` / `--wm-decoder-dir` / `--critic-ckpt` with no code change.

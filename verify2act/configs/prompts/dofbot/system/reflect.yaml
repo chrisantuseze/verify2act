@@ -11,22 +11,22 @@ content: |
   critic rejected it: either one imagined step was temporally inconsistent with the state before it, or
   the final imagined state does not match the goal. I diagnose why and output a revised plan.
 
-  I am given the goal, the current real image, the executed-subtask history, the rejected plan, the
-  critic's diagnosis (failed step and scores) and the world model's imagined scene at the failure.
+  I am given the goal, the current real image, the executed-subtask history (with any operator feedback on
+  the previous attempt), the rejected plan, the critic's diagnosis (failed step and scores) and the world
+  model's imagined scene at the failure.
 
   Allowed subtasks (exact wording):
-    "pick and place <c> block into the bin", "pick <c> block", "place <c> block on <b> block",
-    "place <c> block to the left of <b> block", "place <c> block to the right of <b> block"
+    "pick and place <c> block into the bin", "pick and place <c> block on <b> block",
+    "pick and place <c> block to the left of <b> block", "pick and place <c> block to the right of <b> block"
 
   Check the plan against the goal:
     - Bin clearing: exactly the blocks the goal sends to the bin (warm = red, yellow; cool = green, blue),
       minus any block the goal says to leave, keep or except, minus blocks no longer on the table.
       A plan that bins a block that must stay, or misses one, is wrong.
-    - Rearrangement: ["pick <c> block", "place <c> block to the <side> of <b> block"]: right block moved,
-      right reference, right side.
-    - Stacking: ["pick <c> block", "place <c> block on <b> block"]: top and base not swapped.
-    - Never repeat completed history entries. If the last executed subtask is "pick <c> block", plan only
-      the matching place.
+    - Rearrangement: ["pick and place <c> block to the <side> of <b> block"]: right block moved, right reference,
+      right side.
+    - Stacking: ["pick and place <c> block on <b> block"]: top and base not swapped.
+    - Never repeat completed history entries.
     - If the plan already matches the goal, the failure is probably in the imagination, not the plan:
       output the same plan (or the same bin subtasks in a different order); it will be re-evaluated.
     - If the goal is already satisfied in the current image, the revised plan is ["done"].

@@ -7,7 +7,7 @@ skill execution; this process only runs the models.
 
     Jetson:  roscore, arm_driver, camera, ..., roslaunch rosbridge_server rosbridge_websocket.launch
     Lab PC:  conda activate verify2act
-             python -m verify2act.robot.server --jetson-ip 192.168.0.8
+             python -m verify2act.robot.server --jetson-ip 192.168.0.8 [--wm-mode v2a_wm|rla_wm|diffusion_wm|vlm_only]
 
 Offline check without the Jetson (loads the models, plans once on an image file):
     python -m verify2act.robot.server --offline-image frame.jpg --goal "Put the blue block and the yellow block into the bin"
@@ -89,7 +89,7 @@ def handle_request(backend, raw: str, lock: threading.Lock):
     t0 = time.time()
     try:
         if op == "ping":
-            out = {}
+            out = dict(getattr(backend, "settings", {}))   # never takes the model lock
         else:
             with lock:
                 out = dispatch(backend, op, req)
@@ -113,8 +113,21 @@ def dispatch(backend, op: str, r: dict) -> dict:
             history=r.get("history"),
             obj_labels=r.get("obj_labels"),
             horizon=r.get("horizon"),
+            feedback=r.get("feedback") or "",
         )
     raise ValueError(f"unknown op '{op}'")
+
+
+# Per-variant checkpoints (CALVIN, as in commands/v2a_wm.sh), used when the flag is not given.
+_V2A_CALVIN = "verify2act/output/v2a_wm/calvin"
+MODE_DEFAULTS = {
+    "v2a_wm": {"latent_wm_ckpt": f"{_V2A_CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt",
+               "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
+    "rla_wm": {"latent_wm_ckpt": "verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt",
+               "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
+    "diffusion_wm": {"wm_decoder_dir": "verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000"},
+    "vlm_only": {},
+}
 
 
 def parse_args(argv=None):
@@ -125,18 +138,31 @@ def parse_args(argv=None):
     ap.add_argument("--offline-image", default=None, help="skip rosbridge: plan once on this image and exit")
     ap.add_argument("--goal", default="Put the blue block and the yellow block into the bin",
                     help="goal for --offline-image")
-    ap.add_argument("--output-dir", default="verify2act/output/real", help="per-session imagination logs")
+    ap.add_argument("--output-dir", default=None,
+                    help="per-session imagination logs (default: verify2act/output/real/<wm-mode>)")
 
+    ap.add_argument("--wm-mode", choices=list(MODE_DEFAULTS), default="v2a_wm",
+                    help="verification variant (one per server process); diffusion_wm is the sim's 'diffusion' mode")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--critic-ckpt", default="verify2act/output/contrastive/calvin/best_contrastive_critic.pt")
-    ap.add_argument("--latent-wm-ckpt",
-                    default="verify2act/output/v2a_wm/calvin/wm/ckpt/latent_dynamics_best_weights.pt")
-    ap.add_argument("--encoder-ckpt", default="verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt")
-    ap.add_argument("--wm-decoder-dir", default="verify2act/output/v2a_wm/calvin/decoder")
+    ap.add_argument("--latent-wm-ckpt", default=None, help="v2a_wm / rla_wm dynamics (default: per --wm-mode)")
+    ap.add_argument("--encoder-ckpt", default=f"{_V2A_CALVIN}/encoder/ckpt/delta_encoder_best.pt",
+                    help="v2a_wm / rla_wm delta encoder (the sim's rla_wm run uses the v2a_wm one too)")
+    ap.add_argument("--wm-decoder-dir", default=None,
+                    help="FeatureDecoder dir (v2a_wm / rla_wm) or VAE decoder dir (diffusion_wm); default: per --wm-mode")
     ap.add_argument("--history-len", type=int, default=3)
     ap.add_argument("--token-dim", type=int, default=128)
     ap.add_argument("--num-latent-tokens", type=int, default=32)
     ap.add_argument("--action-conditioning", choices=["cross_attn", "adaln"], default="cross_attn")
+    # diffusion_wm (InstructPix2Pix + LoRA), defaults as in inference_calvin.py
+    ap.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
+    ap.add_argument("--wm-adapter-dir", default="verify2act/output/diffusion_wm/calvin/wm/best/unet_lora")
+    ap.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
+    ap.add_argument("--vae-subfolder", default="vae")
+    ap.add_argument("--wm-steps", type=int, default=30)
+    ap.add_argument("--wm-image-guidance", type=float, default=2.8)
+    ap.add_argument("--wm-text-guidance", type=float, default=7.5)
+    ap.add_argument("--wm-seed", type=int, default=None)
 
     ap.add_argument("--prompt-config", default="verify2act/configs/prompts/dofbot/planner.yaml")
     ap.add_argument("--planner-model", default="gemini-2.5-flash", help="the model the sim runs use")
@@ -153,7 +179,13 @@ def parse_args(argv=None):
     ap.add_argument("--theta-p", type=float, default=0.05, help="goal-head threshold (as in the sim v2a_wm runs)")
     ap.add_argument("--max-retries", type=int, default=2, help="WM re-samples on a requery")
     ap.add_argument("--max-replans", type=int, default=2, help="reflect -> replan budget per planning call (sim default)")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.output_dir is None:
+        args.output_dir = f"verify2act/output/real/{args.wm_mode}"
+    for key, value in MODE_DEFAULTS[args.wm_mode].items():
+        if getattr(args, key) is None:
+            setattr(args, key, value)
+    return args
 
 
 def main(argv=None):

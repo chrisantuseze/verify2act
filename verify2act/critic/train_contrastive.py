@@ -358,6 +358,16 @@ def main():
             image_size=args.image_size, mode0_prob=args.mode0_prob,
             cached_dino_dir=cached_dino_dir,
         )
+    elif args.dataset_type == "dofbot":
+        from verify2act.data_loader import build_dofbot_contrastive_datasets
+        train_ds, val_ds = build_dofbot_contrastive_datasets(
+            dataset_dir=args.dataset_dir, transitions_file=args.transitions_file,
+            val_frac=args.val_frac, seed=args.seed, image_size=args.image_size,
+            mode0_prob=args.mode0_prob, cached_dino_dir=cached_dino_dir,
+        )
+        accelerator.print(
+            f"  train: {len(train_ds._positive_anchors)} goal episodes, {len(train_ds._tc_rows)} TC rows"
+        )
     else:
         train_ds, val_ds = build_contrastive_datasets(
             dataset_dir=args.dataset_dir, transitions_file=args.transitions_file,
@@ -394,6 +404,13 @@ def main():
     best_val   = -1.0
     start_epoch = 0
     history    = []
+
+    # Fine-tune from another dataset's critic: weights only (fresh epochs, optimizer and best score).
+    if args.init_from and not args.resume_from:
+        ckpt = torch.load(args.init_from, map_location=device)
+        state = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+        model.load_state_dict({k: v for k, v in state.items() if not k.startswith("_clip_model.")})
+        accelerator.print(f"Initialised weights from {args.init_from}")
 
     # Resume
     if args.resume_from:
@@ -564,7 +581,8 @@ def parse_args():
     p.add_argument("--val-frac",         type=float, default=0.1)
     p.add_argument("--val-samples",      type=int,   default=500)
     p.add_argument("--dataset-type",     type=str,   default="robosuite",
-                   choices=["robosuite", "calvin"])
+                   choices=["robosuite", "calvin", "dofbot"],
+                   help="dofbot = twin dataset (verify2act/twin): per-row lang_goal, same-episode hard negatives")
     p.add_argument("--cached-dino-dir",  type=str,   default=None,
                    help="Path to pre-extracted DINOv2 feature cache")
 
@@ -597,6 +615,8 @@ def parse_args():
     # Output / misc
     p.add_argument("--output-dir",      type=str, default="verify2act/output/contrastive")
     p.add_argument("--resume-from",     type=str, default=None)
+    p.add_argument("--init-from",       type=str, default=None,
+                   help="weights-only init for fine-tuning on a new dataset (ignored with --resume-from)")
     p.add_argument("--seed",            type=int, default=42)
     p.add_argument("--mixed-precision", type=str, default="bf16", choices=["no", "fp16", "bf16"])
     p.add_argument("--tensorboard",     action="store_true", default=False,

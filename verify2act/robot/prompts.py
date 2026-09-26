@@ -16,21 +16,20 @@ from verify2act.pipeline.prompt_utils import PromptManager, _img_block, _text_bl
 COLORS = ("red", "green", "blue", "yellow")
 _C = "(red|green|blue|yellow)"
 
-# The subtask vocabulary the Jetson skills execute (lang_color_grasp.py via parse_step()).
+# The subtask vocabulary the Jetson skills execute (dofbot-controller verify2act/remote/planner_client.py).
+# One subtask = one WM horizon = one complete pick-and-place that ends with nothing held.
 SUBTASK_PATTERNS = (
     re.compile(rf"^pick and place {_C} block into the bin$"),
-    re.compile(rf"^pick {_C} block$"),
-    re.compile(rf"^place {_C} block on {_C} block$"),
-    re.compile(rf"^place {_C} block to the (left|right) of {_C} block$"),
+    re.compile(rf"^pick and place {_C} block on {_C} block$"),
+    re.compile(rf"^pick and place {_C} block to the (left|right) of {_C} block$"),
 )
 DONE = "done"
 
 SUBTASK_TEMPLATES = (
     "pick and place <c> block into the bin",
-    "pick <c> block",
-    "place <c> block on <b> block",
-    "place <c> block to the left of <b> block",
-    "place <c> block to the right of <b> block",
+    "pick and place <c> block on <b> block",
+    "pick and place <c> block to the left of <b> block",
+    "pick and place <c> block to the right of <b> block",
 )
 
 
@@ -42,7 +41,15 @@ def step_text(step: Any) -> str:
 
 
 def is_valid_subtask(text: str) -> bool:
-    return text == DONE or any(p.match(text) for p in SUBTASK_PATTERNS)
+    """In the vocabulary, and the moved block differs from the reference block."""
+    if text == DONE:
+        return True
+    for p in SUBTASK_PATTERNS:
+        m = p.match(text)
+        if m:
+            colours = [g for g in m.groups() if g in COLORS]
+            return len(set(colours)) == len(colours)
+    return False
 
 
 def expand_subtask_plan(plan: List[Any]) -> List[Tuple[str, str]]:
@@ -59,8 +66,23 @@ def _history_str(history: List[Any]) -> str:
                      for i, a in enumerate(history[-10:]))
 
 
+def _feedback_str(feedback: str) -> str:
+    """The operator's note on the previous attempt (re-plan calls only); empty -> no block at all."""
+    feedback = (feedback or "").strip()
+    if not feedback:
+        return ""
+    return ("### Operator feedback on the previous attempt\n"
+            f"{feedback}\n"
+            "(Horizons marked [FAILED] above did not achieve their effect in the real scene and must be redone.)\n\n")
+
+
 class RobotPromptManager(PromptManager):
-    """User messages in the robot's subtask vocabulary."""
+    """User messages in the robot's subtask vocabulary.
+
+    ``feedback`` is the operator's note for the current ``plan`` request. The backend sets it for the duration of the
+    call, so the unchanged ``BeamSearchPlanner`` / ``VLMPlanner`` carry it into every propose and reflect prompt."""
+
+    feedback: str = ""
 
     def build_propose_messages(
         self,
@@ -88,8 +110,10 @@ class RobotPromptManager(PromptManager):
             _img_block(current_image_np),
             _text_block(
                 "### Executed subtasks (history)\n"
-                "(entries marked [FAILED] did not complete; the block is still on the table and must be retried)\n"
+                "(entries marked [FAILED] did not achieve their effect in the real scene and must be redone; plan from where "
+                "the blocks are in the current image)\n"
                 f"{_history_str(history)}\n\n"
+                f"{_feedback_str(self.feedback)}"
                 f"### Planning request\n{plan_req}\n"
                 f"Blocks in the scene: {', '.join(obj_labels)}\n"
                 f"Allowed subtasks (exact wording; <c>, <b> are block colours): {'; '.join(SUBTASK_TEMPLATES)}\n"
@@ -122,6 +146,7 @@ class RobotPromptManager(PromptManager):
         plan_str = "\n".join(f"  step {i}: {step_text(a)}" for i, a in enumerate(full_plan))
         scores_str = ", ".join(f"step {i}: {s:.2f}" for i, (s, _) in enumerate(ctx["all_scores"])) or "(none)"
         failed_hl = ctx.get("failed_highlevel_action")
+        feedback = _feedback_str(self.feedback).rstrip()
 
         msgs.append(format_openai(role="user", content=[
             _text_block("### 1. Task context"),
@@ -130,8 +155,9 @@ class RobotPromptManager(PromptManager):
             _img_block(current_image_np),
             _text_block(
                 "### 2. Executed subtasks (history)\n"
-                "(entries marked [FAILED] did not complete; the block is still on the table)\n"
+                "(entries marked [FAILED] did not achieve their effect in the real scene and must be redone)\n"
                 f"{_history_str(history)}"
+                + (f"\n\n{feedback}" if feedback else "")
             ),
             _text_block(f"### 3. Proposed plan\n{plan_str}"),
             _text_block(

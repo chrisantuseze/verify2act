@@ -148,12 +148,13 @@ def test_request_roundtrip_and_session_counter():
     img_b64 = encode_image(IMG)
     assert decode_image_rgb(img_b64).shape == IMG.shape
 
-    assert handle_request(backend, json.dumps({"id": "a", "op": "ping"}), lock) == {"id": "a", "ok": True}
+    assert handle_request(backend, json.dumps({"id": "a", "op": "ping"}), lock) == {
+        "id": "a", "ok": True, "wm_mode": "v2a_wm", "theta_c": 0.5, "theta_p": 0.05, "max_replans": 2, "max_requery": 2}
     req = {"id": "b", "op": "plan", "session": "ep0", "image": img_b64, "goal": GOAL,
            "history": ["[FAILED] pick and place blue block into the bin"], "obj_labels": ["blue", "yellow"]}
     r1 = handle_request(backend, json.dumps(req), lock)
     r2 = handle_request(backend, json.dumps(req), lock)
-    assert r1["ok"] and r1["plan"] == [GOOD] and (r1["planning_call"], r2["planning_call"]) == (0, 1)
+    assert r1["ok"] and r1["plan"] == [GOOD] and r1["wm_mode"] == "v2a_wm" and (r1["planning_call"], r2["planning_call"]) == (0, 1)
     assert handle_request(backend, json.dumps({"id": "c", "op": "reset", "session": "ep0"}), lock)["ok"]
     assert handle_request(backend, json.dumps(req), lock)["planning_call"] == 0
 
@@ -162,13 +163,137 @@ def test_request_roundtrip_and_session_counter():
     assert handle_request(backend, "not json", lock) is None
 
 
+class FakeProposeVLM:
+    """VLMPlanner stand-in for vlm_only: propose() goes through _call, which the backend counts."""
+
+    def __init__(self, plan):
+        self.plan = plan
+
+    def _call(self, messages, temperature=None):
+        return json.dumps({"plan": self.plan})
+
+    def propose(self, **kw):
+        return json.loads(self._call([]))["plan"]
+
+
+def test_vlm_only_is_one_unverified_propose():
+    settings = {"theta_c": 0.5, "theta_p": 0.05, "max_replans": 2, "max_requery": 2}
+    backend = Verify2ActBackend(None, wm_mode="vlm_only", vlm=FakeProposeVLM([GOOD, GOOD2]), settings=settings)
+    lock = threading.Lock()
+    ping = handle_request(backend, json.dumps({"id": "p", "op": "ping"}), lock)
+    assert ping == {"id": "p", "ok": True, "wm_mode": "vlm_only", **settings}
+    out = handle_request(backend, json.dumps({"id": "q", "op": "plan", "image": encode_image(IMG), "goal": GOAL}), lock)
+    assert out["ok"] and out["plan"] == [GOOD, GOOD2] and out["wm_mode"] == "vlm_only"
+    assert out["accepted"] is True and out["replan_attempts"] == 0 and out["evaluations"] == []
+    assert out["all_scores"] == [] and out["score"] is None and out["failed_step"] is None
+    assert out["stats"] == {"vlm_calls": 1, "plans_evaluated": 0, "requeries": 0, "temporal_rejections": 0,
+                            "goal_rejections": 0}
+    done = Verify2ActBackend(None, wm_mode="vlm_only", vlm=FakeProposeVLM(["done"]), settings=settings)
+    out = done.plan("s", IMG, GOAL)
+    assert out["done"] and out["plan"] == [] and out["accepted"]
+    with pytest.raises(ValueError):
+        Verify2ActBackend(None, wm_mode="v2a_wm", vlm=FakeProposeVLM([GOOD]), settings=settings)
+
+
+class FakeImageWM:
+    def imagine(self, current_image_np, action_text):
+        return current_image_np
+
+
+class FakeDiffusionVLM:
+    def __init__(self):
+        self.reflect_calls = 0
+
+    def propose(self, **kw):
+        return [GOOD]
+
+    def reflect(self, **kw):
+        self.reflect_calls += 1
+        return {"analysis": "looks right", "revised_plan": [GOOD, GOOD2]}
+
+
+def test_diffusion_wm_reflects_once_without_critic():
+    vlm = FakeDiffusionVLM()
+    bp = BeamSearchPlanner(vlm_planner=vlm, world_model=FakeImageWM(), critic=None, beam_width=3, goal_threshold=0.05,
+                           plan_expander=expand_subtask_plan, temporal_threshold=0.5, max_retries=2, max_replans=2,
+                           wm_mode="diffusion")
+    backend = Verify2ActBackend(bp, wm_mode="diffusion_wm")
+    out = backend.plan("s", IMG, GOAL)
+    # The sim's ReflectVLM path: one propose, the rollout is always reflected on once, the revision is accepted.
+    assert out["accepted"] and out["plan"] == [GOOD, GOOD2] and vlm.reflect_calls == 1
+    assert out["wm_mode"] == "diffusion_wm" and out["score"] is None and out["all_scores"] == []
+    assert out["stats"]["plans_evaluated"] == 2 and out["stats"]["temporal_rejections"] == 0
+    assert backend.settings["wm_mode"] == "diffusion_wm"
+
+
+def test_server_args_resolve_per_mode_checkpoints():
+    from verify2act.robot.server import parse_args
+    rla = parse_args(["--wm-mode", "rla_wm"])
+    assert "rla_wm/calvin/wm" in rla.latent_wm_ckpt and rla.wm_decoder_dir.endswith("v2a_wm/calvin/decoder")
+    assert rla.output_dir.endswith("real/rla_wm")
+    diff = parse_args(["--wm-mode", "diffusion_wm"])
+    assert diff.wm_decoder_dir.endswith("diffusion_wm/calvin/decoder/checkpoint-5000")
+    assert parse_args(["--latent-wm-ckpt", "x.pt"]).latent_wm_ckpt == "x.pt"
+
+
+FEEDBACK = "yellow bounced off the bin rim"
+
+
+def _user_text(msgs):
+    return "\n".join(b["text"] for b in msgs[-1]["content"] if b["type"] == "text")
+
+
+def test_feedback_block_only_when_set():
+    pm = RobotPromptManager.from_yaml("verify2act/configs/prompts/dofbot/planner.yaml")
+    hist = ["[FAILED] " + GOOD2]
+    assert "Operator feedback" not in _user_text(pm.build_propose_messages(IMG, GOAL, hist, ["yellow block"], 4))
+    pm.feedback = FEEDBACK
+    text = _user_text(pm.build_propose_messages(IMG, GOAL, hist, ["yellow block"], 4, num_candidates=3))
+    assert "### Operator feedback on the previous attempt\n" + FEEDBACK in text
+    assert text.index("[FAILED] " + GOOD2) < text.index(FEEDBACK) < text.index("### Planning request")
+    ctx = {"imagined_state": IMG, "all_scores": [(0.1, 0.0)], "failed_step": 0,
+           "failed_action": BAD, "failed_highlevel_action": BAD, "failure_pattern": "temporal"}
+    assert FEEDBACK in _user_text(pm.build_reflect_messages(IMG, GOAL, hist, ["red block"], [BAD], ctx))
+
+
+class PromptRecordingVLM(FakeProposeVLM):
+    """vlm_only VLM that builds the real propose prompt, to check what the VLM would see."""
+
+    def __init__(self, plan):
+        super().__init__(plan)
+        self._pm = RobotPromptManager.from_yaml("verify2act/configs/prompts/dofbot/planner.yaml")
+        self.prompts = []
+
+    def propose(self, **kw):
+        self.prompts.append(_user_text(self._pm.build_propose_messages(
+            kw["current_image_np"], kw["language_goal"], kw["history"], kw["obj_labels"], kw["horizon"])))
+        return super().propose(**kw)
+
+
+def test_feedback_reaches_the_prompt_for_one_call_only(tmp_path):
+    vlm = PromptRecordingVLM([GOOD2])
+    backend = Verify2ActBackend(None, wm_mode="vlm_only", vlm=vlm, output_dir=tmp_path,
+                                settings={"theta_c": 0.5, "theta_p": 0.05, "max_replans": 2, "max_requery": 2})
+    lock = threading.Lock()
+    req = {"id": "f", "op": "plan", "session": "ep", "image": encode_image(IMG), "goal": GOAL,
+           "history": ["[FAILED] " + GOOD2], "feedback": FEEDBACK}
+    assert handle_request(backend, json.dumps(req), lock)["ok"]
+    assert FEEDBACK in vlm.prompts[-1] and vlm._pm.feedback == ""
+    saved = json.loads((tmp_path / "ep" / "imagination_logs" / "planning_call_00" / "request.json").read_text())
+    assert saved["feedback"] == FEEDBACK
+    del req["feedback"]
+    assert handle_request(backend, json.dumps(req), lock)["ok"]
+    assert "Operator feedback" not in vlm.prompts[-1]
+
+
 def test_subtask_vocabulary():
-    for s in [GOOD, "pick red block", "place red block on blue block",
-              "place green block to the left of yellow block", "place red block to the right of blue block", "done"]:
+    for s in [GOOD, "pick and place red block on blue block", "pick and place green block to the left of yellow block",
+              "pick and place red block to the right of blue block", "done"]:
         assert is_valid_subtask(s), s
-    for s in ["pick up the red block", "place red block near blue block", "pick and place purple block into the bin"]:
+    for s in ["pick up the red block", "place red block near blue block", "pick and place purple block into the bin",
+              "pick red block", "place red block on blue block", "pick and place red block on red block"]:
         assert not is_valid_subtask(s), s
-    assert step_text({"label": " Pick Red Block. "}) == "pick red block"
+    assert step_text({"label": " Pick and place Red Block into the bin. "}) == "pick and place red block into the bin"
     assert expand_subtask_plan([GOOD, "done"]) == [(GOOD, GOOD)]
 
 
@@ -181,8 +306,8 @@ def test_prompt_messages_build():
     assert '"plans"' in text and "[FAILED] " + GOOD in text and "nut" not in text.lower()
     system = msgs[0]["content"]
     for phrase in ("warm = red, yellow", "cool = green, blue", "leave, keep", "except",
-                   '["pick <c> block", "place <c> block to the <left|right> of <b> block"]',
-                   '["pick <c> block", "place <c> block on <b> block"]', 'the plan is ["done"]'):
+                   '["pick and place <c> block to the <left|right> of <b> block"]',
+                   '["pick and place <c> block on <b> block"]', 'the plan is ["done"]'):
         assert phrase in system, phrase
     ctx = {"imagined_state": IMG, "all_scores": [(0.1, 0.0)], "failed_step": 0,
            "failed_action": BAD, "failed_highlevel_action": BAD, "failure_pattern": "temporal"}
@@ -201,10 +326,9 @@ EVAL_TASK_PLANS = {
     "Put the red block, the green block and the blue block into the bin except the yellow block":
         ["pick and place red block into the bin", "pick and place green block into the bin",
          "pick and place blue block into the bin"],
-    "Put the red block to the left of the blue block": ["pick red block", "place red block to the left of blue block"],
-    "Put the green block to the right of the yellow block":
-        ["pick green block", "place green block to the right of yellow block"],
-    "Stack the blue block on top of the yellow block": ["pick blue block", "place blue block on yellow block"],
+    "Put the red block to the left of the blue block": ["pick and place red block to the left of blue block"],
+    "Put the green block to the right of the yellow block": ["pick and place green block to the right of yellow block"],
+    "Stack the blue block on top of the yellow block": ["pick and place blue block on yellow block"],
 }
 
 

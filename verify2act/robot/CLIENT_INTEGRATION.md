@@ -64,12 +64,12 @@ The server handles **one model request at a time** (single GPU). `ping` is answe
 
 | op | request fields | reply fields (besides `id`, `ok`) | typical time |
 |---|---|---|---|
-| `ping` | – | – | < 0.1 s |
+| `ping` | – | `wm_mode`, `theta_c`, `theta_p`, `max_replans`, `max_requery` (the server's configuration, see "Variants") | < 0.1 s |
 | `reset` | `session` | – (restarts that session's planning-call counter) | < 0.1 s |
-| `plan` | `session`, `image`, `goal`, `history`, `obj_labels`?, `horizon`? | see below | 20–60 s, up to a few minutes |
+| `plan` | `session`, `image`, `goal`, `history`, `obj_labels`?, `horizon`?, `feedback`? | see below | 20–60 s, up to a few minutes |
 
 `plan` request:
-- `session` (str): unique per episode. It names the server's log folder `verify2act/output/real/<session>/`. Use
+- `session` (str): unique per episode. It names the server's log folder `verify2act/output/real/<wm_mode>/<session>/`. Use
   `"<session_name>_<episode_id>"`, e.g. `task1a_20260925_101500_ep_003`, so episodes of different sessions don't overwrite each other.
 - `image` (str): base64 JPEG of the **current** camera frame (640×480 BGR from `RemoteRobotClient.capture_frame()`).
 - `goal` (str): the language goal, e.g. `TASK_PRESETS["task1a"]`.
@@ -77,16 +77,19 @@ The server handles **one model request at a time** (single GPU). `ping` is answe
   This is the list `_execute()` appends to.
 - `obj_labels` (list[str], optional): block colours in the scene (default: all four). `["red","green","blue","yellow"]` matches the eval scene setup.
 - `horizon` (int, optional): max subtasks per plan (server default 4; the longest eval plan is 3).
+- `feedback` (str, optional): on a re-plan, the operator's note on the plan that just ran, e.g. `"yellow bounced off the bin rim"`.
+  Absent or empty on the first call. The server puts it under "Operator feedback on the previous attempt" in every propose and
+  reflect prompt of that call (all variants), and saves it in `request.json`.
 
 `plan` reply:
 
 | field | type | meaning |
 |---|---|---|
 | `plan` | list[str] | subtasks to execute, in the vocabulary of §4. **Empty only when `done` is true.** |
-| `accepted` | bool | the critic accepted this plan (temporal head at every horizon and goal head at the end) within the replan budget |
-| `done` | bool | the VLM judged the goal already satisfied in the current frame, and the goal head checked it on the real frame |
+| `accepted` | bool | the critic accepted this plan (temporal head at every horizon and goal head at the end) within the replan budget. Always true for `vlm_only`, and for `diffusion_wm` after its one reflection (neither has a critic) |
+| `done` | bool | the VLM answered `["done"]` (goal already satisfied in the current frame). It is the VLM's claim only: the goal head also scores the real frame, but its verdict is in `accepted`, not here |
 | `invalid_steps` | list[str] | plan steps outside the vocabulary (should be empty; if not, do not execute) |
-| `score` | float/null | goal-head score of the returned plan (null if the rollout was aborted before the goal head) |
+| `score` | float/null | goal-head score of the returned plan (null if the rollout was aborted before the goal head, and always null for `diffusion_wm` / `vlm_only`) |
 | `all_scores` | [[tc, goal]] | per horizon, for the returned plan: temporal score, and goal score on the last horizon |
 | `failed_step` | int/null | horizon index where the returned plan was rejected |
 | `replan_attempts` | int | reflect → replan cycles used (0–2) |
@@ -94,6 +97,7 @@ The server handles **one model request at a time** (single GPU). `ping` is answe
 | `critic_decisions` | list[str] | human-readable critic log for the returned plan |
 | `evaluations` | list[obj] | **every** plan evaluated in this call: `{plan, tc[], goal, accepted, temporal_rejected, goal_rejected, requeries}` |
 | `stats` | obj | `{vlm_calls, plans_evaluated, requeries, temporal_rejections, goal_rejections}` for this call; use these for the session metrics |
+| `wm_mode` | str | the server's variant, same as in `ping` |
 | `planning_call` | int | 0, 1, 2, … within the session (it names the server log folder `planning_call_XX`) |
 | `elapsed_s` | float | server time for this call |
 
@@ -104,6 +108,17 @@ Errors: `ok: false` with `error`. The main cases:
 `ServerLink.call` raises `RuntimeError` for these, and `TimeoutError` if no reply arrives in time. **Never treat an error as an empty
 plan.** An empty plan means "done" only when `done` is true.
 
+### Variants (`--wm-mode`)
+One server process runs one verification variant, built as the CALVIN sim runs build it (`pipeline/inference_calvin.py`). The
+prompts, vocabulary, thresholds and replan budget are the same for all of them.
+
+| `wm_mode` | world model | critic | per `plan` call |
+|---|---|---|---|
+| `v2a_wm` (default) | Verify2Act latent WM | yes | beam of candidates → imagine → critic → reflect/replan (≤ 2) |
+| `rla_wm` | RLA-WM baseline latent WM | yes | same as `v2a_wm` |
+| `diffusion_wm` | InstructPix2Pix + LoRA (the sim's `diffusion`, ReflectVLM) | no | 1 propose → imagine → always 1 reflection on the imagined scene → accepted |
+| `vlm_only` | none | no | 1 propose, accepted as is: `replan_attempts 0`, `evaluations []`, `stats.vlm_calls 1` |
+
 ### Timeouts
 - `plan`: wait **600 s** (`PLAN_REPLY_TIMEOUT_S`). A call makes at most 3 Gemini calls (1 propose + 2 reflect), each with a 60 s HTTP
   timeout plus rate-limit back-off. The imagination and critic take < 1 s per plan once warm. `ServerLink`'s default of 60 s is too short.
@@ -112,20 +127,25 @@ plan.** An empty plan means "done" only when `done` is true.
 
 ## 4. Plan vocabulary → skill commands
 
-The server only ever returns these strings (`<c>`, `<b>` ∈ red, green, blue, yellow). They are exactly the strings the stub planner
-produced, so the existing `v2a_goal.parse_step()` / `parse_relative()` and `_execute()` handle them.
+> **Revised 2026-09-25 (Jetson side).** One subtask is one world-model horizon, and it is one complete pick-and-place that
+> ends with nothing held. The arm cannot hold a block through a 20–60 s `plan` call, and a mid-grasp frame is not a stable
+> state to imagine or score. The bare `pick <c> block` / `place <c> block ...` subtasks are gone. The server-side change
+> is in `PLAN_SERVER_VOCAB_CHANGE.md`.
 
-| subtask text | `parse_step` kind | `Subtask(color, target_placement, kind, base_color)` | `/subtask_cmd` sent by `_execute` |
+The server returns only these strings (`<c>`, `<b>` ∈ red, green, blue, yellow, and `<c>` ≠ `<b>`). The Jetson stub planner
+produces the same strings. `v2a_goal.parse_step()` classifies them, and `_execute()` → `_run_skill()` runs each one as a single
+unit.
+
+| subtask text | `parse_step` kind | `Subtask(color, target_placement, kind, base_color)` | `/subtask_cmd`s sent by `_run_skill`, back to back |
 |---|---|---|---|
 | `pick and place <c> block into the bin` | `pick_place` | `(<c>, "left_bin", "pick_place", None)` | `pick_place` |
-| `pick <c> block` | `pick` | `(<c>, "hold", "pick", None)` | `locate <ref>` first (if the goal has a reference block), then `pick` |
-| `place <c> block on <b> block` | `place_on` | `(<c>, "on_<b>", "place_on", <b>)` | `place_on` |
-| `place <c> block to the left of <b> block` | `place_at` | `(<c>, "left_of", "place_at", <b>)` | `place_at` |
-| `place <c> block to the right of <b> block` | `place_at` | `(<c>, "right_of", "place_at", <b>)` | `place_at` |
+| `pick and place <c> block on <b> block` | `stack` | `(<c>, "on_<b>", "stack", <b>)` | `locate <b>` → `pick <c>` → `place_on <b>` |
+| `pick and place <c> block to the left of <b> block` | `rearrange` | `(<c>, "left_of", "rearrange", <b>)` | `locate <b>` → `pick <c>` → `place_at` |
+| `pick and place <c> block to the right of <b> block` | `rearrange` | `(<c>, "right_of", "rearrange", <b>)` | `locate <b>` → `pick <c>` → `place_at` |
 
-`parse_step` falls back to `"red"` when it finds no colour, so **validate the text before converting** (the client below does).
-Homing: keep the single `reset` at episode start in `run()`. `locate`: keep the existing `_ref_block` logic in `_execute()`, since the reference
-block still comes from the goal.
+`parse_step` falls back to `"red"` when it finds no colour, so **validate the text before converting** (`subtask_from_text` does).
+Homing: keep the single `reset` at episode start in `run()`. `locate`: the base / reference block comes from the subtask
+(`base_color`), not from the goal.
 
 ## 5. Client code
 
@@ -154,12 +174,12 @@ logger = logging.getLogger(__name__)
 PLAN_REPLY_TIMEOUT_S = 600.0
 PING_REPLY_TIMEOUT_S = 5.0
 
+# (vocabulary revised 2026-09-25: see §4; the file in the repo is authoritative)
 _C = "(red|green|blue|yellow)"
 _VALID = [re.compile(p) for p in (
     rf"^pick and place {_C} block into the bin$",
-    rf"^pick {_C} block$",
-    rf"^place {_C} block on {_C} block$",
-    rf"^place {_C} block to the (left|right) of {_C} block$",
+    rf"^pick and place {_C} block on {_C} block$",
+    rf"^pick and place {_C} block to the (left|right) of {_C} block$",
 )]
 
 
@@ -173,14 +193,9 @@ def subtask_from_text(text: str) -> Subtask:
     if not is_valid_subtask(text):
         raise ValueError(f"subtask outside the robot vocabulary: {text!r}")
     kind, color, base = parse_step(text)
-    if kind == "pick_place":
-        target = "left_bin"
-    elif kind == "pick":
-        target = "hold"
-    elif kind == "place_on":
-        target = "on_" + base
-    else:                                   # place_at
-        target = parse_relative(text)[1]    # "left_of" | "right_of"
+    if base == color:
+        raise ValueError(f"subtask places a block relative to itself: {text!r}")
+    target = {"pick_place": "left_bin", "stack": f"on_{base}"}.get(kind) or parse_relative(text)[1]   # rearrange: left_of | right_of
     return Subtask(action_text=text, color=color, color_id=COLOR_CODE_MAP[color], target_placement=target,
                    kind=kind, base_color=base)
 
@@ -274,7 +289,7 @@ and add:
                 print(f"  [reflect] {a}")
 
             if r["done"]:
-                print("[Plan server] Goal judged complete (VLM 'done', confirmed by the goal head).")
+                print("[Plan server] Goal judged complete (VLM 'done').")
                 res["goal_reached_real"] = True
                 return True
             if r["invalid_steps"]:
@@ -309,7 +324,9 @@ and add:
 Notes on this loop:
 - **Termination.** After a full plan executes, the next timestep's `plan` call normally returns `done: true`. Keep `max_steps` ≥ 2
   (default 4). The old local `critic.goal_sim_with_uncertainty` real-frame check is **not used** with the plan server: the server's
-  `done` (VLM, confirmed by the goal head) replaces it, and the human label remains the ground truth.
+  `done` (the VLM's claim; `accepted` says whether the goal head agreed) replaces it, and the human label remains the ground
+  truth. (Revised 2026-09-26: the Jetson's `_run_plan_server` no longer ends the episode on `done`. The operator's y/n after each
+  timestep decides, as `is_done()` does in the sim. The repo's `v2a_pipeline.py` is authoritative over this sketch.)
 - **Imagined timelines.** The server does not send imagined frames back. They are saved on the lab PC under
   `verify2act/output/real/<session>/imagination_logs/planning_call_XX/` (decoded frames per candidate/horizon, critic JSONs,
   `request_image.png`, `request.json`, `response.json`). `_save_timeline` is not called in this path.
@@ -337,13 +354,13 @@ Use `--jetson_ip 127.0.0.1` (not `--local`): the plan client rides on `RemoteRob
 
 ## 7. Test procedure (the arm moves only in step 4, so be present)
 1. **Unit check (no robot):** `subtask_from_text` on each row of §4 gives the listed `Subtask`, and it raises on
-   `"pick up the red block"`.
+   `"pick up the red block"` and on the retired `"pick red block"`.
 2. **Connectivity:** with the lab server "Ready", `PlanServerClient(ros).wait_for_server()` returns, and `reset("smoke")` succeeds.
 3. **Dry run** (`--dry_run --plan_server`, task1a): the log shows one `plan` round trip, the evaluations, and `accepted`/`plan`. The lab PC
    has `verify2act/output/real/<session>/imagination_logs/planning_call_00/`.
 4. **Live, task1a:** executes `pick and place blue block into the bin`, then `... yellow ...`, then the next `plan` returns `done`.
-5. **Family 2** (task2a): the plan is `pick red block` → `place red block to the left of blue block`, and `_execute` runs `locate blue`
-   before the pick.
+5. **Family 2** (task2a): the plan is the single subtask `pick and place red block to the left of blue block`. `_run_skill` runs
+   `locate blue` → `pick red` → `place_at` without pausing, and the next `plan` returns `done`.
 
 ## 8. Things to know
 - **The critic is off the shelf (CALVIN-trained) and is not reliable on real frames yet.** An offline check on a real frame showed
