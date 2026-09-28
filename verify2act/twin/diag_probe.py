@@ -7,8 +7,8 @@ import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import PCA
 
-D = "verify2act/output/twin/dofbot_v1"
-C = "verify2act/output/twin/dino_features"
+D = "verify2act/data/twin/dofbot_v1"
+C = "verify2act/data/twin/dino_features"
 CK = "verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt"
 
 def clip_check():

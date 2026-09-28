@@ -6,7 +6,7 @@
     <out>/transitions.jsonl                         one row per subtask (image_t, image_t1, action_text, lang_goal, ...)
     <out>/metadata.json
 
-    MUJOCO_GL=egl python -m verify2act.twin.generate --out verify2act/output/twin/dofbot_v1 --num-episodes 20000 --workers 8
+    MUJOCO_GL=egl python -m verify2act.twin.generate --out verify2act/data/twin/dofbot_v1 --num-episodes 20000 --workers 8
 
 See TWIN_DATASET.md at the repo root for the full procedure (server setup, generation, training).
 """

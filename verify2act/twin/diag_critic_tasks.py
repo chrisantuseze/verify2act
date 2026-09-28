@@ -6,7 +6,7 @@ from PIL import Image
 from sklearn.metrics import roc_auc_score
 from verify2act.pipeline.inference import _build_critic, preprocess_image_for_critic
 
-D = "verify2act/output/twin/dofbot_v1"
+D = "verify2act/data/twin/dofbot_v1"
 ck = sys.argv[1] if len(sys.argv) > 1 else "verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt"
 dev = torch.device("cuda")
 critic = _build_critic(SimpleNamespace(critic_ckpt=ck), dev)

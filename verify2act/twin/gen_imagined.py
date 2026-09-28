@@ -15,7 +15,7 @@ from verify2act.pipeline.world_model import LatentWorldModel
 from verify2act.twin.eval_plans import D, val_episodes
 from verify2act.twin.scene import DofbotTwin, InvalidSubtask
 
-C = "verify2act/output/twin/dino_features"
+C = "verify2act/data/twin/dino_features"
 
 
 def main():

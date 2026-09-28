@@ -137,21 +137,21 @@ python -m verify2act.twin.calibrate --images 'calib/*.jpg' --home calib/home.jpg
 MUJOCO_GL=egl python -m verify2act.twin.overlay --frame <real.png> --out overlay.png [--pitch 65 --dist 0.40 --fovy 34]
 
 # data
-MUJOCO_GL=egl python -m verify2act.twin.generate --out verify2act/output/twin/dofbot_v1 --num-episodes 20000 --workers 8
+MUJOCO_GL=egl python -m verify2act.twin.generate --out verify2act/data/twin/dofbot_v1 --num-episodes 20000 --workers 8
 
 # critic (fine-tune the CALVIN critic)
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=bf16 \
   verify2act/critic/train_contrastive.py \
-  --dataset-dir verify2act/output/twin/dofbot_v1 --dataset-type dofbot \
+  --dataset-dir verify2act/data/twin/dofbot_v1 --dataset-type dofbot \
   --output-dir verify2act/output/contrastive/dofbot_twin \
   --epochs 25 --batch-size 16 --learning-rate 1e-4 --lambda1 0.5 --lambda2 0.7 --kl-weight 5e-4 \
-  --cached-dino-dir verify2act/output/twin/dino_features \
+  --cached-dino-dir verify2act/data/twin/dino_features \
   --init-from verify2act/output/contrastive/calvin/best_contrastive_critic.pt
 
 # WM (fine-tune the CALVIN-wider WM; encoder frozen, unchanged)
 accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed_precision=fp16 \
   verify2act/latent_wm/train_dynamics.py \
-  --dataset-type robosuite --dataset-dir verify2act/output/twin/dofbot_v1 \
+  --dataset-type robosuite --dataset-dir verify2act/data/twin/dofbot_v1 \
   --output-dir verify2act/output/v2a_wm/dofbot_twin/wm \
   --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/encoder_only_best.pt \
   --token-dim 128 --num-latent-tokens 32 --history-len 3 --causal-masking \

@@ -100,7 +100,7 @@ If EGL is missing, `MUJOCO_GL=osmesa` works (CPU rendering, several times slower
 
 ```bash
 export MUJOCO_GL=egl
-OUT=verify2act/output/twin/dofbot_v1
+OUT=verify2act/data/twin/dofbot_v1
 python -m verify2act.twin.generate --out $OUT --num-episodes 200 --workers 8 --seed 0     # smoke test first
 python -m verify2act.twin.generate --out $OUT --num-episodes 20000 --workers $(( $(nproc) - 2 )) --chunk 50 --seed 0
 ```
@@ -118,7 +118,7 @@ Quick look before training:
 ```bash
 python - <<'EOF'
 import json, collections
-rows = [json.loads(l) for l in open("verify2act/output/twin/dofbot_v1/transitions.jsonl")]
+rows = [json.loads(l) for l in open("verify2act/data/twin/dofbot_v1/transitions.jsonl")]
 print(len(rows), "transitions")
 print(collections.Counter(r["task"] for r in rows if r["timestep"] == 0 and r["task"]))
 EOF
@@ -134,7 +134,7 @@ Both trainers cache DINOv2-L patch features: 256×1024 fp16, ~0.5 MB per image. 
 same directory. The WM trainer builds the cache on its first run; the critic then reuses it.
 
 ```bash
-CACHE=verify2act/output/twin/dino_features
+CACHE=verify2act/data/twin/dino_features
 ```
 
 ## 5. Fine-tune the world model (3 GPUs)

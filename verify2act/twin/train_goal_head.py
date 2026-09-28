@@ -1,6 +1,6 @@
 """Train SpatialGoalHead on twin frames relabelled with state-derived goal labels (verify2act/twin/goal_labels.py).
 
-Features: the cached DINOv2 patch tokens (verify2act/output/twin/dino_features). Evaluation:
+Features: the cached DINOv2 patch tokens (verify2act/data/twin/dino_features). Evaluation:
   - twin val (held-out episodes): AUROC over sampled goals, flipped-side / swapped-argument accuracy,
     and per eval task AUROC of episode start vs final frame (same protocol as diag_critic_tasks.py)
   - real: the robot request frames in output/real, labelled by hand for task2a, plus their horizontal mirrors.
@@ -17,8 +17,8 @@ from sklearn.metrics import roc_auc_score
 from verify2act.critic.goal_head import ClipTokenEncoder, SpatialGoalHead
 from verify2act.twin.goal_labels import EVAL_GOALS, sample_goals
 
-D = "verify2act/output/twin/dofbot_v1"
-C = "verify2act/output/twin/dino_features"
+D = "verify2act/data/twin/dofbot_v1"
+C = "verify2act/data/twin/dino_features"
 TASK_IDX = {"task1a": 0, "task1b": 1, "task1c": 2, "task1d": 3, "task2a": 4, "task2b": 5, "task3a": 6}
 REAL_FEATS = "verify2act/output/goal_head/real_feats.pt"
 

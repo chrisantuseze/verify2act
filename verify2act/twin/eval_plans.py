@@ -21,7 +21,7 @@ from verify2act.pipeline.world_model import LatentWorldModel
 from verify2act.twin.goal_labels import on, side_of
 from verify2act.twin.scene import DofbotTwin, InvalidSubtask
 
-D = "verify2act/output/twin/dofbot_v1"
+D = "verify2act/data/twin/dofbot_v1"
 CALVIN = "verify2act/output/v2a_wm/calvin"
 TWIN = "verify2act/output/v2a_wm/dofbot_twin"
 

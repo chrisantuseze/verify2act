@@ -20,7 +20,7 @@ from verify2act.latent_wm.delta_encoder import DeltaDecoder, DeltaEncoder
 from verify2act.pipeline.world_model import LatentWorldModel
 from verify2act.twin.eval_plans import D, build_frames
 
-C = "verify2act/output/twin/dino_features"
+C = "verify2act/data/twin/dino_features"
 
 
 def main():

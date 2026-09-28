@@ -21,7 +21,7 @@ from verify2act.twin.eval_real import CALVIN, TWIN, load_wm, single, COLORS
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--twin-dir", default="verify2act/output/twin/dofbot_v1")
+    ap.add_argument("--twin-dir", default="verify2act/data/twin/dofbot_v1")
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--out", default="verify2act/output/real_eval/diag_critic_wm.json")
     a = ap.parse_args()

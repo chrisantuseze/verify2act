@@ -7,8 +7,8 @@ not csg1 as `TWIN_DATASET.md` says. Follows `TWIN_DATASET.md` (procedure) and `D
 
 | step | state | where |
 |---|---|---|
-| twin dataset (20k episodes) | done | `verify2act/output/twin/dofbot_v1` (35,373 transitions, 3.5 GB) |
-| DINOv2 feature cache | done | `verify2act/output/twin/dino_features` (75,373 files, 38 GB) |
+| twin dataset (20k episodes) | done | `verify2act/data/twin/dofbot_v1` (35,373 transitions, 3.5 GB) |
+| DINOv2 feature cache | done | `verify2act/data/twin/dino_features` (75,373 files, 38 GB) |
 | WM fine-tune | done, early-stopped at epoch 44/50 | `verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt` |
 | critic fine-tune | done (25 epochs) | `verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt` |
 | decoder fine-tune | **RUNNING**, epoch ~9/30 at 11:38, ~11 min/epoch, best val 0.1131 (ep 8) | `verify2act/output/v2a_wm/dofbot_twin/decoder/latent_decoder_best.pt`, log `verify2act/output/twin_decoder_train.log` |
@@ -22,7 +22,7 @@ Early stop is fine: the best file is usable at any time.
 
 ## What was done
 
-1. **Generation**: `python -m verify2act.twin.generate --out verify2act/output/twin/dofbot_v1 --num-episodes 20000 --workers 32 --chunk 50 --seed 0`
+1. **Generation**: `python -m verify2act.twin.generate --out verify2act/data/twin/dofbot_v1 --num-episodes 20000 --workers 32 --chunk 50 --seed 0`
    (5 min). Smoke test (200 eps) looked right (textures, ArUco tags, mix). Family counts: eval 4758, bin 5110, side 2759, stack 2591,
    random 4326, **compound 456 (2.3%, target ~6.4%; probably rejection sampling; not investigated)**.
 2. **DINOv2 cache** built with 3 sharded processes (one per GPU).

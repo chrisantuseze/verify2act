@@ -3,7 +3,7 @@ vs an MLP on the mean-pooled tokens. Label: block c is left (+y) of block b, for
 import json, os, random
 import numpy as np, torch, torch.nn as nn
 
-D = "verify2act/output/twin/dofbot_v1"; C = "verify2act/output/twin/dino_features"
+D = "verify2act/data/twin/dofbot_v1"; C = "verify2act/data/twin/dino_features"
 COL = ["red", "green", "blue", "yellow"]
 
 def samples(n, seed=0):
