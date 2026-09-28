@@ -14,10 +14,12 @@ class ProbEmbedding(NamedTuple):
     mu       : [B, D]  mean embedding (NOT L2-normalised)
     log_var1 : [B, D]  log-variance for Head 1 (goal proximity), clamped to [-4, 4]
     log_var2 : [B, D]  log-variance for Head 2 (temporal consistency), clamped to [-4, 4]
+    tokens   : [B, P, C] the un-pooled patch tokens (used by an attached spatial goal head)
     """
     mu: torch.Tensor
     log_var1: torch.Tensor
     log_var2: torch.Tensor
+    tokens: Optional[torch.Tensor] = None
 
 
 class DINOv2DualHeadCritic(nn.Module):
@@ -101,6 +103,10 @@ class DINOv2DualHeadCritic(nn.Module):
         self._clip_model = None
         self._clip_tokenizer = None
 
+        # Optional spatial goal head (verify2act/critic/goal_head.py). When attached, the language-goal scores
+        # come from it: P(goal satisfied) from the patch grid instead of pooled cosine similarity.
+        self.goal_scorer = None
+
         self.freeze_backbone()
 
     # Backbone freeze / unfreeze
@@ -155,7 +161,7 @@ class DINOv2DualHeadCritic(nn.Module):
         mu = patch_tokens.mean(dim=1)
         log_var1 = self.log_var_head1(mu).clamp(-4.0, 4.0)
         log_var2 = self.log_var_head2(mu).clamp(-4.0, 4.0)
-        return ProbEmbedding(mu=mu, log_var1=log_var1, log_var2=log_var2)
+        return ProbEmbedding(mu=mu, log_var1=log_var1, log_var2=log_var2, tokens=patch_tokens)
 
     def project(self, embed: torch.Tensor, head: int) -> torch.Tensor:
         """Apply projection head and L2-normalise. head: 1=goal proximity, 2=temporal."""
@@ -209,6 +215,8 @@ class DINOv2DualHeadCritic(nn.Module):
 
     def goal_sim_from_text(self, emb_frame: ProbEmbedding, text_goal: str) -> torch.Tensor:
         """Cosine similarity between a visual frame and a language goal. Returns [B]."""
+        if self.goal_scorer is not None and emb_frame.tokens is not None:
+            return self.goal_scorer(emb_frame.tokens, [text_goal] * emb_frame.tokens.size(0))
         goal_emb = self.encode_text_goal(text_goal)
         return (self.project(emb_frame.mu, 1) * goal_emb).sum(dim=-1)
 
@@ -251,6 +259,9 @@ class DINOv2DualHeadCritic(nn.Module):
         n_samples: int = 20,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """MC cosine similarity between a visual frame and a language goal. Returns (mean [B], std [B])."""
+        if self.goal_scorer is not None and emb_frame.tokens is not None:
+            p = self.goal_scorer(emb_frame.tokens, [text_goal] * emb_frame.tokens.size(0))
+            return p, torch.zeros_like(p)
         goal_emb = self.encode_text_goal(text_goal)
         sims = [
             (self.project(self.sample_embed(emb_frame.mu, emb_frame.log_var1), 1) * goal_emb).sum(dim=-1)

@@ -27,8 +27,12 @@ def ensure_cache_complete(
     batch_size: int = 64,
     history_len: int = 3,
     dino_channels: int = 1024,
+    shard: int = 0,
+    num_shards: int = 1,
 ) -> None:
-    """Checks the feature cache directory, and generates missing features if necessary."""
+    """Checks the feature cache directory, and generates missing features if necessary.
+
+    shard/num_shards split the missing images so several processes (one per GPU) can fill the cache in parallel."""
     root = Path(dataset_dir)
     cache_root = Path(cache_dir)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -91,6 +95,7 @@ def ensure_cache_complete(
     if not missing_paths:
         print(f"✓ DINOv2 feature cache is complete ({len(needed_paths)} features validated).")
         return
+    missing_paths = missing_paths[shard::num_shards]
 
     print(f"Detected {len(missing_paths)} missing features out of {len(needed_paths)} unique active images.")
     print("Initializing DINOv2 backbone to precompute features...")

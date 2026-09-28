@@ -112,6 +112,7 @@ class Verify2ActBackend:
         self.output_dir = Path(output_dir) if output_dir else None
         self._calls: Dict[str, int] = {}
         self._record: Optional[Dict[str, Any]] = None
+        self.real2sim = None           # optional verify2act.twin.real2sim.Real2Sim (set by from_args)
         self._instrument()
 
     def _instrument(self) -> None:
@@ -191,7 +192,8 @@ class Verify2ActBackend:
         world_model, critic, decoder = build_world_model(args), None, None
         if mode != "diffusion_wm":   # the sim's diffusion mode (ReflectVLM) has no critic
             logger.info("Loading critic ...")
-            critic = _build_critic(SimpleNamespace(critic_ckpt=args.critic_ckpt), device)
+            critic = _build_critic(SimpleNamespace(critic_ckpt=args.critic_ckpt,
+                                                   goal_head_ckpt=getattr(args, "goal_head_ckpt", None)), device)
             decoder = load_feature_decoder(args.wm_decoder_dir, device)
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -211,6 +213,11 @@ class Verify2ActBackend:
         )
         backend = cls(beam_planner, decoder=decoder, horizon=args.horizon, output_dir=args.output_dir,
                       wm_mode=mode, settings=settings)
+        if getattr(args, "real2sim", False):
+            from verify2act.twin.real2sim import Real2Sim
+            backend.real2sim = Real2Sim()
+            backend.settings["real2sim"] = True
+            logger.info("real2sim: the planner sees a twin re-render of each request frame")
         backend.warmup()
         return backend
 
@@ -239,6 +246,17 @@ class Verify2ActBackend:
         session_dir = self.output_dir / session if self.output_dir else None
 
         t0 = time.time()
+        real2sim_info, real_rgb = None, image_rgb
+        if self.real2sim is not None:
+            render, real2sim_info = self.real2sim(image_rgb)
+            logger.info("real2sim fit rms %.2f px in %.1fs%s", real2sim_info["rms"], real2sim_info["fit_s"],
+                        "" if render is not None else " -> poor fit, planning on the real frame")
+            if render is not None:
+                if session_dir is not None:
+                    d = session_dir / "imagination_logs" / f"planning_call_{call_idx:02d}"
+                    d.mkdir(parents=True, exist_ok=True)
+                    Image.fromarray(render).save(d / "real2sim_render.png")
+                image_rgb = render
         self._record = {"evaluations": [], "vlm_calls": 0}
         # The operator's note on the previous attempt reaches every propose/reflect prompt of this call (all variants).
         prompt_manager = getattr(self.vlm, "_pm", None)
@@ -306,13 +324,15 @@ class Verify2ActBackend:
             "planning_call": call_idx,
             "elapsed_s": round(time.time() - t0, 2),
         }
+        if real2sim_info is not None:
+            out["real2sim"] = {"rms": round(real2sim_info["rms"], 3), "fit_s": real2sim_info["fit_s"]}
         if out["invalid_steps"]:
             logger.warning("Plan contains subtasks outside the robot vocabulary: %s", out["invalid_steps"])
 
         if session_dir:
             call_dir = session_dir / "imagination_logs" / f"planning_call_{call_idx:02d}"
             call_dir.mkdir(parents=True, exist_ok=True)
-            Image.fromarray(image_rgb).save(call_dir / "request_image.png")
+            Image.fromarray(real_rgb).save(call_dir / "request_image.png")
             with open(call_dir / "request.json", "w") as f:
                 json.dump({"goal": goal, "history": history, "feedback": feedback or "", "obj_labels": obj_labels,
                        "horizon": horizon}, f, indent=2)

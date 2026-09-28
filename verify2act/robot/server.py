@@ -145,6 +145,10 @@ def parse_args(argv=None):
                     help="verification variant (one per server process); diffusion_wm is the sim's 'diffusion' mode")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--critic-ckpt", default="verify2act/output/contrastive/calvin/best_contrastive_critic.pt")
+    ap.add_argument("--goal-head-ckpt", default=None,
+                    help="spatial goal head (verify2act/twin/train_goal_head.py); replaces pooled goal scores")
+    ap.add_argument("--real2sim", action="store_true",
+                    help="plan on a twin re-render of each request frame (verify2act/twin/real2sim.py)")
     ap.add_argument("--latent-wm-ckpt", default=None, help="v2a_wm / rla_wm dynamics (default: per --wm-mode)")
     ap.add_argument("--encoder-ckpt", default=f"{_V2A_CALVIN}/encoder/ckpt/delta_encoder_best.pt",
                     help="v2a_wm / rla_wm delta encoder (the sim's rla_wm run uses the v2a_wm one too)")

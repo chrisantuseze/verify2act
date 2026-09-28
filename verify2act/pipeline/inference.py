@@ -769,6 +769,11 @@ def _build_critic(
     if unexpected:
         logger.debug("Checkpoint had unexpected keys (safe to ignore): %s", unexpected)
     critic.eval()
+    goal_head_ckpt = getattr(args, "goal_head_ckpt", None)
+    if goal_head_ckpt:
+        from verify2act.critic.goal_head import GoalScorer
+        critic.goal_scorer = GoalScorer(goal_head_ckpt, device)
+        logger.info("Language-goal scores from spatial goal head %s", goal_head_ckpt)
     return critic
 
 
@@ -865,6 +870,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vae-subfolder", default="vae")
 
     parser.add_argument("--critic-ckpt", default="verify2act/output/contrastive/best_contrastive_critic.pt")
+    parser.add_argument("--goal-head-ckpt", default=None,
+                        help="spatial goal head (verify2act/twin/train_goal_head.py); replaces pooled goal scores")
 
     parser.add_argument("--prompt-config", default="verify2act/configs/prompts/planner.yaml")
     parser.add_argument("--planner-model", default="gemini-2.5-pro")
