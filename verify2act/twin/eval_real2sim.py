@@ -87,7 +87,7 @@ def main():
     for cfg in a.configs.split(","):
         mode, rest = cfg.split(":"); wn, cn = rest.split("+")
         if wn not in wms:
-            wms[wn] = load_wm(a.wm2, a.wm2_encoder) if wn == "wm2" else load_wm(f"{TWIN}/wm/ckpt/latent_dynamics_best_weights.pt")
+            wms[wn] = load_wm(a.wm2, a.wm2_encoder) if wn == "wm2" else load_wm(f"{TWIN}/wm_old/ckpt/latent_dynamics_best_weights.pt")
         crit.goal_scorer = scorer if cn == "goalhead" else None
         bp = BeamSearchPlanner(vlm_planner=None, world_model=wms[wn], critic=crit, beam_width=1, goal_threshold=0.5,
                                temporal_threshold=-1e9, max_retries=a.samples, max_replans=0, wm_mode="v2a_wm")

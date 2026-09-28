@@ -99,7 +99,7 @@ def main():
         wn, cn = cfg.split("+")
         if wn not in wms:
             wms[wn] = (load_wm(a.twin2_wm, a.twin2_encoder) if wn == "twin2" else
-                       load_wm(f"{TWIN if wn == 'twin' else CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt"))
+                       load_wm(f"{TWIN}/wm_old/ckpt/latent_dynamics_best_weights.pt" if wn == 'twin' else f"{CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt"))
         critic = _build_critic(SimpleNamespace(critic_ckpt=a.twin_critic,
                                                goal_head_ckpt=a.goal_head if cn == "goalhead" else None), dev)
         thr = 0.5 if cn == "goalhead" else 0.05

@@ -9,7 +9,7 @@ not csg1 as `TWIN_DATASET.md` says. Follows `TWIN_DATASET.md` (procedure) and `D
 |---|---|---|
 | twin dataset (20k episodes) | done | `verify2act/data/twin/dofbot_v1` (35,373 transitions, 3.5 GB) |
 | DINOv2 feature cache | done | `verify2act/data/twin/dino_features` (75,373 files, 38 GB) |
-| WM fine-tune | done, early-stopped at epoch 44/50 | `verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt` |
+| WM fine-tune | done, early-stopped at epoch 44/50 | `verify2act/output/v2a_wm/dofbot_twin/wm_old/ckpt/latent_dynamics_best_weights.pt` |
 | critic fine-tune | done (25 epochs) | `verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt` |
 | decoder fine-tune | **RUNNING**, epoch ~9/30 at 11:38, ~11 min/epoch, best val 0.1131 (ep 8) | `verify2act/output/v2a_wm/dofbot_twin/decoder/latent_decoder_best.pt`, log `verify2act/output/twin_decoder_train.log` |
 | real-frame comparison | done, see findings | `verify2act/output/real_eval/*.json` |

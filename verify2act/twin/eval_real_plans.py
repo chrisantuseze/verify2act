@@ -55,7 +55,7 @@ def main():
     for cfg in a.configs.split(","):
         wn, cn = cfg.split("+")
         wm = (load_wm(a.wm2, a.wm2_encoder) if wn == "wm2" else
-              load_wm(f"{TWIN}/wm/ckpt/latent_dynamics_best_weights.pt") if wn == "old" else
+              load_wm(f"{TWIN}/wm_old/ckpt/latent_dynamics_best_weights.pt") if wn == "old" else
               load_wm(f"{CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt"))
         crit = _build_critic(SimpleNamespace(critic_ckpt=a.critic, goal_head_ckpt=a.goal_head if cn == "goalhead" else None), dev)
         bp = BeamSearchPlanner(vlm_planner=None, world_model=wm, critic=crit, beam_width=1, goal_threshold=0.5,

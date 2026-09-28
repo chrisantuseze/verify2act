@@ -29,7 +29,7 @@ def main():
     enc = f"{CALVIN}/encoder/ckpt/delta_encoder_best.pt"
     pairs = {"calvin": (f"{CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt",
                         "verify2act/output/contrastive/calvin/best_contrastive_critic.pt"),
-             "twin": (f"{TWIN}/wm/ckpt/latent_dynamics_best_weights.pt",
+             "twin": (f"{TWIN}/wm_old/ckpt/latent_dynamics_best_weights.pt",
                       "verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt")}
     rows = []
     for line in open(f"{a.twin_dir}/transitions.jsonl"):

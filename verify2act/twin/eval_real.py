@@ -52,7 +52,7 @@ def main():
     ap.add_argument("--twin-dir", default=None, help="evaluate on N twin task2a start frames instead of real logs")
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--out", default="verify2act/output/real_eval/results.json")
-    ap.add_argument("--twin-wm", default=f"{TWIN}/wm/ckpt/latent_dynamics_best_weights.pt")
+    ap.add_argument("--twin-wm", default=f"{TWIN}/wm_old/ckpt/latent_dynamics_best_weights.pt")
     ap.add_argument("--twin-critic", default="verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt")
     a = ap.parse_args()
     dev = torch.device("cuda")

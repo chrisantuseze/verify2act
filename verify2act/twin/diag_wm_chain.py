@@ -26,7 +26,7 @@ C = "verify2act/data/twin/dino_features"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--encoder", default="verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt")
-    ap.add_argument("--wm", default="verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt")
+    ap.add_argument("--wm", default="verify2act/output/v2a_wm/dofbot_twin/wm_old/ckpt/latent_dynamics_best_weights.pt")
     ap.add_argument("--goal-head", default="verify2act/output/goal_head/v1/goal_head_best.pt")
     ap.add_argument("--n", type=int, default=80)
     a = ap.parse_args()

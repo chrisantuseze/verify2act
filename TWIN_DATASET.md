@@ -159,7 +159,7 @@ accelerate launch --num_processes=3 --num_machines=1 --dynamo_backend=no --mixed
   `--token-dim 128` and `--num-latent-tokens 32`: the server loads the model with these.
 - `--batch-size` is per GPU. 16 is a safe start on 16 GB with the cache; try 32 if memory allows. Without the cache,
   DINOv2-L runs online, and even batch 4 did not fit in 8 GB.
-- The best checkpoint is `verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt`.
+- The best checkpoint is `verify2act/output/v2a_wm/dofbot_twin/wm_old/ckpt/latent_dynamics_best_weights.pt`.
 
 ## 6. Fine-tune the critic (3 GPUs)
 
@@ -192,7 +192,7 @@ same time with `CUDA_VISIBLE_DEVICES` and `--num_processes` split (e.g. 2 + 1).
 
    ```bash
    python verify2act/latent_wm/visualize_wm.py --dataset-type robosuite --dataset-dir $OUT \
-     --wm-ckpt verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt \
+     --wm-ckpt verify2act/output/v2a_wm/dofbot_twin/wm_old/ckpt/latent_dynamics_best_weights.pt \
      --encoder-ckpt verify2act/output/v2a_wm/calvin/encoder/ckpt/delta_encoder_best.pt \
      --decoder-ckpt verify2act/output/v2a_wm/calvin/decoder/latent_decoder_best.pt \
      --history-len 3 --num-samples 10 --token-dim 128 --num-latent-tokens 32 --causal-masking
@@ -207,7 +207,7 @@ same time with `CUDA_VISIBLE_DEVICES` and `--num_processes` split (e.g. 2 + 1).
 
    ```bash
    python -m verify2act.robot.server --wm-mode v2a_wm \
-     --latent-wm-ckpt verify2act/output/v2a_wm/dofbot_twin/wm/ckpt/latent_dynamics_best_weights.pt \
+     --latent-wm-ckpt verify2act/output/v2a_wm/dofbot_twin/wm_old/ckpt/latent_dynamics_best_weights.pt \
      --critic-ckpt verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt
    ```
 
