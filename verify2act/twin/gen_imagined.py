@@ -5,7 +5,7 @@ subtasks per frame (the executed one when available + random alternatives), the 
 failures) to get the true next state, and the WM imagines the next DINO features from the cached features of the
 frame. Saves feats [N, 256, 1024] fp16 + next states (for state-based goal labels).
 
-python -m verify2act.twin.gen_imagined --wm <dyn.pt> --encoder <ae.pt> --out verify2act/output/goal_head/imagined_wm2.pt
+python -m verify2act.twin.gen_imagined --wm <dyn.pt> --encoder <ae.pt> --out verify2act/data/twin/imagined_wm2.pt
 """
 import argparse, json, os, random
 
@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--encoder", default="verify2act/output/v2a_wm/dofbot_twin/encoder/ckpt/delta_encoder_best.pt")
     ap.add_argument("--frames", type=int, default=6000)
     ap.add_argument("--actions-per-frame", type=int, default=3)
-    ap.add_argument("--out", default="verify2act/output/goal_head/imagined_wm2.pt")
+    ap.add_argument("--out", default="verify2act/data/twin/imagined_wm2.pt")
     a = ap.parse_args()
     wm = LatentWorldModel(device="cuda", dynamics_weights_path=a.wm, encoder_ckpt=a.encoder, history_len=3,
                           token_dim=128, num_latent_tokens=32, action_conditioning="cross_attn")

@@ -167,7 +167,7 @@ Decoder fine-tune stopped at epoch 11 (best val 0.1076, `latent_decoder_best.pt`
     wm2 + goal head, real image               top1 0.28  pairwise 0.69   (2a 0.33, 2b 0.44, 3a 0.10)
     wm2 + goal head, twin re-render (r2s)     top1 0.48  pairwise 0.76   (2a 0.75, 2b 0.50, 3a 0.30)
 - Imagined training set for the goal head: `gen_imagined.py` with wm2 ep5, 6000 training-episode frames x 3 valid
-  subtasks, labels from simulated next states -> `verify2act/output/goal_head/imagined_wm2ep5.pt` (13,275 samples).
+  subtasks, labels from simulated next states -> `verify2act/data/twin/imagined_wm2ep5.pt` (13,275 samples).
 
 ### Server wiring
 
@@ -181,7 +181,7 @@ Decoder fine-tune stopped at epoch 11 (best val 0.1076, `latent_decoder_best.pt`
 
 ### Goal head v2: trained on WM-imagined states
 
-- `train_goal_head.py --init v1/goal_head_last.pt --imagined imagined_wm2ep5.pt --imagined-repeat 2 --ae-ckpt <twin AE>
+- `train_goal_head.py --init v1/goal_head_last.pt --imagined verify2act/data/twin/imagined_wm2ep5.pt --imagined-repeat 2 --ae-ckpt <twin AE>
   --ae-frac 0.3 --batch 40 --lr 1e-4` (-> `verify2act/output/goal_head/v2`; ~25-35 min/epoch while sharing a GPU).
   After 1 epoch (`v2/snap_ep0.pt`): true-frame task2a 0.997, task2b 0.998; AE-reconstructed 0.992 / 0.963; real
   checks unchanged.
