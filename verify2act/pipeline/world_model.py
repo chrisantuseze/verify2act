@@ -469,6 +469,17 @@ class LatentWorldModel(WorldModelBase):
     def get_history(self) -> Optional[torch.Tensor]:
         return self._history
 
+    def get_state(self) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Cloned (history, validity mask) snapshot. Use with set_state() to rewind: set_history() alone keeps the
+        mask of the last imagined step, so a rewound t=0 history would be conditioned as if frames were real."""
+        mask = getattr(self, "_history_mask", None)
+        return (None if self._history is None else self._history.clone(), None if mask is None else mask.clone())
+
+    def set_state(self, state: Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]) -> None:
+        history, mask = state
+        self._history = None if history is None else history.clone()
+        self._history_mask = None if mask is None else mask.clone()
+
     def imagine(
         self,
         current_image_np: np.ndarray,

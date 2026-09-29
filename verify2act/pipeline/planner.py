@@ -709,7 +709,7 @@ class BeamSearchPlanner:
         start_history = None
         if is_latent_wm:
             self.world_model.initialize_history(current_image_np)
-            start_history = self.world_model.get_history().clone()  # clone to avoid aliasing
+            start_history = self.world_model.get_state()  # (history, validity mask), cloned
 
         imagination_steps = self.plan_expander(plan)
         
@@ -729,7 +729,7 @@ class BeamSearchPlanner:
             # Restore the WM to the start-of-plan state so each outer-loop
             # attempt (HEAD1 re-roll) evaluates a fresh independent trajectory.
             if is_latent_wm and start_history is not None:
-                self.world_model.set_history(start_history.clone())
+                self.world_model.set_state(start_history)
 
             all_scores: List[Tuple[float, float]] = []
             critic_decisions: List[str] = []
@@ -763,9 +763,8 @@ class BeamSearchPlanner:
 
                     # Checkpoint the WM state BEFORE this step so per-step
                     # requery retries can rewind to the same context.
-                    # For latent WM: clone avoids aliasing with subsequent
-                    # set_history() calls that replace self._history.
-                    step_history = self.world_model.get_history().clone() if is_latent_wm else None
+                    # For latent WM: a cloned (history, mask) snapshot, restored with set_state().
+                    step_history = self.world_model.get_state() if is_latent_wm else None
 
                     # ── 1. Imagine the next state ──────────────────────────────
                     if is_latent_wm:
@@ -852,7 +851,7 @@ class BeamSearchPlanner:
                                 # Rewind to the pre-step latent state so the WM
                                 # samples a different transition from the same context.
                                 if step_history is not None:
-                                    self.world_model.set_history(step_history.clone())
+                                    self.world_model.set_state(step_history)
                                 F_next, _ = self.world_model.imagine(None, imagine_action)
                                 final_state = F_next
                             else:
@@ -973,7 +972,7 @@ class BeamSearchPlanner:
         # Restore the WM to the initial state so subsequent candidate evaluations
         # (and the next real timestep) start from a clean, uncontaminated slate.
         if is_latent_wm and start_history is not None:
-            self.world_model.set_history(start_history)
+            self.world_model.set_state(start_history)
 
         return (
             best_eval_score,
