@@ -49,13 +49,13 @@ def main():
             y = r_ * (S + 30)
             sheet.paste(Image.fromarray(img).resize((S, S)), (0, y + 30))
             wm.initialize_history(img)
-            h = wm.get_history().clone()
-            F0 = h[:, -1]
+            h = wm.get_state()
+            F0 = h[0][:, -1]
             sheet.paste(to_img(F0).resize((S, S)), (S, y + 30))
             d.text((2, y + 2), f"{name}", fill="black")
             d.text((S + 2, y + 2), f"decoded  P={gs(F0, [GOAL]).item():.2f}", fill="black")
             for j, act in enumerate(ACTIONS):
-                wm.set_history(h.clone())
+                wm.set_state(h)
                 F1, _ = wm.imagine(None, act)
                 sheet.paste(to_img(F1).resize((S, S)), (S * (2 + j), y + 30))
                 d.text((S * (2 + j) + 2, y + 2), f"{act.replace('pick and place ', '')[:30]}", fill="black")

@@ -27,7 +27,8 @@ from PIL import Image
 from verify2act.twin import augment
 from verify2act.twin.config import ASSETS_DIR, load_config
 from verify2act.twin.scene import DofbotTwin, InvalidSubtask
-from verify2act.twin.tasks import EVAL_TASKS, FAMILY_WEIGHTS, eval_goal, run_goal, sample_goal
+from verify2act.twin.tasks import (EVAL_TASKS, FAMILY_WEIGHTS, conflict_episode, eval_goal, run_clearing, run_goal,
+                                   sample_goal)
 
 
 def _prelude(t: DofbotTwin, rng: np.random.Generator, n: int) -> None:
@@ -58,9 +59,62 @@ def _random_walk(t: DofbotTwin, rng: np.random.Generator, n: int, on_step) -> Li
     return done
 
 
+def make_conflict_episode(t: DofbotTwin, rng: np.random.Generator) -> Optional[Dict[str, Any]]:
+    """A precondition-conflict episode (tasks.conflict_episode): the naive subtask executed as the robot fails at it
+    (optionally followed by the recovery plan), or the plan that clears the blocker first."""
+    ec = t.cfg["episodes"]
+    w = ec["conflict_weights"]
+    conflict = str(rng.choice(list(w), p=_norm(list(w.values()))))
+    n = 4 if rng.random() < ec["p_n_blocks_4"] else int(rng.integers(3, 5))
+    t.randomize_episode(rng)
+    for _ in range(10):
+        t.reset(rng, [str(c) for c in rng.permutation(t.colors)[:n]])
+        setup = conflict_episode(t, rng, conflict)
+        if setup is not None:
+            break
+    else:
+        return None
+    goal, naive = setup
+    photo = augment.sample_params(t.cfg, rng)
+
+    def shot() -> np.ndarray:
+        return augment.apply(t.render(rng), photo, rng)
+
+    frames, states, steps, outcomes = [shot()], [t.get_state()], [], []
+
+    def on_step(s: str, outcome: str = "") -> None:
+        frames.append(shot())
+        states.append(t.get_state())
+        steps.append(s)
+        outcomes.append(outcome)
+
+    naive_first = rng.random() < ec["p_naive"]
+    try:
+        if naive_first:
+            outcome = t.apply(naive, rng, conflicts=True)
+            if not outcome:
+                return None
+            on_step(naive, outcome)
+            if rng.random() < ec["p_recover"] and not goal.check(t):
+                run_clearing(t, goal, rng, on_step)
+        else:
+            run_clearing(t, goal, rng, on_step)
+            if len(steps) < 2:              # the blocker had to be moved first
+                return None
+    except (InvalidSubtask, RuntimeError):
+        return None
+    t.randomize_appearance(rng)
+    goal_cam = t._jitter(t.episode_camera, t.cfg["camera"]["jitter_episode"], rng)
+    goal_img = augment.apply(t.render(rng, cam=goal_cam), augment.sample_params(t.cfg, rng), rng)
+    return {"frames": frames, "states": states, "steps": steps, "outcomes": outcomes, "goal_image": goal_img,
+            "lang_goal": goal.text, "family": f"conflict_{conflict}", "task": goal.task, "success": bool(goal.check(t))}
+
+
 def make_episode(t: DofbotTwin, rng: np.random.Generator) -> Optional[Dict[str, Any]]:
     """One episode in memory (frames, subtasks, goal); None when the sampled task could not be executed."""
     ec = t.cfg["episodes"]
+    if rng.random() < ec.get("p_conflict", 0.0):
+        return make_conflict_episode(t, rng)
     random_walk = rng.random() < ec["random_walk_frac"]
     weights = ec.get("family_weights") or FAMILY_WEIGHTS
     family = None if random_walk else str(rng.choice(list(weights), p=_norm(list(weights.values()))))
@@ -141,6 +195,7 @@ def write_episode(out: Path, ep_id: str, ep: Dict[str, Any], fmt: str = "jpg") -
             "action_text": s, "lang_goal": ep["lang_goal"], "family": ep["family"], "task": ep.get("task", ""),
             "episode_success": ep["success"], "state_t": i, "state_t1": i + 1,
             "policy_type": "twin_oracle", "num_steps": len(ep["steps"]),
+            "conflict": (ep.get("outcomes") or [""] * len(ep["steps"]))[i],
         })
     return rows
 
@@ -193,12 +248,14 @@ def main() -> None:
     t0 = time.time()
     mode = "a" if args.start_episode > 0 else "w"
     n_rows = 0
-    count_family, count_task = collections.Counter(), collections.Counter()
+    count_family, count_task, count_conflict = collections.Counter(), collections.Counter(), collections.Counter()
     ctx = mp.get_context("spawn")        # one EGL context per process
     with ctx.Pool(args.workers) as pool, open(out / "transitions.jsonl", mode) as f:
         for i, rows in enumerate(pool.imap_unordered(_worker, jobs)):
             for r in rows:
                 f.write(json.dumps(r) + "\n")
+                if r.get("conflict"):
+                    count_conflict[r["conflict"]] += 1
                 if r["timestep"] == 0:
                     count_family[r["family"]] += 1
                     count_task[r["task"] or "-"] += 1
@@ -212,6 +269,7 @@ def main() -> None:
     meta = {"generator": "verify2act.twin.generate", "git_commit": commit, "seed": args.seed,
             "num_episodes": args.start_episode + args.num_episodes, "transitions_written": n_rows,
             "episodes_by_family": dict(count_family), "episodes_by_eval_task": dict(count_task),
+            "conflict_transitions": dict(count_conflict),
             "image_format": args.image_format,
             "assets": sorted(p.name for p in Path(args.assets).glob("*.png")),
             "config": load_config(args.config), "created": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -219,6 +277,7 @@ def main() -> None:
     print(f"done: {n_rows} transitions in {time.time() - t0:.0f}s -> {out}")
     print(f"episodes by family: {dict(count_family)}")
     print(f"eval tasks: {dict(count_task)}")
+    print(f"conflict transitions: {dict(count_conflict)}")
 
 
 if __name__ == "__main__":

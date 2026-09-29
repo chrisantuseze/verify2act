@@ -48,7 +48,9 @@ def load_frames(val_frac=0.05, limit=None, extra=None):
     if M:
         X[len(items):] = extra
     print(f"loaded {len(items)} frames {tuple(X.shape)} in {time.time() - t0:.0f}s", flush=True)
-    rng = random.Random(0); ev = sorted(set(eps)); rng.shuffle(ev)
+    # held-out episodes: drawn from the dofbot_v1 ids only (ep_0xxxxx), so the split is the same for dofbot_v1c;
+    # supplementary episodes (ep_1xxxxx, dofbot_conflict) are all training
+    rng = random.Random(0); ev = sorted(e for e in set(eps) if e < "ep_100000"); rng.shuffle(ev)
     val_eps = set(ev[:int(val_frac * len(ev))])
     is_val = torch.tensor([it[0] in val_eps for it in items])
     return X, items, is_val, task
@@ -140,6 +142,7 @@ def evaluate(head, enc, X, items, is_val, task, device, ae=None):
 
 
 def main():
+    global D
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="verify2act/output/goal_head/v1")
     ap.add_argument("--epochs", type=int, default=12)
@@ -159,7 +162,9 @@ def main():
                     "added to the training pool (training episodes only)")
     ap.add_argument("--imagined-repeat", type=int, default=1, help="how often each imagined sample appears per epoch")
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--dataset", default=D, help="twin dataset dir (e.g. verify2act/data/twin/dofbot_v1c)")
     args = ap.parse_args()
+    D = args.dataset
     torch.manual_seed(0); random.seed(0)
     dev = torch.device(args.device); out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     json.dump(vars(args), open(out / "args.json", "w"), indent=1)

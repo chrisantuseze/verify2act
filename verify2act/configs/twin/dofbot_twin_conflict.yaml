@@ -1,0 +1,40 @@
+# Supplementary twin data (SESSION_LOG_TWIN.md, 2026-09-28): precondition conflicts and a closer look to the real frames.
+# Deep-merged over dofbot_twin.yaml. Generate into its own directory (dofbot_conflict) with --start-episode 100000 so the
+# frame paths (and DINO cache names) never collide with dofbot_v1.
+base: dofbot_twin.yaml
+
+camera:
+  # The 10 dofbot_v1 poses plus the fitted home pose of run_20260929_000617 (fit_camera.py --fovy 36.86, rms 0.51 px);
+  # a list replaces the base one, so all are repeated here.
+  poses:
+    - {pos: [-0.1702, 0.0157, 0.2661], lookat: [0.0, 0.0051, 0.0], roll: 2.63}
+    - {pos: [-0.1183, 0.0327, 0.275], lookat: [0.0338, 0.0133, 0.0], roll: 5.45}
+    - {pos: [-0.1306, 0.0247, 0.2619], lookat: [0.0326, 0.0112, 0.0], roll: 3.21}
+    - {pos: [-0.1754, 0.0266, 0.2467], lookat: [0.0238, 0.0143, -0.0], roll: 2.62}
+    - {pos: [-0.1365, 0.0114, 0.2668], lookat: [0.0355, 0.0121, 0.0], roll: -0.93}
+    - {pos: [-0.1395, 0.0189, 0.274], lookat: [0.0538, 0.0127, 0.0], roll: 1.11}
+    - {pos: [-0.1169, 0.0211, 0.2719], lookat: [0.0413, 0.0133, 0.0], roll: 2.27}
+    - {pos: [-0.1236, 0.021, 0.2694], lookat: [0.0394, 0.0132, 0.0], roll: 2.11}
+    - {pos: [-0.1215, 0.0214, 0.2703], lookat: [0.0393, 0.0123, 0.0], roll: 2.33}
+    - {pos: [-0.1158, 0.0221, 0.2713], lookat: [0.041, 0.0124, 0.0], roll: 2.58}
+    - {pos: [-0.1267, 0.0244, 0.2706], lookat: [0.0279, 0.0015, 0.0], roll: 2.27}
+
+placement:
+  p_offsheet: 0.25                  # real frames: blocks at or past the sheet edge
+
+render:
+  lights:
+    diffuse: [0.15, 0.35]           # flatter lab light: fainter shadows than dofbot_v1
+    ambient: [0.55, 0.70]
+
+augment:
+  wb_gain: [0.95, 1.05]             # dofbot_v1 sometimes tints the sheet lavender/green; the real sheet stays white
+  saturation: [0.8, 1.05]
+
+episodes:
+  # Share of episodes built around a precondition conflict (tasks.conflict_episode); the rest are regular episodes
+  # (family_weights / random walks) with the settings above.
+  p_conflict: 0.65
+  conflict_weights: {covered: 0.4, ref_covered: 0.1, occupied: 0.5}
+  p_naive: 0.5                      # conflict episode starts with the naive subtask (a recorded failure) ...
+  p_recover: 0.6                    # ... then, this often, the recovery plan from the resulting state

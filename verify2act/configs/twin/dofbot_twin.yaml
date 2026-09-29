@@ -65,6 +65,21 @@ placement:
   min_gap: 0.008                    # footprints of blocks on the table stay this far apart
   p_fail: 0.0                       # optional real-robot style misplacement (0 = the WM learns the intended effect)
   fail_offset: [0.015, 0.03]
+  p_offsheet: 0.0                   # per block at reset: sample from the sheet grown by offsheet_margin (on the table)
+  offsheet_margin: 0.03
+
+# How the real robot fails when a subtask's precondition does not hold (scene.apply(..., conflicts=True)).
+conflict:
+  min_visible_px: 250               # a covered block the camera barely sees is not attempted (the robot cannot find it)
+  p_wrong_block: 0.45               # covered block: the robot grasps the blocker instead and carries it; else knock-over
+  knock_distance: [0.04, 0.08]      # knocked-off blocker lands this far from the target's centre
+  p_tumble: 0.4                     # ... and lands in a random orientation (on its end, leaning)
+  nudge: [0.003, 0.015]             # the target (and nearby blocks) are pushed this far
+  nudge_yaw_std: 8.0
+  nudge_radius: 0.07
+  p_nudge_neighbour: 0.5
+  drop_height: 0.004                # side_occupied / ref_covered: release height above the obstacle
+  drop_tilt_deg: 12.0
 
 physics:
   timestep: 0.002

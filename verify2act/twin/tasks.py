@@ -9,11 +9,11 @@ twin and an oracle plan in the robot subtask vocabulary.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
-from verify2act.twin.scene import DofbotTwin
+from verify2act.twin.scene import SHEET_THICKNESS, DofbotTwin, InvalidSubtask
 
 WARM = ("red", "yellow")
 COOL = ("green", "blue")
@@ -28,6 +28,9 @@ class Goal:
     parts: List["Goal"] = field(default_factory=list)
     moves: frozenset = frozenset()              # blocks the goal moves
     task: str = ""                              # eval task id (task1a ...) for the eval family
+    kind: str = ""                              # bin | left | right | on (single goals; "" for compound)
+    ref: str = ""                               # reference block of left/right/on
+    keep: frozenset = frozenset()               # bin goals: blocks that must stay
 
 
 def _bin(c: str) -> str:
@@ -110,7 +113,8 @@ def _make_bin(text: str, targets: List[str], keep: List[str], family: str = "bin
     def check(tw: DofbotTwin) -> bool:
         return all(not tw.present[c] for c in targets) and all(tw.present[c] for c in keep)
 
-    return Goal(text, family, check, _bin_plan(targets), moves=frozenset(targets), task=task)
+    return Goal(text, family, check, _bin_plan(targets), moves=frozenset(targets), task=task, kind="bin",
+                keep=frozenset(keep))
 
 
 def side_goal(t: DofbotTwin, rng: np.random.Generator) -> Optional[Goal]:
@@ -138,7 +142,7 @@ def _make_side(text: str, c: str, b: str, side: str, family: str = "side", task:
             return None
         return [f"pick and place {c} block to the {side} of {b} block"]
 
-    return Goal(text, family, check, plan, moves=frozenset([c]), task=task)
+    return Goal(text, family, check, plan, moves=frozenset([c]), task=task, kind=side, ref=b)
 
 
 def stack_goal(t: DofbotTwin, rng: np.random.Generator) -> Optional[Goal]:
@@ -160,7 +164,7 @@ def _make_stack(text: str, c: str, b: str, family: str = "stack", task: str = ""
             return None
         return [f"pick and place {c} block on {b} block"]
 
-    return Goal(text, family, check, plan, moves=frozenset([c]), task=task)
+    return Goal(text, family, check, plan, moves=frozenset([c]), task=task, kind="on", ref=b)
 
 
 def compound_goal(t: DofbotTwin, rng: np.random.Generator) -> Optional[Goal]:
@@ -252,3 +256,146 @@ def run_goal(t: DofbotTwin, g: Goal, rng: np.random.Generator,
     if not g.check(t):
         raise RuntimeError(f"goal not reached: {g.text!r}")
     return executed
+
+
+# ── precondition conflicts (SESSION_LOG_TWIN.md, 2026-09-28) ─────────────────────────────────────────────────────────
+# Scenes where the direct subtask for a goal cannot work: the block to move is covered ("covered"), the stacking
+# reference is covered ("ref_covered"), or another block sits where the robot puts a left/right block ("occupied").
+# The episode either starts with that naive subtask (executed with scene.apply(conflicts=True): a recorded failure) or
+# runs the plan that first moves the blocker away (clearing_step). The WM learns both, so the critic can reject the
+# naive plan and accept the clearing one.
+
+def _single_goal(t: DofbotTwin, rng: np.random.Generator, kinds: tuple) -> Optional[Goal]:
+    """An eval task (all four blocks) or a paraphrase family goal of one of ``kinds`` (bin | side | on)."""
+    evals = [k for k, f in EVAL_TASKS.items() if (f().kind == "bin" and "bin" in kinds)
+             or (f().kind in ("left", "right") and "side" in kinds) or (f().kind == "on" and "on" in kinds)]
+    if all(t.present.values()) and rng.random() < 0.5:
+        g = EVAL_TASKS[str(rng.choice(evals))]()
+        return None if not all(t.present[c] for c in g.moves | {g.ref} - {""}) else g
+    maker = {"bin": bin_goal, "side": side_goal, "on": stack_goal}[str(rng.choice(kinds))]
+    return maker(t, rng)
+
+
+def _naive_step(g: Goal, c: str) -> str:
+    if g.kind == "bin":
+        return _bin(c)
+    if g.kind == "on":
+        return f"pick and place {c} block on {g.ref} block"
+    return f"pick and place {c} block to the {g.kind} of {g.ref} block"
+
+
+def conflict_episode(t: DofbotTwin, rng: np.random.Generator, conflict: str) -> Optional[Tuple[Goal, str]]:
+    """Set up a conflict scene in ``t`` (already reset) and return (goal, naive subtask), or None."""
+    kinds = {"covered": ("bin", "side", "on"), "ref_covered": ("on",), "occupied": ("side",)}[conflict]
+    g = _single_goal(t, rng, kinds)
+    if g is None or g.check(t):
+        return None
+    present = [str(c) for c in t.colors if t.present[c]]
+    if g.kind == "bin":
+        cands = [c for c in g.moves if t.present[c] and t.clear(c)]
+        if not cands:
+            return None
+        c = str(rng.choice(cands))
+    else:
+        c = next(iter(g.moves))
+        if not (t.clear(c) and t.present[g.ref] and t.clear(g.ref)):
+            return None
+    blockers = [o for o in present if o not in (c, g.ref) and t.clear(o) and t.on_table(o)]
+    if not blockers:
+        return None
+    o = str(rng.choice(blockers))
+    snapshot = t.get_state()
+    try:
+        if conflict == "covered":
+            t.apply(f"pick and place {o} block on {c} block", rng)
+            if t.visible_px(c) < t.cfg["conflict"]["min_visible_px"]:
+                raise InvalidSubtask("hidden")
+        elif conflict == "ref_covered":
+            t.apply(f"pick and place {o} block on {g.ref} block", rng)
+        else:
+            x, y, yaw = t.nominal_side_pose(c, g.ref, g.kind, rng)
+            was = t.present[o]
+            t.present[o] = False
+            free = t._free_spot(o, x, y, yaw)
+            t.present[o] = was
+            if not free:
+                raise InvalidSubtask("nominal spot not free for the blocker")
+            t._set_pose(o, (x, y, SHEET_THICKNESS + t.size[2] / 2 + 0.0005), yaw)
+            t.settle()
+            if t.side_blocker(c, *t.nominal_side_pose(c, g.ref, g.kind)) != o or t.is_tipped(o):
+                raise InvalidSubtask("blocker did not end up on the nominal spot")
+    except InvalidSubtask:
+        t.set_state(snapshot)
+        return None
+    if g.check(t):
+        t.set_state(snapshot)
+        return None
+    return g, _naive_step(g, c)
+
+
+def _move_away(t: DofbotTwin, g: Goal, o: str, rng: np.random.Generator) -> Optional[str]:
+    """A subtask that takes ``o`` (clear) out of the way of ``g``: into the bin when ``g`` bins it anyway, else next to
+    a block the goal does not involve (never re-blocking the goal's nominal spot), else into the bin unless ``g``
+    keeps it."""
+    if g.kind == "bin" and o in g.moves:
+        return _bin(o)
+    moved = next(iter(g.moves)) if g.kind != "bin" else None
+    others = [d for d in t.colors if t.present[d] and d not in (o, moved, g.ref)]
+    cands = [(str(d), str(s)) for d in rng.permutation(others) for s in rng.permutation(["left", "right"])]
+    for d, side in cands:
+        step = f"pick and place {o} block to the {side} of {d} block"
+        snapshot = t.get_state()
+        try:
+            t.apply(step, rng)
+            ok = not (g.kind in ("left", "right") and
+                      t.side_blocker(moved, *t.nominal_side_pose(moved, g.ref, g.kind)) is not None)
+        except InvalidSubtask:
+            ok = False
+        t.set_state(snapshot)
+        if ok:
+            return step
+    if o not in g.keep:
+        return _bin(o)
+    return None
+
+
+def clearing_step(t: DofbotTwin, g: Goal, rng: np.random.Generator) -> Optional[str]:
+    """Next subtask of the plan that clears blockers first; None when ``g`` holds or no step helps."""
+    if g.check(t):
+        return None
+    if g.kind == "bin":
+        left = [c for c in g.moves if t.present[c]]
+        free = [c for c in left if t.clear(c)]
+        if free:
+            return _bin(str(rng.choice(free)))
+        top = t.top_of(left[0]) if left else None
+        return _move_away(t, g, top, rng) if top else None
+    c = next(iter(g.moves))
+    for x in (c, g.ref) if g.kind == "on" else (c,):
+        top = t.top_of(x)
+        if top is not None:
+            return _move_away(t, g, top, rng)
+    if not t.present[c] or not t.present[g.ref]:
+        return None
+    if g.kind in ("left", "right"):
+        o = t.side_blocker(c, *t.nominal_side_pose(c, g.ref, g.kind))
+        if o is not None and o != c:
+            top = t.top_of(o) or o
+            return _move_away(t, g, top, rng)
+    return _naive_step(g, c)
+
+
+def run_clearing(t: DofbotTwin, g: Goal, rng: np.random.Generator, on_step: Callable[[str], None],
+                 max_steps: int = 5) -> List[str]:
+    """Execute clearing_step until ``g`` holds; raises ``RuntimeError`` when it does not get there."""
+    done: List[str] = []
+    for _ in range(max_steps):
+        s = clearing_step(t, g, rng)
+        if s is None:
+            break
+        t.apply(s, rng)
+        done.append(s)
+        on_step(s)
+    if not g.check(t):
+        raise RuntimeError(f"clearing plan did not reach {g.text!r}")
+    return done

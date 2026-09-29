@@ -33,12 +33,22 @@ def on(s: State, c: str, b: str) -> bool:
 
 
 def side_of(s: State, c: str, b: str, side: str) -> bool:
-    """left = +y = image left, 0.6-3.5 block widths away, level, ahead/behind by less than a block length."""
+    """left = +y = image left, 0.6-3.5 block widths away, level (|dz| < 0.6 heights), ahead/behind by less than a
+    block length."""
     if c == b or not (present(s, c) and present(s, b)):
         return False
     pc, pb = s[c]["pos"], s[b]["pos"]
     dy = (pc[1] - pb[1]) * (1 if side == "left" else -1)
-    return 0.6 * SIZE[1] <= dy <= 3.5 * SIZE[1] and abs(pc[0] - pb[0]) < SIZE[0] and abs(pc[2] - pb[2]) < SIZE[2]
+    return 0.6 * SIZE[1] <= dy <= 3.5 * SIZE[1] and abs(pc[0] - pb[0]) < SIZE[0] and abs(pc[2] - pb[2]) < 0.6 * SIZE[2]
+
+
+def side_of_xy(s: State, c: str, b: str, side: str) -> bool:
+    """side_of without the level check (``c`` may rest on another block)."""
+    if c == b or not (present(s, c) and present(s, b)):
+        return False
+    pc, pb = s[c]["pos"], s[b]["pos"]
+    dy = (pc[1] - pb[1]) * (1 if side == "left" else -1)
+    return 0.6 * SIZE[1] <= dy <= 3.5 * SIZE[1] and abs(pc[0] - pb[0]) < SIZE[0]
 
 
 def binned(s: State, targets: Sequence[str], keep: Sequence[str] = ()) -> bool:
@@ -127,6 +137,17 @@ def sample_goals(rng: random.Random, s: State, k: int = 8) -> List[Tuple[str, in
         c, b = rng.choice(stacks)
         out.append((stack_text(rng, c, b), 1))
         out.append((stack_text(rng, b, c), int(on(s, b, c))))
+    # near misses of the precondition-conflict outcomes (tasks.conflict_episode): "c on b" with c on a block stacked on
+    # b, and "c to the <side> of b" with c resting on a block (or leaning) at that side
+    indirect = [(c, b) for c, d in stacks for d2, b in stacks if d == d2 and not on(s, c, b)]
+    if indirect:
+        c, b = rng.choice(indirect)
+        out.append((stack_text(rng, c, b), 0))
+    raised = [(c, b, d) for c in tab for b in tab for d in ("left", "right")
+              if side_of_xy(s, c, b, d) and not side_of(s, c, b, d)]
+    if raised:
+        c, b, d = rng.choice(raised)
+        out.append((side_text(rng, c, b, d), 0))
     # eval tasks verbatim (these are what the robot is asked)
     for text, pred in rng.sample(EVAL_GOALS, 2):
         out.append((text, int(pred(s))))

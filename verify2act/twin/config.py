@@ -20,8 +20,13 @@ def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_config(path: Optional[str] = None, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    with open(path or DEFAULT_CONFIG) as f:
+    """``base: <file>`` in a config (relative to it) loads that config first and deep-merges this one on top."""
+    path = Path(path or DEFAULT_CONFIG)
+    with open(path) as f:
         cfg = yaml.safe_load(f)
+    base = cfg.pop("base", None)
+    if base:
+        cfg = _merge(load_config(str(path.parent / base)), cfg)
     if overrides:
         _merge(cfg, overrides)
     return cfg

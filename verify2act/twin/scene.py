@@ -253,15 +253,16 @@ class DofbotTwin:
         return self.present[c] and self.pose(c)[0][2] < SHEET_THICKNESS + 0.75 * self.size[2]
 
     def side_of(self, c: str, b: str, side: str) -> bool:
-        """``c`` is ``side`` (left = +y = image left) of ``b``: 0.6–3.5 block widths away along y, level, ahead/behind
-        by less than a block length (EVAL_TASKS.md)."""
+        """``c`` is ``side`` (left = +y = image left) of ``b``: 0.6–3.5 block widths away along y, level (|dz| below
+        0.6 heights, the complement of ``on``: a block resting on a neighbour is not beside ``b``), ahead/behind by
+        less than a block length (EVAL_TASKS.md)."""
         if c == b or not (self.present[c] and self.present[b]):
             return False
         (pc, _), (pb, _) = self.pose(c), self.pose(b)
         dy = (pc[1] - pb[1]) * (1 if side == "left" else -1)
         w = self.size[1]
         return (0.6 * w <= dy <= 3.5 * w and abs(pc[0] - pb[0]) < self.size[0]
-                and abs(pc[2] - pb[2]) < self.size[2])
+                and abs(pc[2] - pb[2]) < 0.6 * self.size[2])
 
     def project(self, pts: np.ndarray, cam: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """World points (N,3) -> pixel (N,2) with the given (default: this episode's) camera. NaN behind the camera."""
@@ -321,8 +322,10 @@ class DofbotTwin:
                     ex, ey = np.abs(fp0).max(axis=0) + pl["region_margin"]
                     if ex * 2 >= sx or ey * 2 >= sy:
                         continue
-                    x = rng.uniform(ox - sx / 2 + ex, ox + sx / 2 - ex)
-                    y = rng.uniform(oy - sy / 2 + ey, oy + sy / 2 - ey)
+                    # Real frames often have a block at or past the sheet edge (on the table).
+                    m = -pl.get("offsheet_margin", 0.0) if rng.random() < pl.get("p_offsheet", 0.0) else 0.0
+                    x = rng.uniform(ox - sx / 2 + ex + m, ox + sx / 2 - ex - m)
+                    y = rng.uniform(oy - sy / 2 + ey + m, oy + sy / 2 - ey - m)
                     if self._free_spot(c, x, y, yaw):
                         self.present[c] = True
                         self._set_pose(c, (x, y, SHEET_THICKNESS + self.size[2] / 2 + 0.0005), yaw)
@@ -338,25 +341,57 @@ class DofbotTwin:
 
     # ── subtasks ───────────────────────────────────────────────────────────
 
-    def check(self, subtask: str) -> Tuple[str, str, Optional[str]]:
-        """Parse and validate; raise ``InvalidSubtask`` when the scene does not allow it."""
+    def check(self, subtask: str, conflicts: bool = False) -> Tuple[str, str, Optional[str]]:
+        """Parse and validate; raise ``InvalidSubtask`` when the scene does not allow it. With ``conflicts`` a covered
+        block or reference is allowed (``apply`` then simulates how the robot fails)."""
         kind, c, b = parse_subtask(subtask)
         if b == c:
             raise InvalidSubtask("block and reference block are the same")
         if not self.present[c]:
             raise InvalidSubtask(f"{c} block is not on the table")
-        if not self.clear(c):
+        if not conflicts and not self.clear(c):
             raise InvalidSubtask(f"something is on the {c} block")
         if b is not None:
             if not self.present[b]:
                 raise InvalidSubtask(f"{b} block is not on the table")
-            if kind == "on" and not self.clear(b):
+            if kind == "on" and not conflicts and not self.clear(b):
                 raise InvalidSubtask(f"something is on the {b} block")
         return kind, c, b
 
-    def apply(self, subtask: str, rng: np.random.Generator, max_tries: int = 60) -> None:
-        """Execute one subtask (teleport + settle). Raises ``InvalidSubtask``; the scene is unchanged in that case."""
-        kind, c, b = self.check(subtask)
+    def apply(self, subtask: str, rng: np.random.Generator, max_tries: int = 60, conflicts: bool = False) -> str:
+        """Execute one subtask (teleport + settle). Raises ``InvalidSubtask``; the scene is unchanged in that case.
+
+        With ``conflicts`` a subtask whose precondition does not hold is executed the way the real robot fails at it
+        instead of being rejected, and the returned label says which failure happened ("" = normal execution):
+
+          covered_knock   the moved block has something on it: the grasp fails and knocks the blocker(s) off
+          covered_wrong   ... or the robot grasps the blocker instead and carries it to the destination
+          ref_covered     "on <b>" with something on <b>: the block is dropped on top of that stack
+          side_occupied   another block sits at the nominal left/right spot: the block is dropped there (on it, leaning
+                          against it, or pushing it)
+        A covered block that the camera cannot see is still rejected (the robot cannot find it)."""
+        kind, c, b = self.check(subtask, conflicts)
+        if conflicts:
+            top = self.top_of(c)
+            if top is not None:
+                if self.visible_px(c) < self.cfg["conflict"]["min_visible_px"]:
+                    raise InvalidSubtask(f"the {c} block is hidden")
+                if top != b and rng.random() < self.cfg["conflict"]["p_wrong_block"]:
+                    snapshot = self.get_state()
+                    try:
+                        self._execute(kind, top, b, rng, max_tries, conflicts=True)
+                        return "covered_wrong"
+                    except InvalidSubtask:
+                        self.set_state(snapshot)
+                self._knock_off(c, rng)
+                return "covered_knock"
+            if kind == "on" and not self.clear(b):
+                self._drop(c, *self.pose(self.top_of(b))[0][:2], self.pose(b)[1], rng)
+                return "ref_covered"
+        return self._execute(kind, c, b, rng, max_tries, conflicts)
+
+    def _execute(self, kind: str, c: str, b: Optional[str], rng: np.random.Generator, max_tries: int,
+                 conflicts: bool = False) -> str:
         pl = self.cfg["placement"]
         fail = rng.random() < pl["p_fail"]
         snapshot = self.get_state()
@@ -364,9 +399,11 @@ class DofbotTwin:
             self.present[c] = False
             self._set_pose(c, self._park_pos(self.colors.index(c)), 0.0)
             mujoco.mj_forward(self.model, self.data)
-            return
+            return ""
         pb, yb = self.pose(b)
         if kind == "on":
+            if not self.clear(b):
+                raise InvalidSubtask(f"something is on the {b} block")
             d = rng.normal(0, pl["stack_xy_std"], 2)
             if fail:
                 d += _rand_dir(rng) * rng.uniform(*pl["fail_offset"])
@@ -376,16 +413,127 @@ class DofbotTwin:
             if not fail and (not self.on(c, b) or self.is_tipped(c)):
                 self.set_state(snapshot)
                 raise InvalidSubtask(f"{c} did not settle on {b}")
-            return
+            return ""
+        if conflicts:
+            # The robot places at a fixed offset from the reference: a block already there is hit.
+            x, y, yaw = self.nominal_side_pose(c, b, kind, rng)
+            if self.side_blocker(c, x, y, yaw) is not None:
+                if not self.in_view((x, y, SHEET_THICKNESS + self.size[2] / 2), yaw, margin=0):
+                    raise InvalidSubtask(f"the nominal spot {kind} of the {b} block is out of view")
+                self._drop(c, x, y, yaw, rng)
+                return "side_occupied"
         spot = self.find_side_spot(c, b, kind, rng, max_tries, fail)
         if spot is not None:
             x, y, yaw = spot
             self._set_pose(c, (x, y, SHEET_THICKNESS + self.size[2] / 2 + 0.0005), yaw)
             self.settle()
             if not self.is_tipped(c):
-                return
+                return ""
         self.set_state(snapshot)
         raise InvalidSubtask(f"no free spot {kind} of the {b} block for the {c} block")
+
+    # ── conflicts: how the real robot fails when a precondition does not hold ──
+
+    def top_of(self, c: str) -> Optional[str]:
+        """The topmost block of the stack on ``c`` (None when ``c`` is clear)."""
+        top, seen = None, {c}
+        cur = c
+        while True:
+            nxt = next((o for o in self.colors if o not in seen and self.on(o, cur)), None)
+            if nxt is None:
+                return top
+            top, cur = nxt, nxt
+            seen.add(nxt)
+
+    def nominal_side_pose(self, c: str, b: str, side: str,
+                          rng: Optional[np.random.Generator] = None) -> Tuple[float, float, float]:
+        """Where the robot puts ``c`` for "to the <side> of <b>": the middle of the side distance range, aligned with
+        ``b`` (placement noise when ``rng`` is given)."""
+        pl = self.cfg["placement"]
+        pb, yb = self.pose(b)
+        sign = 1.0 if side == "left" else -1.0
+        n = (lambda std: rng.normal(0, std)) if rng is not None else (lambda std: 0.0)
+        dy = float(np.mean(pl["side_distance"])) + n(0.003)
+        axis = (yb + 90.0) % 180.0 - 90.0
+        yaw = float(np.clip(axis + n(pl["side_yaw_std"]), -pl["yaw_max"], pl["yaw_max"]))
+        if rng is not None:
+            yaw = self._flip(yaw, rng)
+        return pb[0] + n(pl["side_x_std"]), pb[1] + sign * dy, yaw
+
+    def side_blocker(self, c: str, x: float, y: float, yaw: float) -> Optional[str]:
+        """A block (other than ``c``) whose footprint overlaps ``c`` placed at (x, y, yaw)."""
+        fp = _rect_corners(x, y, yaw, self.size[0] / 2, self.size[1] / 2)
+        for o in self.colors:
+            if o != c and self.present[o] and rects_overlap(fp, self.footprint(o)):
+                return o
+        return None
+
+    def _drop(self, c: str, x: float, y: float, yaw: float, rng: np.random.Generator) -> None:
+        """Release ``c`` just above whatever is at (x, y) and let physics decide (it lands on it, leans or slides)."""
+        fp = _rect_corners(x, y, yaw, self.size[0] / 2, self.size[1] / 2)
+        z = SHEET_THICKNESS
+        for o in self.colors:
+            if o != c and self.present[o] and rects_overlap(fp, self.footprint(o)):
+                z = max(z, self.pose(o)[0][2] + self.size[2] / 2)
+        z += self.size[2] / 2 + self.cfg["conflict"]["drop_height"]
+        self._set_pose(c, (x, y, z), yaw)
+        self._perturb_orientation(c, rng, self.cfg["conflict"]["drop_tilt_deg"])
+        self.settle(2 * self.cfg["physics"]["settle_steps"])
+
+    def _perturb_orientation(self, c: str, rng: np.random.Generator, tilt_deg: float) -> None:
+        a = self._qadr[c]
+        q = self.data.qpos[a + 3:a + 7].copy()
+        axis = np.array([*_rand_dir(rng), 0.0])
+        h = math.radians(rng.uniform(0, tilt_deg)) / 2
+        dq = np.array([math.cos(h), *(math.sin(h) * axis)])
+        out = np.zeros(4)
+        mujoco.mju_mulQuat(out, dq, q)
+        self.data.qpos[a + 3:a + 7] = out / np.linalg.norm(out)
+
+    def _knock_off(self, c: str, rng: np.random.Generator) -> None:
+        """Failed grasp of a covered block: the blocks on it fall off to the side (sometimes tumbling), ``c`` and
+        blocks next to it are nudged."""
+        cf = self.cfg["conflict"]
+        pc, _ = self.pose(c)
+        above = []
+        cur = c
+        while (nxt := next((o for o in self.colors if o not in above and o != c and self.on(o, cur)), None)):
+            above.append(nxt)
+            cur = nxt
+        for o in above:
+            for _ in range(40):
+                d = _rand_dir(rng) * rng.uniform(*cf["knock_distance"])
+                x, y, yaw = pc[0] + d[0], pc[1] + d[1], float(rng.uniform(-180, 180))
+                self.present[o] = False
+                free = self._free_spot(o, x, y, yaw)
+                self.present[o] = True
+                if free:
+                    break
+            self._set_pose(o, (x, y, SHEET_THICKNESS + self.size[2] / 2 + 0.01), yaw)
+            if rng.random() < cf["p_tumble"]:
+                self._perturb_orientation(o, rng, 90.0)
+        for o in self.colors:
+            if o in above or not self.present[o]:
+                continue
+            near = o == c or np.linalg.norm(self.pose(o)[0][:2] - pc[:2]) < cf["nudge_radius"]
+            if near and (o == c or rng.random() < cf["p_nudge_neighbour"]):
+                p, yw = self.pose(o)
+                d = _rand_dir(rng) * rng.uniform(*cf["nudge"])
+                self._set_pose(o, (p[0] + d[0], p[1] + d[1], p[2] + 0.001), yw + rng.normal(0, cf["nudge_yaw_std"]))
+        self.settle(2 * self.cfg["physics"]["settle_steps"])
+
+    def visible_px(self, c: str, cam: Optional[Dict[str, Any]] = None) -> int:
+        """Pixels of ``c`` in the arm camera view (segmentation render)."""
+        if self.renderer is None:
+            raise RuntimeError("DofbotTwin(render=False)")
+        self._set_camera(cam or self.episode_camera)
+        self.renderer.enable_segmentation_rendering()
+        try:
+            self.renderer.update_scene(self.data, camera="home")
+            seg = self.renderer.render()
+        finally:
+            self.renderer.disable_segmentation_rendering()
+        return int(((seg[..., 0] == self._geom[c]) & (seg[..., 1] == mujoco.mjtObj.mjOBJ_GEOM)).sum())
 
     def find_side_spot(self, c: str, b: str, side: str, rng: np.random.Generator, max_tries: int = 60,
                        fail: bool = False) -> Optional[Tuple[float, float, float]]:
@@ -487,6 +635,11 @@ class DofbotTwin:
         cam = cam or self.episode_camera
         if rng is not None:
             cam = self._jitter(cam, self.cfg["camera"]["jitter_frame"], rng)
+        self._set_camera(cam)
+        self.renderer.update_scene(self.data, camera="home")
+        return self.renderer.render().copy()
+
+    def _set_camera(self, cam: Dict[str, Any]) -> None:
         R = camera_frame(np.asarray(cam["pos"]), np.asarray(cam["lookat"]), cam["roll"])
         q = np.zeros(4)
         mujoco.mju_mat2Quat(q, R.flatten())
@@ -494,8 +647,6 @@ class DofbotTwin:
         self.model.cam_quat[self._cam] = q
         self.model.cam_fovy[self._cam] = cam["fovy"]
         mujoco.mj_forward(self.model, self.data)
-        self.renderer.update_scene(self.data, camera="home")
-        return self.renderer.render().copy()
 
     def close(self) -> None:
         if self.renderer is not None:
