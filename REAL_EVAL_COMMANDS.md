@@ -39,10 +39,9 @@ rsync -avR --progress \
   $CSG2:$R/verify2act/output/goal_head/rla_twin/goal_head_last.pt \
   $CSG2:$R/verify2act/output/rla_wm/dofbot_twin/wm/ckpt/latent_dynamics_best.pt \
   $CSG2:$R/verify2act/output/diffusion_wm/dofbot_twin/wm/best \
-  $CSG2:$R/verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000 \
   ./
 ```
-About 3.5 GB. `--real2sim` also needs MuJoCo with EGL on the lab PC (`python -c "import mujoco"`), and the twin textures in
+About 3.3 GB. The diffusion variant also downloads `timbrooks/instruct-pix2pix` and the SD-1.5 VAE from Hugging Face on first start. `--real2sim` also needs MuJoCo with EGL on the lab PC (`python -c "import mujoco"`), and the twin textures in
 `verify2act/twin/assets/` (now in git).
 
 ## 1. Offline smoke test per variant (no robot; one Gemini call each)
@@ -94,7 +93,8 @@ Switching variant = stop the server (Ctrl-C), start the next one; the Jetson ses
   frame`). Fit time 12-16 s per call (CPU).
 - The temporal head (θ_c) mean-pools DINO patches: it rejects scene-level jumps (different scene: 99% rejected) but is
   blind to layout errors; plan selection rests on the goal head.
-- Diffusion has no critic (as in the sim). Its LoRA was fine-tuned on twin data for 3000 steps from the CALVIN LoRA
-  (the CALVIN run used 16k); see `SESSION_LOG_TWIN.md` for its offline check on real2sim renders.
+- Diffusion has no critic (as in the sim). Its LoRA was fine-tuned on twin data from the CALVIN LoRA (best at step 1000
+  of 3000; the CALVIN run used 16k). Offline on the real2sim renders it draws the twin scene but rarely carries out the
+  action (blocks vanish or change colour): expect its reflections to work from poor imaginations (`SESSION_LOG_TWIN.md`).
 - RLA-WM trained for fewer epochs than V2A's WM (overnight, time-boxed); its goal head was trained on its own
   imaginations with the same recipe as V2A's, starting from the true-frame-only head v1.
