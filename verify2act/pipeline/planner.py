@@ -999,11 +999,14 @@ class BeamSearchPlanner:
         decoder: Optional[torch.nn.Module] = None,
         timestep: int = 0,
         output_dir: Optional[Union[str, pathlib.Path]] = None,
+        vlm_image_np: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """
         Runs the reflection-replanning loop (up to self.max_replans times).
+        ``vlm_image_np``: the frame the VLM sees, if not ``current_image_np`` (see ``plan``).
         """
         import torch
+        vlm_img = current_image_np if vlm_image_np is None else vlm_image_np
         from verify2act.pipeline.reflection import build_reflection_context
         from verify2act.pipeline.world_model import LatentWorldModel
         
@@ -1038,12 +1041,12 @@ class BeamSearchPlanner:
                         "(world model did not run). Using current real observation "
                         "for reflection context."
                     )
-                    imagined_img_next = current_image_np
+                    imagined_img_next = vlm_img
                 else:
                     imagined_img_next = self.decode_dino_features(current_final_state, decoder)
             else:
                 # Non-latent WM: final_state is already an RGB array (or None → real obs).
-                imagined_img_next = current_final_state if current_final_state is not None else current_image_np
+                imagined_img_next = current_final_state if current_final_state is not None else vlm_img
                 
             # 2. Build the reflection context dict.
             # Use the high-level nut-name label (first element of tuple), NOT the
@@ -1070,7 +1073,7 @@ class BeamSearchPlanner:
             # 3. Call the planner's reflect method to get a revised plan
             try:
                 result = self.vlm.reflect(
-                    current_image_np=current_image_np,
+                    current_image_np=vlm_img,
                     language_goal=language_goal,
                     history=history,
                     obj_labels=obj_labels,
@@ -1137,12 +1140,17 @@ class BeamSearchPlanner:
         timestep: int = 0,
         output_dir: Optional[Union[str, pathlib.Path]] = None,
         decoder: Optional[torch.nn.Module] = None,
+        vlm_image_np: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """
         Executes a trajectory search, evaluates candidates, selects the best plan,
         and coordinates reflection/replanning if needed.
+
+        ``vlm_image_np``: the frame the VLM sees (propose / reflect), when it differs from the one the world model and
+        critic start from (the real robot's --real2sim: the VLM sees the camera frame, the WM a twin re-render).
         """
         import torch
+        vlm_img = current_image_np if vlm_image_np is None else vlm_image_np
         logger.info(f"BeamSearchPlanner: Sampling up to {self.beam_width} candidate plans...")
         
         # 1. Propose candidates using propose_candidates
@@ -1150,7 +1158,7 @@ class BeamSearchPlanner:
             logger.info("ReflectVLM (Diffusion mode): Proposing a single plan upfront...")
             try:
                 plan = self.vlm.propose(
-                    current_image_np=current_image_np,
+                    current_image_np=vlm_img,
                     language_goal=language_goal,
                     history=history,
                     obj_labels=obj_labels,
@@ -1163,7 +1171,7 @@ class BeamSearchPlanner:
         else:
             try:
                 candidate_plans = self.vlm.propose_candidates(
-                    current_image_np=current_image_np,
+                    current_image_np=vlm_img,
                     language_goal=language_goal,
                     history=history,
                     obj_labels=obj_labels,
@@ -1174,7 +1182,7 @@ class BeamSearchPlanner:
                 logger.warning(f"VLM candidate proposal failed: {e}. Falling back to default plan Propose.")
                 try:
                     plan = self.vlm.propose(
-                        current_image_np=current_image_np,
+                        current_image_np=vlm_img,
                         language_goal=language_goal,
                         history=history,
                         obj_labels=obj_labels,
@@ -1286,6 +1294,7 @@ class BeamSearchPlanner:
                 decoder=decoder,
                 timestep=timestep,
                 output_dir=output_dir,
+                vlm_image_np=vlm_image_np,
             )
             return reflection_result
         

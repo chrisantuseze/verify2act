@@ -266,7 +266,7 @@ class Verify2ActBackend:
             if self.beam_planner is None:
                 # vlm_only, as the sim's beam_planner=None branch: one propose, accepted as is. A VLM error raises
                 # (an error reply) instead of becoming an empty plan.
-                vlm_plan = self.vlm.propose(current_image_np=image_rgb, history=history, obj_labels=obj_labels,
+                vlm_plan = self.vlm.propose(current_image_np=real_rgb, history=history, obj_labels=obj_labels,
                                             horizon=horizon, language_goal=goal)
                 res = {"plan": vlm_plan, "plan_accepted": True, "score": float("nan"), "all_scores": [],
                        "failed_step": None, "replan_attempts": 0, "reflection_analyses": [], "critic_decisions": []}
@@ -280,6 +280,9 @@ class Verify2ActBackend:
                     timestep=call_idx,
                     output_dir=session_dir,
                     decoder=self.decoder,
+                    # with real2sim the WM and critic start from the twin render; the VLM still sees the camera frame,
+                    # as it does in vlm_only, so the variants differ only in verification
+                    vlm_image_np=real_rgb if image_rgb is not real_rgb else None,
                 )
             evaluations = self._summarise_evaluations()
             vlm_calls = self._record["vlm_calls"] if hasattr(self.vlm, "_call") else None

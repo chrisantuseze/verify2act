@@ -118,16 +118,41 @@ def dispatch(backend, op: str, r: dict) -> dict:
     raise ValueError(f"unknown op '{op}'")
 
 
-# Per-variant checkpoints (CALVIN, as in commands/v2a_wm.sh), used when the flag is not given.
+# Per-variant checkpoints and thresholds, used when the flag is not given. --preset calvin (default) is the CALVIN
+# models, as in commands/v2a_wm.sh; --preset twin is the DOFBOT digital-twin models (SESSION_LOG_TWIN.md): twin delta AE,
+# twin critic (temporal head) and a spatial goal head per latent WM, trained on that WM's imagined states.
 _V2A_CALVIN = "verify2act/output/v2a_wm/calvin"
-MODE_DEFAULTS = {
-    "v2a_wm": {"latent_wm_ckpt": f"{_V2A_CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt",
-               "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
-    "rla_wm": {"latent_wm_ckpt": "verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt",
-               "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
-    "diffusion_wm": {"wm_decoder_dir": "verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000"},
-    "vlm_only": {},
+_TWIN = "verify2act/output/v2a_wm/dofbot_twin"
+PRESETS = {
+    "calvin": {
+        "_common": {"critic_ckpt": "verify2act/output/contrastive/calvin/best_contrastive_critic.pt",
+                    "encoder_ckpt": f"{_V2A_CALVIN}/encoder/ckpt/delta_encoder_best.pt",
+                    "wm_adapter_dir": "verify2act/output/diffusion_wm/calvin/wm/best/unet_lora",
+                    "theta_c": 0.5, "theta_p": 0.05, "max_retries": 2},
+        "v2a_wm": {"latent_wm_ckpt": f"{_V2A_CALVIN}/wm/ckpt/latent_dynamics_best_weights.pt",
+                   "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
+        "rla_wm": {"latent_wm_ckpt": "verify2act/output/rla_wm/calvin/wm/ckpt/latent_dynamics_best.pt",
+                   "wm_decoder_dir": f"{_V2A_CALVIN}/decoder"},
+        "diffusion_wm": {"wm_decoder_dir": "verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000"},
+        "vlm_only": {},
+    },
+    "twin": {
+        # theta_p 0.5: the goal head returns P(goal met); max_retries 3: best of 3 WM samples (SESSION_LOG_TWIN.md).
+        "_common": {"critic_ckpt": "verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt",
+                    "encoder_ckpt": f"{_TWIN}/encoder/ckpt/delta_encoder_best.pt",
+                    "wm_adapter_dir": "verify2act/output/diffusion_wm/dofbot_twin/wm/best/unet_lora",
+                    "theta_c": 0.5, "theta_p": 0.5, "max_retries": 3},
+        "v2a_wm": {"latent_wm_ckpt": f"{_TWIN}/wm3/ckpt/latent_dynamics_best_weights.pt",
+                   "wm_decoder_dir": f"{_TWIN}/decoder",
+                   "goal_head_ckpt": "verify2act/output/goal_head/v3/goal_head_last.pt"},
+        "rla_wm": {"latent_wm_ckpt": "verify2act/output/rla_wm/dofbot_twin/wm/ckpt/latent_dynamics_best.pt",
+                   "wm_decoder_dir": f"{_TWIN}/decoder",
+                   "goal_head_ckpt": "verify2act/output/goal_head/rla_twin/goal_head_last.pt"},
+        "diffusion_wm": {"wm_decoder_dir": "verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000"},
+        "vlm_only": {},
+    },
 }
+MODE_DEFAULTS = PRESETS["calvin"]
 
 
 def parse_args(argv=None):
@@ -141,17 +166,19 @@ def parse_args(argv=None):
     ap.add_argument("--output-dir", default=None,
                     help="per-session imagination logs (default: verify2act/output/real/<wm-mode>)")
 
-    ap.add_argument("--wm-mode", choices=list(MODE_DEFAULTS), default="v2a_wm",
+    ap.add_argument("--preset", choices=list(PRESETS), default="calvin",
+                    help="checkpoint/threshold set for flags left unset (see PRESETS); the real-robot eval uses twin")
+    ap.add_argument("--wm-mode", choices=[m for m in MODE_DEFAULTS if m != "_common"], default="v2a_wm",
                     help="verification variant (one per server process); diffusion_wm is the sim's 'diffusion' mode")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--critic-ckpt", default="verify2act/output/contrastive/calvin/best_contrastive_critic.pt")
+    ap.add_argument("--critic-ckpt", default=None, help="default: per --preset")
     ap.add_argument("--goal-head-ckpt", default=None,
                     help="spatial goal head (verify2act/twin/train_goal_head.py); replaces pooled goal scores")
     ap.add_argument("--real2sim", action="store_true",
                     help="plan on a twin re-render of each request frame (verify2act/twin/real2sim.py)")
     ap.add_argument("--latent-wm-ckpt", default=None, help="v2a_wm / rla_wm dynamics (default: per --wm-mode)")
-    ap.add_argument("--encoder-ckpt", default=f"{_V2A_CALVIN}/encoder/ckpt/delta_encoder_best.pt",
-                    help="v2a_wm / rla_wm delta encoder (the sim's rla_wm run uses the v2a_wm one too)")
+    ap.add_argument("--encoder-ckpt", default=None,
+                    help="v2a_wm / rla_wm delta encoder (the sim's rla_wm run uses the v2a_wm one too); default: per --preset")
     ap.add_argument("--wm-decoder-dir", default=None,
                     help="FeatureDecoder dir (v2a_wm / rla_wm) or VAE decoder dir (diffusion_wm); default: per --wm-mode")
     ap.add_argument("--history-len", type=int, default=3)
@@ -160,7 +187,7 @@ def parse_args(argv=None):
     ap.add_argument("--action-conditioning", choices=["cross_attn", "adaln"], default="cross_attn")
     # diffusion_wm (InstructPix2Pix + LoRA), defaults as in inference_calvin.py
     ap.add_argument("--wm-model", default="timbrooks/instruct-pix2pix")
-    ap.add_argument("--wm-adapter-dir", default="verify2act/output/diffusion_wm/calvin/wm/best/unet_lora")
+    ap.add_argument("--wm-adapter-dir", default=None, help="diffusion_wm LoRA; default: per --preset")
     ap.add_argument("--vae-model", default="runwayml/stable-diffusion-v1-5")
     ap.add_argument("--vae-subfolder", default="vae")
     ap.add_argument("--wm-steps", type=int, default=30)
@@ -179,14 +206,17 @@ def parse_args(argv=None):
 
     ap.add_argument("--horizon", type=int, default=4, help="max subtasks per plan (request may override)")
     ap.add_argument("--beam-width", type=int, default=3)
-    ap.add_argument("--theta-c", type=float, default=0.5, help="temporal-head threshold (as in the sim v2a_wm runs)")
-    ap.add_argument("--theta-p", type=float, default=0.05, help="goal-head threshold (as in the sim v2a_wm runs)")
-    ap.add_argument("--max-retries", type=int, default=2, help="WM re-samples on a requery")
+    ap.add_argument("--theta-c", type=float, default=None, help="temporal-head threshold; default: per --preset")
+    ap.add_argument("--theta-p", type=float, default=None,
+                    help="goal threshold; default: per --preset (calvin 0.05 as in the sim v2a_wm runs, twin 0.5)")
+    ap.add_argument("--max-retries", type=int, default=None, help="WM re-samples on a requery; default: per --preset")
     ap.add_argument("--max-replans", type=int, default=2, help="reflect -> replan budget per planning call (sim default)")
     args = ap.parse_args(argv)
     if args.output_dir is None:
-        args.output_dir = f"verify2act/output/real/{args.wm_mode}"
-    for key, value in MODE_DEFAULTS[args.wm_mode].items():
+        args.output_dir = (f"verify2act/output/real/{args.wm_mode}" if args.preset == "calvin" else
+                           f"verify2act/output/real/{args.preset}/{args.wm_mode}{'_r2s' if args.real2sim else ''}")
+    preset = PRESETS[args.preset]
+    for key, value in {**preset["_common"], **preset[args.wm_mode]}.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
     return args

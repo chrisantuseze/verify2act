@@ -94,6 +94,25 @@ def test_good_plan_accepted_without_reflection(tmp_path):
     assert json.loads((call_dir / "response.json").read_text())["plan"] == [GOOD, GOOD2]
 
 
+def test_real2sim_render_goes_to_wm_real_frame_to_vlm(tmp_path):
+    backend, vlm = make_backend([[BAD]], revisions=[[GOOD, GOOD2]], output_dir=tmp_path)
+    render = np.full_like(IMG, 7)
+    backend.real2sim = lambda img: (render, {"rms": 0.5, "fit_s": 1.0})
+    seen = {"vlm": [], "wm": []}
+    propose, reflect = vlm.propose_candidates, vlm.reflect
+    vlm.propose_candidates = lambda **kw: seen["vlm"].append(kw["current_image_np"]) or propose(**kw)
+    vlm.reflect = lambda **kw: seen["vlm"].append(kw["current_image_np"]) or reflect(**kw)
+    wm = backend.beam_planner.world_model
+    init = wm.initialize_history
+    wm.initialize_history = lambda img: seen["wm"].append(img) or init(img)
+    out = backend.plan("s1", IMG, GOAL)
+    assert out["accepted"] and out["real2sim"]["rms"] == 0.5
+    assert len(seen["vlm"]) == 2 and all(v is IMG for v in seen["vlm"])      # propose + reflect: camera frame
+    assert seen["wm"] and all(w is render for w in seen["wm"])               # imagination: twin render
+    call_dir = tmp_path / "s1" / "imagination_logs" / "planning_call_00"
+    assert (call_dir / "real2sim_render.png").exists() and (call_dir / "request_image.png").exists()
+
+
 def test_rejected_plan_is_reflected_and_replanned():
     backend, vlm = make_backend([[BAD, GOOD]], revisions=[[GOOD, GOOD2]])
     out = backend.plan("s1", IMG, GOAL)
@@ -234,6 +253,23 @@ def test_server_args_resolve_per_mode_checkpoints():
     diff = parse_args(["--wm-mode", "diffusion_wm"])
     assert diff.wm_decoder_dir.endswith("diffusion_wm/calvin/decoder/checkpoint-5000")
     assert parse_args(["--latent-wm-ckpt", "x.pt"]).latent_wm_ckpt == "x.pt"
+    calvin = parse_args([])
+    assert calvin.critic_ckpt.endswith("contrastive/calvin/best_contrastive_critic.pt") and calvin.theta_p == 0.05
+    assert calvin.goal_head_ckpt is None and calvin.max_retries == 2
+
+
+def test_server_twin_preset():
+    from verify2act.robot.server import parse_args
+    v2a = parse_args(["--preset", "twin", "--real2sim"])
+    assert "dofbot_twin/wm3" in v2a.latent_wm_ckpt and "dofbot_twin/encoder" in v2a.encoder_ckpt
+    assert v2a.critic_ckpt.endswith("contrastive/dofbot_twin/best_contrastive_critic.pt")
+    assert v2a.goal_head_ckpt.endswith("goal_head/v3/goal_head_last.pt") and v2a.theta_p == 0.5 and v2a.max_retries == 3
+    assert v2a.output_dir.endswith("real/twin/v2a_wm_r2s")
+    rla = parse_args(["--preset", "twin", "--wm-mode", "rla_wm", "--theta-p", "0.4"])
+    assert "rla_wm/dofbot_twin" in rla.latent_wm_ckpt and "rla_twin" in rla.goal_head_ckpt and rla.theta_p == 0.4
+    assert rla.output_dir.endswith("real/twin/rla_wm")
+    diff = parse_args(["--preset", "twin", "--wm-mode", "diffusion_wm"])
+    assert "diffusion_wm/dofbot_twin" in diff.wm_adapter_dir
 
 
 FEEDBACK = "yellow bounced off the bin rim"
