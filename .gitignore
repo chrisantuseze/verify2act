@@ -98,6 +98,9 @@ robosuite/data_capture/dataset/
 
 *.pickle
 *.png
+# tracked images: real-eval start layouts and the digital-twin textures (real2sim needs them)
+!real_eval_layouts/**/*.png
+!verify2act/twin/assets/*.png
 *.pth
 temp/
 *.sif
