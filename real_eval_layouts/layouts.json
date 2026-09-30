@@ -149,7 +149,7 @@
   },
   {
    "id": "task1a-L4",
-   "role": "SPARE",
+   "role": "EVAL",
    "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
@@ -198,7 +198,7 @@
   },
   {
    "id": "task1a-L5",
-   "role": "SPARE",
+   "role": "EVAL",
    "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
@@ -244,13 +244,11 @@
     "blue    far edge 14.4 cm   left edge 12.0 cm   rotated -36.3\u00b0 (far end to the right)   tag end away from robot",
     "yellow  far edge  6.9 cm   left edge 10.6 cm   rotated  -9.8\u00b0 (far end to the right)   tag end away from robot"
    ]
-  }
- ],
- "task1b": [
+  },
   {
-   "id": "task1b-L1",
+   "id": "task1a-L6",
    "role": "EVAL",
-   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -297,9 +295,9 @@
    ]
   },
   {
-   "id": "task1b-L2",
+   "id": "task1a-L7",
    "role": "EVAL",
-   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -346,9 +344,9 @@
    ]
   },
   {
-   "id": "task1b-L3",
+   "id": "task1a-L8",
    "role": "EVAL",
-   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -395,9 +393,9 @@
    ]
   },
   {
-   "id": "task1b-L4",
-   "role": "SPARE",
-   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "id": "task1a-L9",
+   "role": "EVAL",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -444,9 +442,9 @@
    ]
   },
   {
-   "id": "task1b-L5",
-   "role": "SPARE",
-   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "id": "task1a-L10",
+   "role": "EVAL",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -491,13 +489,11 @@
     "blue    far edge  6.8 cm   left edge 11.9 cm   rotated  +5.0\u00b0 (far end to the left)   tag end away from robot",
     "yellow  far edge  7.2 cm   left edge 17.4 cm   rotated -14.4\u00b0 (far end to the right)   tag end away from robot"
    ]
-  }
- ],
- "task1c": [
+  },
   {
-   "id": "task1c-L1",
-   "role": "EVAL",
-   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "id": "task1a-L11",
+   "role": "SPARE",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -544,9 +540,9 @@
    ]
   },
   {
-   "id": "task1c-L2",
-   "role": "EVAL",
-   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "id": "task1a-L12",
+   "role": "SPARE",
+   "goal": "Put the blue block and the yellow block into the bin",
    "state": {
     "red": {
      "present": true,
@@ -591,11 +587,13 @@
     "blue    far edge  7.0 cm   left edge 11.9 cm   rotated -34.5\u00b0 (far end to the right)   tag end toward robot",
     "yellow  far edge  7.6 cm   left edge 17.4 cm   rotated -14.9\u00b0 (far end to the right)   tag end away from robot"
    ]
-  },
+  }
+ ],
+ "task1b": [
   {
-   "id": "task1c-L3",
+   "id": "task1b-L1",
    "role": "EVAL",
-   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -642,9 +640,9 @@
    ]
   },
   {
-   "id": "task1c-L4",
-   "role": "SPARE",
-   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "id": "task1b-L2",
+   "role": "EVAL",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -691,9 +689,9 @@
    ]
   },
   {
-   "id": "task1c-L5",
-   "role": "SPARE",
-   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "id": "task1b-L3",
+   "role": "EVAL",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -738,13 +736,11 @@
     "blue    far edge 15.3 cm   left edge  9.1 cm   rotated  -4.3\u00b0 (far end to the right)   tag end away from robot",
     "yellow  far edge  7.5 cm   left edge 10.1 cm   rotated +13.4\u00b0 (far end to the left)   tag end away from robot"
    ]
-  }
- ],
- "task1d": [
+  },
   {
-   "id": "task1d-L1",
+   "id": "task1b-L4",
    "role": "EVAL",
-   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -791,9 +787,9 @@
    ]
   },
   {
-   "id": "task1d-L2",
+   "id": "task1b-L5",
    "role": "EVAL",
-   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -840,9 +836,9 @@
    ]
   },
   {
-   "id": "task1d-L3",
+   "id": "task1b-L6",
    "role": "EVAL",
-   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -889,9 +885,9 @@
    ]
   },
   {
-   "id": "task1d-L4",
-   "role": "SPARE",
-   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "id": "task1b-L7",
+   "role": "EVAL",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -938,9 +934,9 @@
    ]
   },
   {
-   "id": "task1d-L5",
-   "role": "SPARE",
-   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "id": "task1b-L8",
+   "role": "EVAL",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -985,13 +981,11 @@
     "blue    far edge  7.0 cm   left edge  7.4 cm   rotated  +0.9\u00b0 (far end to the left)   tag end toward robot",
     "yellow  far edge 12.7 cm   left edge 18.1 cm   rotated  +8.4\u00b0 (far end to the left)   tag end away from robot"
    ]
-  }
- ],
- "task2a": [
+  },
   {
-   "id": "task2a-L1",
+   "id": "task1b-L9",
    "role": "EVAL",
-   "goal": "Put the red block to the left of the blue block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
    "state": {
     "red": {
      "present": true,
@@ -1038,9 +1032,403 @@
    ]
   },
   {
-   "id": "task2a-L2",
+   "id": "task1b-L10",
    "role": "EVAL",
-   "goal": "Put the red block to the left of the blue block",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.02446,
+      -0.04517,
+      0.01533
+     ],
+     "yaw": -24.713
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06439,
+      0.01392,
+      0.01533
+     ],
+     "yaw": 5.11
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.04212,
+      0.05429,
+      0.01533
+     ],
+     "yaw": 17.616
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.01046,
+      0.0012,
+      0.01533
+     ],
+     "yaw": -151.36
+    }
+   },
+   "placement": [
+    "red     far edge 11.5 cm   left edge 15.3 cm   rotated -24.7\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge  7.5 cm   left edge  9.4 cm   rotated  +5.1\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge  9.7 cm   left edge  5.4 cm   rotated +17.6\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge 15.0 cm   left edge 10.7 cm   rotated +28.6\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1b-L11",
+   "role": "SPARE",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01334,
+      0.0182,
+      0.01533
+     ],
+     "yaw": 171.409
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.05473,
+      0.06844,
+      0.01533
+     ],
+     "yaw": 172.516
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06792,
+      0.0184,
+      0.01533
+     ],
+     "yaw": 175.966
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01905,
+      -0.03547,
+      0.01533
+     ],
+     "yaw": 1.686
+    }
+   },
+   "placement": [
+    "red     far edge 15.3 cm   left edge  9.0 cm   rotated  -8.6\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  8.5 cm   left edge  4.0 cm   rotated  -7.5\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.2 cm   left edge  9.0 cm   rotated  -4.0\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 12.0 cm   left edge 14.3 cm   rotated  +1.7\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1b-L12",
+   "role": "SPARE",
+   "goal": "Clear all cool-colored blocks into the bin and leave the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0259,
+      0.05213,
+      0.01533
+     ],
+     "yaw": -176.507
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00343,
+      -0.01523,
+      0.01533
+     ],
+     "yaw": 178.068
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06767,
+      -0.05122,
+      0.01533
+     ],
+     "yaw": 175.98
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.0671,
+      0.01387,
+      0.01533
+     ],
+     "yaw": -151.575
+    }
+   },
+   "placement": [
+    "red     far edge 11.4 cm   left edge  5.6 cm   rotated  +3.5\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.3 cm   left edge 12.3 cm   rotated  -1.9\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.2 cm   left edge 15.9 cm   rotated  -4.0\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  7.2 cm   left edge  9.4 cm   rotated +28.4\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  }
+ ],
+ "task1c": [
+  {
+   "id": "task1c-L1",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00398,
+      0.00437,
+      0.01533
+     ],
+     "yaw": -168.948
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06939,
+      0.00833,
+      0.01533
+     ],
+     "yaw": -156.84
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01045,
+      -0.06539,
+      0.01533
+     ],
+     "yaw": -169.179
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.07207,
+      0.06941,
+      0.01533
+     ],
+     "yaw": -177.999
+    }
+   },
+   "placement": [
+    "red     far edge 14.3 cm   left edge 10.4 cm   rotated +11.1\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  7.0 cm   left edge 10.0 cm   rotated +23.2\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 15.0 cm   left edge 17.3 cm   rotated +10.8\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  6.7 cm   left edge  3.9 cm   rotated  +2.0\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L2",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01084,
+      -0.0174,
+      0.01533
+     ],
+     "yaw": 144.506
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.03218,
+      0.00671,
+      0.01533
+     ],
+     "yaw": 153.095
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.01872,
+      0.06169,
+      0.01533
+     ],
+     "yaw": 174.933
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.05928,
+      -0.06041,
+      0.01533
+     ],
+     "yaw": -159.86
+    }
+   },
+   "placement": [
+    "red     far edge 15.0 cm   left edge 12.5 cm   rotated -35.5\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 10.7 cm   left edge 10.1 cm   rotated -26.9\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge 12.1 cm   left edge  4.6 cm   rotated  -5.1\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  8.0 cm   left edge 16.8 cm   rotated +20.1\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L3",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0622,
+      0.0258,
+      0.01533
+     ],
+     "yaw": -158.483
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.0118,
+      -0.04437,
+      0.01533
+     ],
+     "yaw": 22.436
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.02267,
+      0.0529,
+      0.01533
+     ],
+     "yaw": 30.228
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06086,
+      -0.04516,
+      0.01533
+     ],
+     "yaw": 168.484
+    }
+   },
+   "placement": [
+    "red     far edge  7.7 cm   left edge  8.2 cm   rotated +21.5\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 15.1 cm   left edge 15.2 cm   rotated +22.4\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 11.7 cm   left edge  5.5 cm   rotated +30.2\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  7.9 cm   left edge 15.3 cm   rotated -11.5\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L4",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06551,
+      -0.06613,
+      0.01533
+     ],
+     "yaw": 163.727
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00605,
+      -0.03371,
+      0.01533
+     ],
+     "yaw": -176.301
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06648,
+      0.01819,
+      0.01533
+     ],
+     "yaw": -12.129
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.01013,
+      0.0503,
+      0.01533
+     ],
+     "yaw": 140.965
+    }
+   },
+   "placement": [
+    "red     far edge  7.4 cm   left edge 17.4 cm   rotated -16.3\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.6 cm   left edge 14.2 cm   rotated  +3.7\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.3 cm   left edge  9.0 cm   rotated -12.1\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge 15.0 cm   left edge  5.8 cm   rotated -39.0\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L5",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03209,
+      0.04474,
+      0.01533
+     ],
+     "yaw": 176.471
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.0161,
+      -0.07222,
+      0.01533
+     ],
+     "yaw": -6.357
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.0363,
+      -0.04059,
+      0.01533
+     ],
+     "yaw": -15.81
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06077,
+      -0.0005,
+      0.01533
+     ],
+     "yaw": -6.439
+    }
+   },
+   "placement": [
+    "red     far edge 10.7 cm   left edge  6.3 cm   rotated  -3.5\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 15.6 cm   left edge 18.0 cm   rotated  -6.4\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge 10.3 cm   left edge 14.9 cm   rotated -15.8\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  7.9 cm   left edge 10.8 cm   rotated  -6.4\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1c-L6",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
    "state": {
     "red": {
      "present": true,
@@ -1087,9 +1475,205 @@
    ]
   },
   {
-   "id": "task2a-L3",
+   "id": "task1c-L7",
    "role": "EVAL",
-   "goal": "Put the red block to the left of the blue block",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06275,
+      0.05968,
+      0.01533
+     ],
+     "yaw": 9.236
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.0062,
+      0.03189,
+      0.01533
+     ],
+     "yaw": -9.583
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06175,
+      -0.0682,
+      0.01533
+     ],
+     "yaw": 10.97
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01735,
+      -0.01708,
+      0.01533
+     ],
+     "yaw": -149.726
+    }
+   },
+   "placement": [
+    "red     far edge  7.7 cm   left edge  4.8 cm   rotated  +9.2\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 14.6 cm   left edge  7.6 cm   rotated  -9.6\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  7.8 cm   left edge 17.6 cm   rotated +11.0\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge 12.2 cm   left edge 12.5 cm   rotated +30.3\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L8",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0646,
+      0.03784,
+      0.01533
+     ],
+     "yaw": -171.187
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00511,
+      -0.04921,
+      0.01533
+     ],
+     "yaw": -15.253
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06519,
+      -0.06202,
+      0.01533
+     ],
+     "yaw": 30.923
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.0428,
+      -0.0089,
+      0.01533
+     ],
+     "yaw": -2.02
+    }
+   },
+   "placement": [
+    "red     far edge  7.5 cm   left edge  7.0 cm   rotated  +8.8\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.5 cm   left edge 15.7 cm   rotated -15.3\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  7.4 cm   left edge 17.0 cm   rotated +30.9\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  9.7 cm   left edge 11.7 cm   rotated  -2.0\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1c-L9",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0645,
+      0.0569,
+      0.01533
+     ],
+     "yaw": 0.873
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01352,
+      0.00917,
+      0.01533
+     ],
+     "yaw": -15.967
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06845,
+      -0.01117,
+      0.01533
+     ],
+     "yaw": 172.86
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.00209,
+      -0.06731,
+      0.01533
+     ],
+     "yaw": -177.996
+    }
+   },
+   "placement": [
+    "red     far edge  7.5 cm   left edge  5.1 cm   rotated  +0.9\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 15.3 cm   left edge  9.9 cm   rotated -16.0\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  7.1 cm   left edge 11.9 cm   rotated  -7.1\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 14.2 cm   left edge 17.5 cm   rotated  +2.0\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1c-L10",
+   "role": "EVAL",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06186,
+      -0.0478,
+      0.01533
+     ],
+     "yaw": -175.782
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.0659,
+      0.06442,
+      0.01533
+     ],
+     "yaw": 172.168
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.0119,
+      0.06482,
+      0.01533
+     ],
+     "yaw": 177.376
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.01295,
+      -0.01004,
+      0.01533
+     ],
+     "yaw": -50.0
+    }
+   },
+   "placement": [
+    "red     far edge  7.8 cm   left edge 15.6 cm   rotated  +4.2\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  7.4 cm   left edge  4.4 cm   rotated  -7.8\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge 15.1 cm   left edge  4.3 cm   rotated  -2.6\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 15.2 cm   left edge 11.8 cm   rotated -50.0\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1c-L11",
+   "role": "SPARE",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
    "state": {
     "red": {
      "present": true,
@@ -1136,8 +1720,698 @@
    ]
   },
   {
-   "id": "task2a-L4",
+   "id": "task1c-L12",
    "role": "SPARE",
+   "goal": "Clear all warm-colored blocks into the bin and leave the green block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00919,
+      0.02286,
+      0.01533
+     ],
+     "yaw": 2.25
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00593,
+      0.07061,
+      0.01533
+     ],
+     "yaw": 1.799
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06962,
+      0.0736,
+      0.01533
+     ],
+     "yaw": -178.625
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.03334,
+      -0.02326,
+      0.01533
+     ],
+     "yaw": 25.85
+    }
+   },
+   "placement": [
+    "red     far edge 13.0 cm   left edge  8.5 cm   rotated  +2.2\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 14.5 cm   left edge  3.7 cm   rotated  +1.8\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge  7.0 cm   left edge  3.4 cm   rotated  +1.4\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 10.6 cm   left edge 13.1 cm   rotated +25.8\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  }
+ ],
+ "task1d": [
+  {
+   "id": "task1d-L1",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01438,
+      -0.04139,
+      0.01533
+     ],
+     "yaw": 167.215
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06962,
+      -0.0259,
+      0.01533
+     ],
+     "yaw": -168.546
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.03342,
+      0.01513,
+      0.01533
+     ],
+     "yaw": -168.48
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.00689,
+      0.06875,
+      0.01533
+     ],
+     "yaw": -164.558
+    }
+   },
+   "placement": [
+    "red     far edge 15.4 cm   left edge 14.9 cm   rotated -12.8\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  7.0 cm   left edge 13.4 cm   rotated +11.5\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 10.6 cm   left edge  9.3 cm   rotated +11.5\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 13.3 cm   left edge  3.9 cm   rotated +15.4\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L2",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00378,
+      -0.0614,
+      0.01533
+     ],
+     "yaw": 3.516
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01246,
+      0.03163,
+      0.01533
+     ],
+     "yaw": -160.98
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.00802,
+      -0.01499,
+      0.01533
+     ],
+     "yaw": -4.951
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06667,
+      -0.07161,
+      0.01533
+     ],
+     "yaw": 172.608
+    }
+   },
+   "placement": [
+    "red     far edge 14.3 cm   left edge 16.9 cm   rotated  +3.5\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 15.2 cm   left edge  7.6 cm   rotated +19.0\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 13.1 cm   left edge 12.3 cm   rotated  -5.0\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  7.3 cm   left edge 18.0 cm   rotated  -7.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L3",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06939,
+      0.04927,
+      0.01533
+     ],
+     "yaw": -174.59
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.03304,
+      -0.04691,
+      0.01533
+     ],
+     "yaw": -169.01
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.00134,
+      0.05015,
+      0.01533
+     ],
+     "yaw": -172.971
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.0652,
+      -0.00025,
+      0.01533
+     ],
+     "yaw": -16.436
+    }
+   },
+   "placement": [
+    "red     far edge  7.0 cm   left edge  5.9 cm   rotated  +5.4\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 10.6 cm   left edge 15.5 cm   rotated +11.0\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 14.1 cm   left edge  5.8 cm   rotated  +7.0\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.4 cm   left edge 10.8 cm   rotated -16.4\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1d-L4",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0463,
+      -0.04698,
+      0.01533
+     ],
+     "yaw": 46.278
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.03502,
+      0.02463,
+      0.01533
+     ],
+     "yaw": 177.814
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06136,
+      0.07251,
+      0.01533
+     ],
+     "yaw": -174.348
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.01097,
+      -0.02729,
+      0.01533
+     ],
+     "yaw": -172.23
+    }
+   },
+   "placement": [
+    "red     far edge  9.3 cm   left edge 15.5 cm   rotated +46.3\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 10.4 cm   left edge  8.3 cm   rotated  -2.2\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.8 cm   left edge  3.5 cm   rotated  +5.7\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 15.0 cm   left edge 13.5 cm   rotated  +7.8\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L5",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.0263,
+      -0.0587,
+      0.01533
+     ],
+     "yaw": -159.403
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.05501,
+      0.06327,
+      0.01533
+     ],
+     "yaw": 175.156
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01396,
+      -0.01736,
+      0.01533
+     ],
+     "yaw": 4.28
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.05798,
+      0.00222,
+      0.01533
+     ],
+     "yaw": 140.63
+    }
+   },
+   "placement": [
+    "red     far edge 11.3 cm   left edge 16.7 cm   rotated +20.6\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  8.4 cm   left edge  4.5 cm   rotated  -4.8\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge 15.3 cm   left edge 12.5 cm   rotated  +4.3\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  8.2 cm   left edge 10.6 cm   rotated -39.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L6",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00811,
+      0.04081,
+      0.01533
+     ],
+     "yaw": -145.378
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06921,
+      0.07105,
+      0.01533
+     ],
+     "yaw": 2.709
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.03056,
+      -0.06274,
+      0.01533
+     ],
+     "yaw": 2.0
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.04203,
+      -0.01028,
+      0.01533
+     ],
+     "yaw": 13.1
+    }
+   },
+   "placement": [
+    "red     far edge 14.8 cm   left edge  6.7 cm   rotated +34.6\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  7.0 cm   left edge  3.7 cm   rotated  +2.7\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 10.9 cm   left edge 17.1 cm   rotated  +2.0\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  9.7 cm   left edge 11.8 cm   rotated +13.1\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task1d-L7",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00019,
+      0.02727,
+      0.01533
+     ],
+     "yaw": 170.285
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06882,
+      0.00783,
+      0.01533
+     ],
+     "yaw": -16.652
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.01163,
+      -0.02684,
+      0.01533
+     ],
+     "yaw": -172.816
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06771,
+      0.07138,
+      0.01533
+     ],
+     "yaw": -169.507
+    }
+   },
+   "placement": [
+    "red     far edge 13.9 cm   left edge  8.1 cm   rotated  -9.7\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  7.1 cm   left edge 10.0 cm   rotated -16.7\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge 12.8 cm   left edge 13.5 cm   rotated  +7.2\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.2 cm   left edge  3.7 cm   rotated +10.5\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L8",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04615,
+      0.02468,
+      0.01533
+     ],
+     "yaw": 170.369
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00501,
+      -0.01462,
+      0.01533
+     ],
+     "yaw": 164.004
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.0592,
+      -0.04767,
+      0.01533
+     ],
+     "yaw": -11.175
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.05533,
+      0.07234,
+      0.01533
+     ],
+     "yaw": -174.368
+    }
+   },
+   "placement": [
+    "red     far edge  9.3 cm   left edge  8.3 cm   rotated  -9.6\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.5 cm   left edge 12.3 cm   rotated -16.0\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  8.0 cm   left edge 15.6 cm   rotated -11.2\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  8.4 cm   left edge  3.6 cm   rotated  +5.6\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L9",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01523,
+      -0.06625,
+      0.01533
+     ],
+     "yaw": 9.267
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00697,
+      0.05858,
+      0.01533
+     ],
+     "yaw": 173.014
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.05836,
+      0.02703,
+      0.01533
+     ],
+     "yaw": -19.091
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.03576,
+      -0.0338,
+      0.01533
+     ],
+     "yaw": 143.583
+    }
+   },
+   "placement": [
+    "red     far edge 15.5 cm   left edge 17.4 cm   rotated  +9.3\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 14.6 cm   left edge  4.9 cm   rotated  -7.0\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  8.1 cm   left edge  8.1 cm   rotated -19.1\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge 10.4 cm   left edge 14.2 cm   rotated -36.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L10",
+   "role": "EVAL",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00043,
+      0.00658,
+      0.01533
+     ],
+     "yaw": 165.761
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01293,
+      0.06249,
+      0.01533
+     ],
+     "yaw": 15.601
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06598,
+      0.03325,
+      0.01533
+     ],
+     "yaw": -8.438
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.04167,
+      -0.05802,
+      0.01533
+     ],
+     "yaw": 163.884
+    }
+   },
+   "placement": [
+    "red     far edge 13.9 cm   left edge 10.1 cm   rotated -14.2\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 15.2 cm   left edge  4.6 cm   rotated +15.6\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge  7.4 cm   left edge  7.5 cm   rotated  -8.4\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  9.8 cm   left edge 16.6 cm   rotated -16.1\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L11",
+   "role": "SPARE",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00437,
+      0.04557,
+      0.01533
+     ],
+     "yaw": -158.28
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.02679,
+      0.00169,
+      0.01533
+     ],
+     "yaw": -159.228
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06248,
+      0.06872,
+      0.01533
+     ],
+     "yaw": -162.618
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06299,
+      -0.04437,
+      0.01533
+     ],
+     "yaw": 164.183
+    }
+   },
+   "placement": [
+    "red     far edge 14.4 cm   left edge  6.2 cm   rotated +21.7\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 11.3 cm   left edge 10.6 cm   rotated +20.8\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.7 cm   left edge  3.9 cm   rotated +17.4\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.7 cm   left edge 15.2 cm   rotated -15.8\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task1d-L12",
+   "role": "SPARE",
+   "goal": "Put the red block, the green block and the blue block into the bin except the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.05184,
+      -0.07006,
+      0.01533
+     ],
+     "yaw": -164.137
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06853,
+      -0.01827,
+      0.01533
+     ],
+     "yaw": -156.348
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.05132,
+      0.05826,
+      0.01533
+     ],
+     "yaw": 164.815
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.00078,
+      0.00939,
+      0.01533
+     ],
+     "yaw": -26.097
+    }
+   },
+   "placement": [
+    "red     far edge  8.8 cm   left edge 17.8 cm   rotated +15.9\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  7.1 cm   left edge 12.6 cm   rotated +23.7\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  8.8 cm   left edge  5.0 cm   rotated -15.2\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 13.9 cm   left edge  9.9 cm   rotated -26.1\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  }
+ ],
+ "task2a": [
+  {
+   "id": "task2a-L1",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03171,
+      -0.05473,
+      0.01533
+     ],
+     "yaw": 152.014
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.0696,
+      0.01081,
+      0.01533
+     ],
+     "yaw": -172.888
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.00269,
+      0.01476,
+      0.01533
+     ],
+     "yaw": -157.438
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.05027,
+      0.06066,
+      0.01533
+     ],
+     "yaw": 165.928
+    }
+   },
+   "placement": [
+    "red     far edge 10.8 cm   left edge 16.3 cm   rotated -28.0\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  7.0 cm   left edge  9.7 cm   rotated  +7.1\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 14.2 cm   left edge  9.3 cm   rotated +22.6\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  8.9 cm   left edge  4.7 cm   rotated -14.1\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2a-L2",
+   "role": "EVAL",
    "goal": "Put the red block to the left of the blue block",
    "state": {
     "red": {
@@ -1185,8 +2459,8 @@
    ]
   },
   {
-   "id": "task2a-L5",
-   "role": "SPARE",
+   "id": "task2a-L3",
+   "role": "EVAL",
    "goal": "Put the red block to the left of the blue block",
    "state": {
     "red": {
@@ -1232,407 +2506,11 @@
     "blue    far edge 12.4 cm   left edge  8.7 cm   rotated  -4.4\u00b0 (far end to the right)   tag end away from robot",
     "yellow  far edge  9.9 cm   left edge  3.5 cm   rotated  +8.9\u00b0 (far end to the left)   tag end toward robot"
    ]
-  }
- ],
- "task2b": [
+  },
   {
-   "id": "task2b-L1",
+   "id": "task2a-L4",
    "role": "EVAL",
-   "goal": "Put the green block to the right of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.04767,
-      -0.05546,
-      0.01533
-     ],
-     "yaw": -152.529
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.01415,
-      0.04241,
-      0.01533
-     ],
-     "yaw": -165.291
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.06576,
-      0.0108,
-      0.01533
-     ],
-     "yaw": -175.625
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      -0.01353,
-      -0.01001,
-      0.01533
-     ],
-     "yaw": -174.174
-    }
-   },
-   "placement": [
-    "red     far edge  9.2 cm   left edge 16.3 cm   rotated +27.5\u00b0 (far end to the left)   tag end away from robot",
-    "green   far edge 12.5 cm   left edge  6.6 cm   rotated +14.7\u00b0 (far end to the left)   tag end away from robot",
-    "blue    far edge  7.4 cm   left edge  9.7 cm   rotated  +4.4\u00b0 (far end to the left)   tag end away from robot",
-    "yellow  far edge 15.3 cm   left edge 11.8 cm   rotated  +5.8\u00b0 (far end to the left)   tag end away from robot"
-   ]
-  },
-  {
-   "id": "task2b-L2",
-   "role": "EVAL",
-   "goal": "Put the green block to the right of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      -0.01011,
-      -0.05117,
-      0.01533
-     ],
-     "yaw": 177.811
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.06652,
-      -0.06272,
-      0.01533
-     ],
-     "yaw": 161.24
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.00875,
-      0.02255,
-      0.01533
-     ],
-     "yaw": -9.09
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      0.05991,
-      0.06938,
-      0.01533
-     ],
-     "yaw": -10.969
-    }
-   },
-   "placement": [
-    "red     far edge 15.0 cm   left edge 15.9 cm   rotated  -2.2\u00b0 (far end to the right)   tag end away from robot",
-    "green   far edge  7.3 cm   left edge 17.1 cm   rotated -18.8\u00b0 (far end to the right)   tag end away from robot",
-    "blue    far edge 13.1 cm   left edge  8.5 cm   rotated  -9.1\u00b0 (far end to the right)   tag end toward robot",
-    "yellow  far edge  8.0 cm   left edge  3.9 cm   rotated -11.0\u00b0 (far end to the right)   tag end toward robot"
-   ]
-  },
-  {
-   "id": "task2b-L3",
-   "role": "EVAL",
-   "goal": "Put the green block to the right of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      -0.0146,
-      -0.05575,
-      0.01533
-     ],
-     "yaw": -145.067
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.05774,
-      0.03097,
-      0.01533
-     ],
-     "yaw": 30.1
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.00465,
-      0.06142,
-      0.01533
-     ],
-     "yaw": -166.517
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      0.05444,
-      -0.032,
-      0.01533
-     ],
-     "yaw": 167.499
-    }
-   },
-   "placement": [
-    "red     far edge 15.4 cm   left edge 16.4 cm   rotated +34.9\u00b0 (far end to the left)   tag end away from robot",
-    "green   far edge  8.2 cm   left edge  7.7 cm   rotated +30.1\u00b0 (far end to the left)   tag end toward robot",
-    "blue    far edge 13.5 cm   left edge  4.7 cm   rotated +13.5\u00b0 (far end to the left)   tag end away from robot",
-    "yellow  far edge  8.5 cm   left edge 14.0 cm   rotated -12.5\u00b0 (far end to the right)   tag end away from robot"
-   ]
-  },
-  {
-   "id": "task2b-L4",
-   "role": "SPARE",
-   "goal": "Put the green block to the right of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.05945,
-      0.02679,
-      0.01533
-     ],
-     "yaw": 172.528
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.00771,
-      -0.04803,
-      0.01533
-     ],
-     "yaw": 164.239
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.00603,
-      0.06253,
-      0.01533
-     ],
-     "yaw": -163.688
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      0.06839,
-      -0.01561,
-      0.01533
-     ],
-     "yaw": -2.548
-    }
-   },
-   "placement": [
-    "red     far edge  8.0 cm   left edge  8.1 cm   rotated  -7.5\u00b0 (far end to the right)   tag end away from robot",
-    "green   far edge 13.2 cm   left edge 15.6 cm   rotated -15.8\u00b0 (far end to the right)   tag end away from robot",
-    "blue    far edge 13.3 cm   left edge  4.5 cm   rotated +16.3\u00b0 (far end to the left)   tag end away from robot",
-    "yellow  far edge  7.1 cm   left edge 12.4 cm   rotated  -2.5\u00b0 (far end to the right)   tag end toward robot"
-   ]
-  },
-  {
-   "id": "task2b-L5",
-   "role": "SPARE",
-   "goal": "Put the green block to the right of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.02858,
-      0.06757,
-      0.01533
-     ],
-     "yaw": 174.706
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.03244,
-      0.01699,
-      0.01533
-     ],
-     "yaw": 174.525
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      -0.0086,
-      -0.05963,
-      0.01533
-     ],
-     "yaw": -9.783
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      0.0679,
-      -0.02517,
-      0.01533
-     ],
-     "yaw": -171.895
-    }
-   },
-   "placement": [
-    "red     far edge 11.1 cm   left edge  4.0 cm   rotated  -5.3\u00b0 (far end to the right)   tag end away from robot",
-    "green   far edge 10.7 cm   left edge  9.1 cm   rotated  -5.5\u00b0 (far end to the right)   tag end away from robot",
-    "blue    far edge 14.8 cm   left edge 16.8 cm   rotated  -9.8\u00b0 (far end to the right)   tag end toward robot",
-    "yellow  far edge  7.2 cm   left edge 13.3 cm   rotated  +8.1\u00b0 (far end to the left)   tag end away from robot"
-   ]
-  }
- ],
- "task3a": [
-  {
-   "id": "task3a-L1",
-   "role": "EVAL",
-   "goal": "Stack the blue block on top of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.06689,
-      -0.00487,
-      0.01533
-     ],
-     "yaw": -161.296
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.02041,
-      -0.06881,
-      0.01533
-     ],
-     "yaw": -160.647
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.02651,
-      0.05527,
-      0.01533
-     ],
-     "yaw": 155.334
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      -0.01282,
-      0.01206,
-      0.01533
-     ],
-     "yaw": -167.888
-    }
-   },
-   "placement": [
-    "red     far edge  7.3 cm   left edge 11.3 cm   rotated +18.7\u00b0 (far end to the left)   tag end away from robot",
-    "green   far edge 11.9 cm   left edge 17.7 cm   rotated +19.4\u00b0 (far end to the left)   tag end away from robot",
-    "blue    far edge 11.3 cm   left edge  5.3 cm   rotated -24.7\u00b0 (far end to the right)   tag end away from robot",
-    "yellow  far edge 15.2 cm   left edge  9.6 cm   rotated +12.1\u00b0 (far end to the left)   tag end away from robot"
-   ]
-  },
-  {
-   "id": "task3a-L2",
-   "role": "EVAL",
-   "goal": "Stack the blue block on top of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.00852,
-      0.02167,
-      0.01533
-     ],
-     "yaw": -153.586
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.06479,
-      0.07009,
-      0.01533
-     ],
-     "yaw": 15.513
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      -0.01759,
-      -0.06699,
-      0.01533
-     ],
-     "yaw": 176.948
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      0.07023,
-      -0.04761,
-      0.01533
-     ],
-     "yaw": -4.599
-    }
-   },
-   "placement": [
-    "red     far edge 13.1 cm   left edge  8.6 cm   rotated +26.4\u00b0 (far end to the left)   tag end away from robot",
-    "green   far edge  7.5 cm   left edge  3.8 cm   rotated +15.5\u00b0 (far end to the left)   tag end toward robot",
-    "blue    far edge 15.7 cm   left edge 17.5 cm   rotated  -3.1\u00b0 (far end to the right)   tag end away from robot",
-    "yellow  far edge  6.9 cm   left edge 15.6 cm   rotated  -4.6\u00b0 (far end to the right)   tag end toward robot"
-   ]
-  },
-  {
-   "id": "task3a-L3",
-   "role": "EVAL",
-   "goal": "Stack the blue block on top of the yellow block",
-   "state": {
-    "red": {
-     "present": true,
-     "pos": [
-      0.00688,
-      -0.03477,
-      0.01533
-     ],
-     "yaw": -153.099
-    },
-    "green": {
-     "present": true,
-     "pos": [
-      0.05544,
-      -0.05338,
-      0.01533
-     ],
-     "yaw": -152.235
-    },
-    "blue": {
-     "present": true,
-     "pos": [
-      0.05619,
-      0.01363,
-      0.01533
-     ],
-     "yaw": 161.688
-    },
-    "yellow": {
-     "present": true,
-     "pos": [
-      -0.01341,
-      0.05688,
-      0.01533
-     ],
-     "yaw": 169.589
-    }
-   },
-   "placement": [
-    "red     far edge 13.3 cm   left edge 14.3 cm   rotated +26.9\u00b0 (far end to the left)   tag end away from robot",
-    "green   far edge  8.4 cm   left edge 16.1 cm   rotated +27.8\u00b0 (far end to the left)   tag end away from robot",
-    "blue    far edge  8.3 cm   left edge  9.4 cm   rotated -18.3\u00b0 (far end to the right)   tag end away from robot",
-    "yellow  far edge 15.3 cm   left edge  5.1 cm   rotated -10.4\u00b0 (far end to the right)   tag end away from robot"
-   ]
-  },
-  {
-   "id": "task3a-L4",
-   "role": "SPARE",
-   "goal": "Stack the blue block on top of the yellow block",
+   "goal": "Put the red block to the left of the blue block",
    "state": {
     "red": {
      "present": true,
@@ -1679,52 +2557,1575 @@
    ]
   },
   {
+   "id": "task2a-L5",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.07206,
+      0.02255,
+      0.01533
+     ],
+     "yaw": -2.924
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.03641,
+      -0.01477,
+      0.01533
+     ],
+     "yaw": 154.735
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.00879,
+      0.03343,
+      0.01533
+     ],
+     "yaw": 10.439
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01113,
+      -0.05422,
+      0.01533
+     ],
+     "yaw": -12.463
+    }
+   },
+   "placement": [
+    "red     far edge  6.7 cm   left edge  8.5 cm   rotated  -2.9\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 10.3 cm   left edge 12.3 cm   rotated -25.3\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge 14.8 cm   left edge  7.5 cm   rotated +10.4\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge 12.8 cm   left edge 16.2 cm   rotated -12.5\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L6",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00159,
+      -0.00109,
+      0.01533
+     ],
+     "yaw": 178.865
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.0453,
+      0.05661,
+      0.01533
+     ],
+     "yaw": 50.0
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06386,
+      -0.05174,
+      0.01533
+     ],
+     "yaw": -145.017
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.0153,
+      -0.05765,
+      0.01533
+     ],
+     "yaw": 14.861
+    }
+   },
+   "placement": [
+    "red     far edge 13.8 cm   left edge 10.9 cm   rotated  -1.1\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  9.4 cm   left edge  5.1 cm   rotated +50.0\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge  7.6 cm   left edge 16.0 cm   rotated +35.0\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 15.5 cm   left edge 16.6 cm   rotated +14.9\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L7",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00132,
+      0.00257,
+      0.01533
+     ],
+     "yaw": -26.247
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01169,
+      0.06331,
+      0.01533
+     ],
+     "yaw": 158.044
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06275,
+      0.04591,
+      0.01533
+     ],
+     "yaw": -3.008
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.03183,
+      -0.06846,
+      0.01533
+     ],
+     "yaw": 6.266
+    }
+   },
+   "placement": [
+    "red     far edge 14.1 cm   left edge 10.5 cm   rotated -26.2\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 15.1 cm   left edge  4.5 cm   rotated -22.0\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.7 cm   left edge  6.2 cm   rotated  -3.0\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge 10.8 cm   left edge 17.6 cm   rotated  +6.3\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L8",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06555,
+      -0.04317,
+      0.01533
+     ],
+     "yaw": -7.486
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06495,
+      0.01214,
+      0.01533
+     ],
+     "yaw": 27.136
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01258,
+      -0.06606,
+      0.01533
+     ],
+     "yaw": 156.473
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.02017,
+      0.06266,
+      0.01533
+     ],
+     "yaw": 29.404
+    }
+   },
+   "placement": [
+    "red     far edge  7.4 cm   left edge 15.1 cm   rotated  -7.5\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge  7.5 cm   left edge  9.6 cm   rotated +27.1\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 15.2 cm   left edge 17.4 cm   rotated -23.5\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 11.9 cm   left edge  4.5 cm   rotated +29.4\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L9",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04547,
+      -0.06753,
+      0.01533
+     ],
+     "yaw": -9.22
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.01323,
+      -0.00616,
+      0.01533
+     ],
+     "yaw": 14.52
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01523,
+      0.02939,
+      0.01533
+     ],
+     "yaw": -171.709
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.04981,
+      0.05718,
+      0.01533
+     ],
+     "yaw": -29.691
+    }
+   },
+   "placement": [
+    "red     far edge  9.4 cm   left edge 17.6 cm   rotated  -9.2\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 12.6 cm   left edge 11.4 cm   rotated +14.5\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 15.5 cm   left edge  7.9 cm   rotated  +8.3\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  9.0 cm   left edge  5.1 cm   rotated -29.7\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L10",
+   "role": "EVAL",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04774,
+      0.05627,
+      0.01533
+     ],
+     "yaw": 177.294
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.04986,
+      0.00633,
+      0.01533
+     ],
+     "yaw": -166.241
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01425,
+      -0.04611,
+      0.01533
+     ],
+     "yaw": 0.3
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06501,
+      -0.07009,
+      0.01533
+     ],
+     "yaw": 1.367
+    }
+   },
+   "placement": [
+    "red     far edge  9.2 cm   left edge  5.2 cm   rotated  -2.7\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  9.0 cm   left edge 10.2 cm   rotated +13.8\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 15.4 cm   left edge 15.4 cm   rotated  +0.3\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  7.4 cm   left edge 17.8 cm   rotated  +1.4\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L11",
+   "role": "SPARE",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04245,
+      -0.00589,
+      0.01533
+     ],
+     "yaw": -3.328
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.0093,
+      -0.04938,
+      0.01533
+     ],
+     "yaw": 149.221
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01486,
+      0.04274,
+      0.01533
+     ],
+     "yaw": -3.78
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.04951,
+      0.06185,
+      0.01533
+     ],
+     "yaw": -38.443
+    }
+   },
+   "placement": [
+    "red     far edge  9.7 cm   left edge 11.4 cm   rotated  -3.3\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 13.0 cm   left edge 15.7 cm   rotated -30.8\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge 15.4 cm   left edge  6.5 cm   rotated  -3.8\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  9.0 cm   left edge  4.6 cm   rotated -38.4\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2a-L12",
+   "role": "SPARE",
+   "goal": "Put the red block to the left of the blue block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01437,
+      0.06225,
+      0.01533
+     ],
+     "yaw": 9.935
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01048,
+      -0.05465,
+      0.01533
+     ],
+     "yaw": -24.182
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06442,
+      0.02678,
+      0.01533
+     ],
+     "yaw": 33.968
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06636,
+      -0.05031,
+      0.01533
+     ],
+     "yaw": -147.957
+    }
+   },
+   "placement": [
+    "red     far edge 15.4 cm   left edge  4.6 cm   rotated  +9.9\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 15.0 cm   left edge 16.3 cm   rotated -24.2\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  7.5 cm   left edge  8.1 cm   rotated +34.0\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  7.3 cm   left edge 15.8 cm   rotated +32.0\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  }
+ ],
+ "task2b": [
+  {
+   "id": "task2b-L1",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01075,
+      -0.00656,
+      0.01533
+     ],
+     "yaw": 171.757
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.02773,
+      0.05164,
+      0.01533
+     ],
+     "yaw": -10.711
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.00105,
+      -0.05989,
+      0.01533
+     ],
+     "yaw": -153.476
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06842,
+      -0.01963,
+      0.01533
+     ],
+     "yaw": -2.583
+    }
+   },
+   "placement": [
+    "red     far edge 15.0 cm   left edge 11.5 cm   rotated  -8.2\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 11.2 cm   left edge  5.6 cm   rotated -10.7\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge 13.8 cm   left edge 16.8 cm   rotated +26.5\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.1 cm   left edge 12.8 cm   rotated  -2.6\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2b-L2",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00252,
+      -0.0441,
+      0.01533
+     ],
+     "yaw": 173.324
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00294,
+      0.0148,
+      0.01533
+     ],
+     "yaw": -173.962
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.00627,
+      0.06354,
+      0.01533
+     ],
+     "yaw": 167.082
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06394,
+      0.04042,
+      0.01533
+     ],
+     "yaw": -178.544
+    }
+   },
+   "placement": [
+    "red     far edge 14.2 cm   left edge 15.2 cm   rotated  -6.7\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.2 cm   left edge  9.3 cm   rotated  +6.0\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 14.6 cm   left edge  4.4 cm   rotated -12.9\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  7.6 cm   left edge  6.8 cm   rotated  +1.5\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L3",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00089,
+      0.02047,
+      0.01533
+     ],
+     "yaw": 154.79
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06362,
+      0.07569,
+      0.01533
+     ],
+     "yaw": 1.888
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.02351,
+      -0.06828,
+      0.01533
+     ],
+     "yaw": 14.457
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.07113,
+      -0.00727,
+      0.01533
+     ],
+     "yaw": 176.933
+    }
+   },
+   "placement": [
+    "red     far edge 13.9 cm   left edge  8.8 cm   rotated -25.2\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  7.6 cm   left edge  3.2 cm   rotated  +1.9\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 11.6 cm   left edge 17.6 cm   rotated +14.5\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  6.8 cm   left edge 11.5 cm   rotated  -3.1\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L4",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06394,
+      -0.03819,
+      0.01533
+     ],
+     "yaw": -158.879
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00224,
+      -0.06759,
+      0.01533
+     ],
+     "yaw": -176.352
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06281,
+      0.03006,
+      0.01533
+     ],
+     "yaw": -151.195
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01313,
+      0.05368,
+      0.01533
+     ],
+     "yaw": -156.016
+    }
+   },
+   "placement": [
+    "red     far edge  7.6 cm   left edge 14.6 cm   rotated +21.1\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.2 cm   left edge 17.6 cm   rotated  +3.6\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.7 cm   left edge  7.8 cm   rotated +28.8\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 12.6 cm   left edge  5.4 cm   rotated +24.0\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L5",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06605,
+      0.05178,
+      0.01533
+     ],
+     "yaw": 152.257
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00913,
+      0.04976,
+      0.01533
+     ],
+     "yaw": -173.223
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.02769,
+      -0.04388,
+      0.01533
+     ],
+     "yaw": 179.45
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.02662,
+      0.00484,
+      0.01533
+     ],
+     "yaw": 0.487
+    }
+   },
+   "placement": [
+    "red     far edge  7.3 cm   left edge  5.6 cm   rotated -27.7\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.9 cm   left edge  5.8 cm   rotated  +6.8\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 11.2 cm   left edge 15.2 cm   rotated  -0.6\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 11.3 cm   left edge 10.3 cm   rotated  +0.5\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2b-L6",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00711,
+      -0.0344,
+      0.01533
+     ],
+     "yaw": -172.677
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.0022,
+      0.0207,
+      0.01533
+     ],
+     "yaw": 11.062
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06451,
+      -0.07087,
+      0.01533
+     ],
+     "yaw": -166.685
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.0599,
+      0.05891,
+      0.01533
+     ],
+     "yaw": 167.965
+    }
+   },
+   "placement": [
+    "red     far edge 13.2 cm   left edge 14.2 cm   rotated  +7.3\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.2 cm   left edge  8.7 cm   rotated +11.1\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge  7.5 cm   left edge 17.9 cm   rotated +13.3\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  8.0 cm   left edge  4.9 cm   rotated -12.0\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L7",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04189,
+      0.01381,
+      0.01533
+     ],
+     "yaw": -164.644
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.04113,
+      0.06286,
+      0.01533
+     ],
+     "yaw": -7.481
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01294,
+      -0.04306,
+      0.01533
+     ],
+     "yaw": -169.333
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.05998,
+      -0.03779,
+      0.01533
+     ],
+     "yaw": 168.655
+    }
+   },
+   "placement": [
+    "red     far edge  9.8 cm   left edge  9.4 cm   rotated +15.4\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  9.8 cm   left edge  4.5 cm   rotated  -7.5\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge 15.2 cm   left edge 15.1 cm   rotated +10.7\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  8.0 cm   left edge 14.6 cm   rotated -11.3\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L8",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.009,
+      0.01376,
+      0.01533
+     ],
+     "yaw": 170.018
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.00293,
+      -0.05843,
+      0.01533
+     ],
+     "yaw": -27.647
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.02503,
+      0.06322,
+      0.01533
+     ],
+     "yaw": -173.912
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06665,
+      -0.02175,
+      0.01533
+     ],
+     "yaw": 1.429
+    }
+   },
+   "placement": [
+    "red     far edge 14.9 cm   left edge  9.4 cm   rotated -10.0\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 13.7 cm   left edge 16.6 cm   rotated -27.6\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge 11.4 cm   left edge  4.5 cm   rotated  +6.1\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.3 cm   left edge 13.0 cm   rotated  +1.4\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2b-L9",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01227,
+      0.05453,
+      0.01533
+     ],
+     "yaw": -168.962
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.06574,
+      0.03727,
+      0.01533
+     ],
+     "yaw": -172.299
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06137,
+      -0.04658,
+      0.01533
+     ],
+     "yaw": -168.148
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01265,
+      -0.00211,
+      0.01533
+     ],
+     "yaw": 163.567
+    }
+   },
+   "placement": [
+    "red     far edge 15.2 cm   left edge  5.3 cm   rotated +11.0\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  7.4 cm   left edge  7.1 cm   rotated  +7.7\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.8 cm   left edge 15.5 cm   rotated +11.9\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 12.7 cm   left edge 11.0 cm   rotated -16.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L10",
+   "role": "EVAL",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.0104,
+      0.07093,
+      0.01533
+     ],
+     "yaw": -3.044
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.00393,
+      0.02101,
+      0.01533
+     ],
+     "yaw": 8.629
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.021,
+      -0.05551,
+      0.01533
+     ],
+     "yaw": -174.298
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.07096,
+      0.07466,
+      0.01533
+     ],
+     "yaw": -174.197
+    }
+   },
+   "placement": [
+    "red     far edge 15.0 cm   left edge  3.7 cm   rotated  -3.0\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 13.6 cm   left edge  8.7 cm   rotated  +8.6\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 11.9 cm   left edge 16.4 cm   rotated  +5.7\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  6.9 cm   left edge  3.3 cm   rotated  +5.8\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task2b-L11",
+   "role": "SPARE",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.05747,
+      0.06795,
+      0.01533
+     ],
+     "yaw": -10.486
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00912,
+      0.01911,
+      0.01533
+     ],
+     "yaw": 9.389
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.01539,
+      -0.07054,
+      0.01533
+     ],
+     "yaw": 7.856
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06608,
+      -0.01247,
+      0.01533
+     ],
+     "yaw": 2.681
+    }
+   },
+   "placement": [
+    "red     far edge  8.2 cm   left edge  4.0 cm   rotated -10.5\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 14.9 cm   left edge  8.9 cm   rotated  +9.4\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 12.4 cm   left edge 17.9 cm   rotated  +7.9\u00b0 (far end to the left)   tag end toward robot",
+    "yellow  far edge  7.3 cm   left edge 12.0 cm   rotated  +2.7\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task2b-L12",
+   "role": "SPARE",
+   "goal": "Put the green block to the right of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03569,
+      0.05952,
+      0.01533
+     ],
+     "yaw": -18.902
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.07168,
+      -0.06015,
+      0.01533
+     ],
+     "yaw": -177.024
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06775,
+      -0.00705,
+      0.01533
+     ],
+     "yaw": -22.327
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.00216,
+      0.01231,
+      0.01533
+     ],
+     "yaw": 4.531
+    }
+   },
+   "placement": [
+    "red     far edge 10.4 cm   left edge  4.8 cm   rotated -18.9\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge  6.8 cm   left edge 16.8 cm   rotated  +3.0\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.2 cm   left edge 11.5 cm   rotated -22.3\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge 14.2 cm   left edge  9.6 cm   rotated  +4.5\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  }
+ ],
+ "task3a": [
+  {
+   "id": "task3a-L1",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.04231,
+      -0.02541,
+      0.01533
+     ],
+     "yaw": -178.962
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00892,
+      0.02596,
+      0.01533
+     ],
+     "yaw": 161.965
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06589,
+      -0.06871,
+      0.01533
+     ],
+     "yaw": 173.341
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06028,
+      0.06615,
+      0.01533
+     ],
+     "yaw": -3.567
+    }
+   },
+   "placement": [
+    "red     far edge  9.7 cm   left edge 13.3 cm   rotated  +1.0\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.8 cm   left edge  8.2 cm   rotated -18.0\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.4 cm   left edge 17.7 cm   rotated  -6.7\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  7.9 cm   left edge  4.2 cm   rotated  -3.6\u00b0 (far end to the right)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task3a-L2",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00064,
+      0.00712,
+      0.01533
+     ],
+     "yaw": 161.159
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00994,
+      -0.057,
+      0.01533
+     ],
+     "yaw": 174.217
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06608,
+      -0.03962,
+      0.01533
+     ],
+     "yaw": 174.783
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01667,
+      0.05143,
+      0.01533
+     ],
+     "yaw": 166.258
+    }
+   },
+   "placement": [
+    "red     far edge 13.9 cm   left edge 10.1 cm   rotated -18.8\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.9 cm   left edge 16.5 cm   rotated  -5.8\u00b0 (far end to the right)   tag end away from robot",
+    "blue    far edge  7.3 cm   left edge 14.8 cm   rotated  -5.2\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 12.3 cm   left edge  5.7 cm   rotated -13.7\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L3",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01123,
+      -0.07009,
+      0.01533
+     ],
+     "yaw": 170.237
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.01352,
+      0.0419,
+      0.01533
+     ],
+     "yaw": -150.929
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.03091,
+      -0.00784,
+      0.01533
+     ],
+     "yaw": -164.196
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06541,
+      -0.04813,
+      0.01533
+     ],
+     "yaw": -162.933
+    }
+   },
+   "placement": [
+    "red     far edge 15.1 cm   left edge 17.8 cm   rotated  -9.8\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 12.6 cm   left edge  6.6 cm   rotated +29.1\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 10.9 cm   left edge 11.6 cm   rotated +15.8\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  7.4 cm   left edge 15.6 cm   rotated +17.1\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L4",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03145,
+      0.06966,
+      0.01533
+     ],
+     "yaw": -177.406
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.02762,
+      -0.00732,
+      0.01533
+     ],
+     "yaw": -15.883
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.07084,
+      -0.06998,
+      0.01533
+     ],
+     "yaw": -174.005
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      -0.00363,
+      -0.05722,
+      0.01533
+     ],
+     "yaw": -164.874
+    }
+   },
+   "placement": [
+    "red     far edge 10.8 cm   left edge  3.8 cm   rotated  +2.6\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 11.2 cm   left edge 11.5 cm   rotated -15.9\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  6.9 cm   left edge 17.8 cm   rotated  +6.0\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 14.3 cm   left edge 16.5 cm   rotated +15.1\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
    "id": "task3a-L5",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00612,
+      0.01084,
+      0.01533
+     ],
+     "yaw": -174.533
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.0714,
+      0.01466,
+      0.01533
+     ],
+     "yaw": -177.967
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.00383,
+      -0.06697,
+      0.01533
+     ],
+     "yaw": -171.181
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.00735,
+      0.05867,
+      0.01533
+     ],
+     "yaw": 164.561
+    }
+   },
+   "placement": [
+    "red     far edge 14.6 cm   left edge  9.7 cm   rotated  +5.5\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge  6.8 cm   left edge  9.3 cm   rotated  +2.0\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 13.6 cm   left edge 17.5 cm   rotated  +8.8\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 13.2 cm   left edge  4.9 cm   rotated -15.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L6",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03821,
+      0.02439,
+      0.01533
+     ],
+     "yaw": 176.685
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01531,
+      0.07196,
+      0.01533
+     ],
+     "yaw": 3.45
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01429,
+      -0.03914,
+      0.01533
+     ],
+     "yaw": -6.844
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06524,
+      -0.03964,
+      0.01533
+     ],
+     "yaw": 6.961
+    }
+   },
+   "placement": [
+    "red     far edge 10.1 cm   left edge  8.4 cm   rotated  -3.3\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 15.5 cm   left edge  3.6 cm   rotated  +3.4\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 15.4 cm   left edge 14.7 cm   rotated  -6.8\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  7.4 cm   left edge 14.8 cm   rotated  +7.0\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task3a-L7",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.01283,
+      0.01833,
+      0.01533
+     ],
+     "yaw": 179.725
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      0.055,
+      -0.026,
+      0.01533
+     ],
+     "yaw": -175.66
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01162,
+      -0.05668,
+      0.01533
+     ],
+     "yaw": -160.552
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.02533,
+      0.07147,
+      0.01533
+     ],
+     "yaw": -177.423
+    }
+   },
+   "placement": [
+    "red     far edge 15.2 cm   left edge  9.0 cm   rotated  -0.3\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge  8.5 cm   left edge 13.4 cm   rotated  +4.3\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 15.1 cm   left edge 16.5 cm   rotated +19.4\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge 11.4 cm   left edge  3.7 cm   rotated  +2.6\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L8",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      -0.00435,
+      -0.03797,
+      0.01533
+     ],
+     "yaw": -159.26
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00875,
+      0.0254,
+      0.01533
+     ],
+     "yaw": -170.872
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06333,
+      -0.01262,
+      0.01533
+     ],
+     "yaw": -1.487
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06827,
+      0.05937,
+      0.01533
+     ],
+     "yaw": -162.294
+    }
+   },
+   "placement": [
+    "red     far edge 14.4 cm   left edge 14.6 cm   rotated +20.7\u00b0 (far end to the left)   tag end away from robot",
+    "green   far edge 14.8 cm   left edge  8.3 cm   rotated  +9.1\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge  7.6 cm   left edge 12.1 cm   rotated  -1.5\u00b0 (far end to the right)   tag end toward robot",
+    "yellow  far edge  7.1 cm   left edge  4.9 cm   rotated +17.7\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L9",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.06101,
+      -0.06024,
+      0.01533
+     ],
+     "yaw": 173.813
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.01163,
+      0.05924,
+      0.01533
+     ],
+     "yaw": -168.576
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.03833,
+      0.00156,
+      0.01533
+     ],
+     "yaw": 163.267
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06722,
+      0.03554,
+      0.01533
+     ],
+     "yaw": 168.564
+    }
+   },
+   "placement": [
+    "red     far edge  7.8 cm   left edge 16.8 cm   rotated  -6.2\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 15.1 cm   left edge  4.9 cm   rotated +11.4\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 10.1 cm   left edge 10.6 cm   rotated -16.7\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  7.2 cm   left edge  7.2 cm   rotated -11.4\u00b0 (far end to the right)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L10",
+   "role": "EVAL",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.00781,
+      0.00305,
+      0.01533
+     ],
+     "yaw": 6.291
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00627,
+      -0.06169,
+      0.01533
+     ],
+     "yaw": 35.327
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      -0.01478,
+      0.06361,
+      0.01533
+     ],
+     "yaw": 171.958
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.06946,
+      0.05247,
+      0.01533
+     ],
+     "yaw": -135.734
+    }
+   },
+   "placement": [
+    "red     far edge 13.2 cm   left edge 10.5 cm   rotated  +6.3\u00b0 (far end to the left)   tag end toward robot",
+    "green   far edge 14.6 cm   left edge 17.0 cm   rotated +35.3\u00b0 (far end to the left)   tag end toward robot",
+    "blue    far edge 15.4 cm   left edge  4.4 cm   rotated  -8.0\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge  7.0 cm   left edge  5.6 cm   rotated +44.3\u00b0 (far end to the left)   tag end away from robot"
+   ]
+  },
+  {
+   "id": "task3a-L11",
    "role": "SPARE",
    "goal": "Stack the blue block on top of the yellow block",
    "state": {
     "red": {
      "present": true,
      "pos": [
-      0.04261,
-      -0.02357,
+      0.05071,
+      -0.05979,
       0.01533
      ],
-     "yaw": 6.143
+     "yaw": -17.765
     },
     "green": {
      "present": true,
      "pos": [
-      0.05628,
-      0.05387,
+      -0.01451,
+      0.07568,
       0.01533
      ],
-     "yaw": 171.649
+     "yaw": -178.232
     },
     "blue": {
      "present": true,
      "pos": [
-      0.03634,
-      -0.06866,
+      0.02139,
+      -0.00148,
       0.01533
      ],
-     "yaw": 178.297
+     "yaw": -168.983
     },
     "yellow": {
      "present": true,
      "pos": [
-      -0.01072,
-      0.02109,
+      0.05952,
+      0.05562,
       0.01533
      ],
-     "yaw": -170.969
+     "yaw": 21.953
     }
    },
    "placement": [
-    "red     far edge  9.7 cm   left edge 13.2 cm   rotated  +6.1\u00b0 (far end to the left)   tag end toward robot",
-    "green   far edge  8.3 cm   left edge  5.4 cm   rotated  -8.4\u00b0 (far end to the right)   tag end away from robot",
-    "blue    far edge 10.3 cm   left edge 17.7 cm   rotated  -1.7\u00b0 (far end to the right)   tag end away from robot",
-    "yellow  far edge 15.0 cm   left edge  8.7 cm   rotated  +9.0\u00b0 (far end to the left)   tag end away from robot"
+    "red     far edge  8.9 cm   left edge 16.8 cm   rotated -17.8\u00b0 (far end to the right)   tag end toward robot",
+    "green   far edge 15.4 cm   left edge  3.2 cm   rotated  +1.8\u00b0 (far end to the left)   tag end away from robot",
+    "blue    far edge 11.8 cm   left edge 10.9 cm   rotated +11.0\u00b0 (far end to the left)   tag end away from robot",
+    "yellow  far edge  8.0 cm   left edge  5.2 cm   rotated +22.0\u00b0 (far end to the left)   tag end toward robot"
+   ]
+  },
+  {
+   "id": "task3a-L12",
+   "role": "SPARE",
+   "goal": "Stack the blue block on top of the yellow block",
+   "state": {
+    "red": {
+     "present": true,
+     "pos": [
+      0.03586,
+      -0.04009,
+      0.01533
+     ],
+     "yaw": 169.943
+    },
+    "green": {
+     "present": true,
+     "pos": [
+      -0.00296,
+      0.01562,
+      0.01533
+     ],
+     "yaw": -14.899
+    },
+    "blue": {
+     "present": true,
+     "pos": [
+      0.06732,
+      -0.00597,
+      0.01533
+     ],
+     "yaw": 168.388
+    },
+    "yellow": {
+     "present": true,
+     "pos": [
+      0.01769,
+      0.05874,
+      0.01533
+     ],
+     "yaw": -24.288
+    }
+   },
+   "placement": [
+    "red     far edge 10.4 cm   left edge 14.8 cm   rotated -10.1\u00b0 (far end to the right)   tag end away from robot",
+    "green   far edge 14.2 cm   left edge  9.2 cm   rotated -14.9\u00b0 (far end to the right)   tag end toward robot",
+    "blue    far edge  7.2 cm   left edge 11.4 cm   rotated -11.6\u00b0 (far end to the right)   tag end away from robot",
+    "yellow  far edge 12.2 cm   left edge  4.9 cm   rotated -24.3\u00b0 (far end to the right)   tag end toward robot"
    ]
   }
  ]
