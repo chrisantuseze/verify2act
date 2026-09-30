@@ -247,3 +247,94 @@ The temporal head (theta_c) is still the old pooled one; not re-validated with w
     real2sim,   1 sample     0.86 / 0.972  (2a 0.75, 2b 0.78, 3a 1.00)
     real2sim,   3 samples    **0.92 / 0.969**  (2a 0.83, 2b 0.89, 3a 1.00)
   (old system: 0.06 / 0.62.) The ep13-snapshot numbers above are superseded; item 6 of "Open issues" is done.
+
+## Precondition conflicts, wm3, goal head v3 (2026-09-28)
+
+Commits `7440d7d`, `2485d20`. Scenes where the direct subtask cannot work: `covered` (the block to move has another
+block on it), `ref_covered` (the stacking reference is covered), `occupied` (the target side spot is taken). Each has a
+naive plan (the direct subtask, whose goal never holds) and a clearing plan (move the blocker first; the goal holds).
+
+- Data: `verify2act/data/twin/dofbot_v1c` (dofbot_v1 + conflict episodes, config `dofbot_twin_conflict.yaml`,
+  which uses the new `base:` config inheritance).
+- **wm3**: `train_dynamics.py` on dofbot_v1c, init wm2 best weights, lr 5e-5, 6 epochs, 3 GPUs, ~40 min/epoch.
+  Val 0.2820 -> 0.2637 and still falling at epoch 6 (the cosine LR had reached 1e-6). Log `output/twin_wm3_train.log`.
+- **Goal head v3** (`output/goal_head/v3/goal_head_last.pt`, 3 epochs): dofbot_v1c frames + 22,476 imagined samples
+  from wm3 (`gen_imagined_wm3.log`: 3,201 of them are conflict transitions). The val split is fixed to dofbot_v1 episodes.
+- Evals (`output/scripts/final5_ghv3.sh`, logs `output/final5_*.log`, JSONs `output/real_eval/final5_*.json`), goal head v3:
+
+| eval                                           | wm2            | wm3            |
+|------------------------------------------------|----------------|----------------|
+| twin plans, top1 / pairwise (57 frames)        | 0.965 / 0.997  | 0.965 / 0.998  |
+| real scenes, real image, top1 / pairwise (k=1) | 0.64 / 0.94    | 0.71 / 0.92    |
+| real scenes, real2sim, top1 / pairwise (k=1)   | 0.976 / 0.987  | 0.976 / 0.999  |
+| conflict n=60: pairwise / naive_rej / clearing_acc | 0.90 / 0.68 / 0.77 | 0.88 / 0.85 / 0.75 |
+
+  The final5 real-scenes run has 42 cases (5 task2a, 17 task2b, 20 task3a), not 50 (cause not checked), so these
+  numbers are not directly comparable to the 50-case ones above.
+  Goal head v3 on the true outcome frames (no WM): naive_rej 0.93, clearing_acc 1.00, so the conflict gap is in the WM.
+- Overnight, wm3 on n=150 conflict scenes (`overnight_conflict_n150_ghv3.log`): pairwise 0.88, naive_rej 0.81,
+  clearing_acc 0.78. By type (pairwise / naive_rej / clearing_acc): covered 0.76 / 0.70 / 0.70,
+  ref_covered 0.88 / 0.86 / 0.64, occupied 1.00 / 0.88 / 1.00.
+- Imagination vs true outcome (`eval_conflict_imagine`, wm3, n=150, `overnight_conflict_imagine.log`, sheet
+  `visualizations/dofbot_twin/overnight_conflict_imagine.png`):
+  cos on changed patches is 0.49 for naive and 0.55 for clearing (copy baseline 0.19 / 0.17).
+  closer_own is 0.65 for naive and 0.81 for clearing.
+  Goal-head P(goal), imagined / true: naive 0.21 / 0.16, clearing 0.81 / 1.00.
+  Weakest is naive on `covered`: cos 0.33, closer_own 0.65. The two-step clearing rollouts are under-scored because
+  their imagined outcomes are less faithful than the true ones.
+- `run_20260929_000617_ep_000/` (repo root, untracked): one server planning call right after, a smoke test.
+
+Next: continue wm3 training (it had not converged), then rerun eval_conflict and eval_conflict_imagine at n=150.
+
+## wm4 (2026-09-29): more training does not close the conflict gap
+
+wm4 = wm3 continued (init wm3 best, lr 3e-5 cosine, 10 epochs, `output/scripts/wm4_train_eval.sh`): best val 0.2647 vs
+wm3 0.2637. Conflict n=150 (goal head v3) wm3 0.907 / 0.82 / 0.81 vs wm4 0.887 / 0.84 / 0.79 (pairwise / naive_rej /
+clearing_acc); imagination metrics identical; twin plans top1 0.965 -> 0.912; real image top1 0.71 -> 0.64. wm3 on the
+same 150 scenes gave 0.88 / 0.81 / 0.78 overnight: run-to-run WM sampling noise is ~0.03, as large as every wm3-wm4
+gap. **wm3 + goal head v3 stays the V2A model.** wm5 (30 epochs) was dropped.
+
+## Real-robot prep (2026-09-29 night)
+
+- `server.py --preset twin`: per-variant twin checkpoints + θ_p 0.5, max_retries 3 (`PRESETS`); `--preset calvin` (default)
+  keeps the old CALVIN behaviour. Logs under `output/real/twin/<mode>[_r2s]/`.
+- With `--real2sim` the VLM now sees the camera frame (propose + reflect), only the WM/critic get the twin render
+  (`BeamSearchPlanner.plan(vlm_image_np=...)`), so all variants give the VLM the same input as `vlm_only`.
+  `test_robot_server.py`: 24 passed (new: real2sim routing, twin preset).
+- Offline smoke test on csg2 (`--preset twin --real2sim --wm-mode v2a_wm`, real frame from run_20260926_030231): models
+  load (2.9 GB), real2sim rms 0.29 px in 14.7 s; the Gemini call fails on csg2 only (no `google-auth` in this env).
+- Twin textures `verify2act/twin/assets/*.png` were gitignored (`*.png`); force-added, real2sim needs them on the lab PC.
+- Commands for the real eval: `REAL_EVAL_COMMANDS.md`.
+
+### Temporal gate (θ_c) check, twin critic (`verify2act/twin/eval_temporal.py`, `real_eval/eval_temporal_wm3.json`)
+tc = MC cos(head2(e_t), head2(e_t+1)); requery if tc < θ_c or std >= 0.08. Pass rate at θ_c 0.5 / 0.6 / 0.7:
+
+| transition                        | n   | tc mean | pass@0.5 | @0.6 | @0.7 |
+|-----------------------------------|-----|---------|----------|------|------|
+| true twin next frame              | 77  | 0.735   | 0.97     | 0.97 | 0.73 |
+| wm3 imagination (correct action)  | 231 | 0.792   | 1.00     | 1.00 | 0.91 |
+| wm3 imagination (wrong action)    | 231 | 0.799   | 1.00     | 0.99 | 0.91 |
+| real before -> real after         | 5   | 0.870   | 1.00     | 1.00 | 1.00 |
+| real before -> wm3 imagination    | 15  | 0.838   | 1.00     | 1.00 | 0.80 |
+| different scene (swap)            | 77  | 0.115   | 0.01     | 0.00 | 0.00 |
+| patches shuffled                  | 77  | 0.910   | 1.00     | 1.00 | 1.00 |
+| feature noise (0.5 std)           | 77  | 0.906   | 1.00     | 1.00 | 1.00 |
+
+θ_c 0.5 kept: no false rejections of real or imagined transitions, rejects scene-level jumps. The head mean-pools the
+DINO patches (`critic/model.py::encode_features`), so it cannot see layout errors (shuffle) and zero-mean noise averages
+out; it does not separate right from wrong actions (by design). The uncertainty gate never fires (std 0.02-0.06).
+
+### Baselines on twin data (overnight, `output/scripts/`)
+- RLA-WM: `rla_twin_train.sh` (GPU 0, init CALVIN RLA weights, twin AE + DINO cache, lr 5e-5 constant, ~37 min/epoch),
+  stopped at 03:30 after an epoch checkpoint by `rla_chain.sh`, which then builds its imagined set (`gen_imagined --rla`,
+  9000 frames + conflicts), trains its goal head (`goal_head/rla_twin`: init v1, same recipe as v3) and runs
+  eval_temporal / eval_plans / eval_real2sim (k=1,3) / eval_conflict n=150 with it.
+- Diffusion: `diffusion_twin_train.sh` (GPUs 1-2, init CALVIN best LoRA weights only, 3000 steps, eff. batch 32,
+  ~7.7 s/step), then `diffusion_chain.sh` -> `eval_diffusion.py` (CALVIN vs twin LoRA, CALVIN-tuned vs stock VAE decoder,
+  on the 42 real2sim renders; goal head v3 as a yardstick only).
+
+### Gotcha: csg2 caps this user at 1024 threads (RLIMIT_NPROC)
+Three trainings + an eval reached ~980 threads (each idle `accelerate launch` parent holds ~130, mostly OpenBLAS's
+64-thread pool). New Python processes then die at `import numpy` (OpenBLAS `pthread_create failed`, seen as a
+KeyboardInterrupt / segfault). Export `OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4` for anything started
+while training runs; check with `ps -L -u cheze | wc -l`.

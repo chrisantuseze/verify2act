@@ -17,7 +17,7 @@ from PIL import Image
 
 from verify2act.pipeline.inference import _build_critic
 from verify2act.pipeline.planner import BeamSearchPlanner
-from verify2act.pipeline.world_model import LatentWorldModel
+from verify2act.pipeline.world_model import LatentWorldModel, RLAWorldModel
 from verify2act.twin.goal_labels import on, side_of
 from verify2act.twin.scene import DofbotTwin, InvalidSubtask
 
@@ -75,6 +75,10 @@ def build_frames(n, seed=0):
 
 
 def load_wm(path, encoder=f"{CALVIN}/encoder/ckpt/delta_encoder_best.pt", dev="cuda"):
+    """V2A latent WM, or the RLA-WM baseline when ``path`` ends with ``:rla``."""
+    if path.endswith(":rla"):
+        return RLAWorldModel(device=dev, dynamics_weights_path=path[:-4], encoder_ckpt=encoder,
+                             history_len=3, token_dim=128, num_latent_tokens=32)
     return LatentWorldModel(device=dev, dynamics_weights_path=path, encoder_ckpt=encoder,
                             history_len=3, token_dim=128, num_latent_tokens=32, action_conditioning="cross_attn")
 

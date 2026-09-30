@@ -13,7 +13,7 @@ import argparse, json, os, random
 
 import numpy as np, torch
 
-from verify2act.pipeline.world_model import LatentWorldModel
+from verify2act.pipeline.world_model import LatentWorldModel, RLAWorldModel
 from verify2act.twin.eval_plans import D, val_episodes
 from verify2act.twin.scene import DofbotTwin, InvalidSubtask
 
@@ -29,10 +29,15 @@ def main():
     ap.add_argument("--out", default="verify2act/data/twin/imagined_wm2.pt")
     ap.add_argument("--dataset", default=D, help="e.g. dofbot_v1c (dofbot_v1 + dofbot_conflict)")
     ap.add_argument("--conflicts", action="store_true", help="add all recorded conflict transitions")
+    ap.add_argument("--rla", action="store_true", help="--wm is an RLA-WM baseline checkpoint")
     a = ap.parse_args()
     D_ = a.dataset
-    wm = LatentWorldModel(device="cuda", dynamics_weights_path=a.wm, encoder_ckpt=a.encoder, history_len=3,
-                          token_dim=128, num_latent_tokens=32, action_conditioning="cross_attn")
+    if a.rla:
+        wm = RLAWorldModel(device="cuda", dynamics_weights_path=a.wm, encoder_ckpt=a.encoder, history_len=3,
+                           token_dim=128, num_latent_tokens=32)
+    else:
+        wm = LatentWorldModel(device="cuda", dynamics_weights_path=a.wm, encoder_ckpt=a.encoder, history_len=3,
+                              token_dim=128, num_latent_tokens=32, action_conditioning="cross_attn")
     val = val_episodes()
     eps = sorted(e for e in os.listdir(f"{D_}/episodes") if e not in val)
     executed, conflicts = {}, []
