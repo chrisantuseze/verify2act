@@ -173,7 +173,8 @@ def main():
                    fill=(60, 60, 60), font=font(15))
             for k, r in enumerate(rows):
                 d.text((20, top.height + 80 + 30 * k), r, fill="black", font=font(17))
-            sheet.save(f"{a.out}/{lid}.png")
+            os.makedirs(f"{a.out}/{task}", exist_ok=True)
+            sheet.save(f"{a.out}/{task}/{lid}.png")
             all_layouts[task].append({"id": lid, "role": role, "goal": text, "state": s0, "placement": rows})
         print(task, [l["id"] for l in all_layouts[task]], flush=True)
     t.close()
