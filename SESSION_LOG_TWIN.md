@@ -348,3 +348,20 @@ Twin LoRA fine-tune: val 0.1154 (step 500) -> **0.1005 (step 1000, `best`)**, th
 The twin LoRA renders the twin scene but does not carry out the action: the moved block usually vanishes, changes
 colour, or other blocks shift. The CALVIN-tuned and stock VAE decoders give the same images; the twin preset uses the
 stock decoder. The diffusion variant loads in the server with `--preset twin --real2sim` (checked on csg2).
+
+### RLA-WM baseline result (2026-09-30 03:59-06:03)
+RLA-WM on twin data: 10 epochs (stopped at the deadline), val 0.3169 (ep 5) -> 0.2975 (ep 10), still falling (V2A wm3:
+0.2637). Its goal head (`goal_head/rla_twin`, init v1 + 22,758 RLA-imagined samples incl. 3,201 conflict transitions,
+3 epochs): true-frame val AUROC 0.992. Offline, V2A = wm3 + goal head v3, RLA = RLA-WM + goal head rla_twin:
+
+| eval (top1 / pairwise unless noted)                 | V2A           | RLA-WM        |
+|-----------------------------------------------------|---------------|---------------|
+| twin held-out plans (57 frames)                      | 0.965 / 0.998 | 0.579 / 0.948 |
+| real scenes, real2sim render (42 cases, k=1)        | 0.976 / 0.999 | 0.714 / 0.944 |
+| real scenes, real image (k=1)                       | 0.71 / 0.92   | 0.24 / 0.79   |
+| conflicts n=150, pairwise / naive_rej / clearing_acc | 0.907 / 0.82 / 0.81 | 0.840 / 0.85 / 0.59 |
+| temporal gate pass@0.5, imagined correct action      | 1.00          | 1.00          |
+
+RLA k=3: real2sim 0.62 / 0.94, real image 0.24 / 0.76 (more samples do not help it). Per task, real2sim k=1:
+2a 0.80, 2b 0.76, 3a 0.65 (V2A 1.00 / 0.94 / 1.00). The RLA variant loads in the server with `--preset twin --real2sim`.
+Caveat for the paper: RLA-WM got 10 epochs from CALVIN weights; V2A's wm3 descends from wm2 (30 twin epochs) + 6.
