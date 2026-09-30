@@ -148,7 +148,8 @@ PRESETS = {
         "rla_wm": {"latent_wm_ckpt": "verify2act/output/rla_wm/dofbot_twin/wm/ckpt/latent_dynamics_best.pt",
                    "wm_decoder_dir": f"{_TWIN}/decoder",
                    "goal_head_ckpt": "verify2act/output/goal_head/rla_twin/goal_head_last.pt"},
-        "diffusion_wm": {"wm_decoder_dir": "verify2act/output/diffusion_wm/calvin/decoder/checkpoint-5000"},
+        # stock SD VAE decoder: the CALVIN-tuned one gave the same imaginations on the real2sim renders (eval_diffusion)
+        "diffusion_wm": {},
         "vlm_only": {},
     },
 }

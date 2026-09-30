@@ -338,3 +338,13 @@ Three trainings + an eval reached ~980 threads (each idle `accelerate launch` pa
 64-thread pool). New Python processes then die at `import numpy` (OpenBLAS `pthread_create failed`, seen as a
 KeyboardInterrupt / segfault). Export `OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4` for anything started
 while training runs; check with `ps -L -u cheze | wc -l`.
+
+### Diffusion baseline result (2026-09-30 04:22-05:05)
+Twin LoRA fine-tune: val 0.1154 (step 500) -> **0.1005 (step 1000, `best`)**, then flat 0.100-0.110 to step 3000.
+`eval_diffusion` on the 42 real2sim renders (goal head v3 as yardstick; `real_eval/eval_diffusion.json`, sheet
+`visualizations/dofbot_twin/eval_diffusion.png`), pairwise / P(goal) correct / wrong:
+  CALVIN LoRA 0.50 / 0.02 / 0.02 (paints the CALVIN desk and robot) · twin LoRA 0.45 / 0.06 / 0.11 ·
+  twin LoRA + stock SD VAE decoder 0.50 / 0.06 / 0.11.
+The twin LoRA renders the twin scene but does not carry out the action: the moved block usually vanishes, changes
+colour, or other blocks shift. The CALVIN-tuned and stock VAE decoders give the same images; the twin preset uses the
+stock decoder. The diffusion variant loads in the server with `--preset twin --real2sim` (checked on csg2).
