@@ -20,6 +20,21 @@ import numpy as np  # noqa: E402
 
 from verify2act.twin.config import ASSETS_DIR, load_config  # noqa: E402
 
+
+
+def _release_gl() -> None:
+    """Detach the EGL context from this thread. mujoco.Renderer leaves its context current on the thread that last
+    rendered, and EGL refuses to make it current on another thread (EGL_BAD_ACCESS) until then, e.g. the robot server
+    builds the twin on the main thread and renders on per-request threads."""
+    if os.environ.get("MUJOCO_GL") != "egl":
+        return
+    from mujoco import egl
+    from OpenGL import EGL
+
+    if egl.EGL_DISPLAY is not None:
+        EGL.eglMakeCurrent(egl.EGL_DISPLAY, EGL.EGL_NO_SURFACE, EGL.EGL_NO_SURFACE, EGL.EGL_NO_CONTEXT)
+
+
 _C = "(red|green|blue|yellow)"
 _BIN = re.compile(rf"^pick and place {_C} block into the bin$")
 _ON = re.compile(rf"^pick and place {_C} block on {_C} block$")
@@ -112,6 +127,8 @@ class DofbotTwin:
         self.base_camera = self._camera_params(cam)
         self.episode_camera = dict(self.base_camera)
         self.renderer = mujoco.Renderer(self.model, self.height, self.width) if render else None
+        if render:
+            _release_gl()
 
     # ── model ──────────────────────────────────────────────────────────────
 
@@ -533,6 +550,7 @@ class DofbotTwin:
             seg = self.renderer.render()
         finally:
             self.renderer.disable_segmentation_rendering()
+            _release_gl()
         return int(((seg[..., 0] == self._geom[c]) & (seg[..., 1] == mujoco.mjtObj.mjOBJ_GEOM)).sum())
 
     def find_side_spot(self, c: str, b: str, side: str, rng: np.random.Generator, max_tries: int = 60,
@@ -637,7 +655,10 @@ class DofbotTwin:
             cam = self._jitter(cam, self.cfg["camera"]["jitter_frame"], rng)
         self._set_camera(cam)
         self.renderer.update_scene(self.data, camera="home")
-        return self.renderer.render().copy()
+        try:
+            return self.renderer.render().copy()
+        finally:
+            _release_gl()
 
     def _set_camera(self, cam: Dict[str, Any]) -> None:
         R = camera_frame(np.asarray(cam["pos"]), np.asarray(cam["lookat"]), cam["roll"])

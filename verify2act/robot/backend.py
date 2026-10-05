@@ -296,6 +296,13 @@ class Verify2ActBackend:
             # BeamSearchPlanner swallows VLM errors and falls back to an empty plan. The prompts ask for ["done"] when
             # the goal is met, so an empty plan here means the VLM failed, and it must not reach the Jetson, which
             # reads an empty plan as "nothing left to do".
+            if session_dir:
+                call_dir = session_dir / "imagination_logs" / f"planning_call_{call_idx:02d}"
+                call_dir.mkdir(parents=True, exist_ok=True)
+                Image.fromarray(real_rgb).save(call_dir / "request_image.png")
+                with open(call_dir / "request.json", "w") as f:
+                    json.dump({"goal": goal, "history": history, "feedback": feedback or "",
+                               "obj_labels": obj_labels, "horizon": horizon}, f, indent=2)
             raise RuntimeError("VLM produced no plan (API error or unparseable reply; see the server log)")
         # ["done"] goes through the same verification as any plan (no imagination steps: the goal head judges the
         # real frame), but `done` reports only what the VLM said; whether the critic agreed is in `accepted`.

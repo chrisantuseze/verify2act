@@ -367,6 +367,9 @@ class VLMPlanner:
         raw = self._call(messages, temperature=temperature)
         result = self._parse_json(raw)
         plan = result.get("plan", [])
+        # The model sometimes answers a single-plan request in the candidates format; take its first candidate.
+        if not plan and isinstance(result.get("plans"), list) and result["plans"]:
+            plan = result["plans"][0]
         if not isinstance(plan, list) or not all(isinstance(a, (str, dict)) for a in plan):
             raise ValueError(f"Invalid 'plan' output from model: {plan}")
         # Filter out empty or incomplete actions (e.g. from truncation repair)
@@ -377,6 +380,8 @@ class VLMPlanner:
         if len(plan) > horizon:
             plan = plan[:horizon]
         logger.info("Proposed plan: %s", plan)
+        if not plan:
+            logger.warning("Empty plan; raw model reply: %r", raw)
         return plan
 
     def propose_candidates(
