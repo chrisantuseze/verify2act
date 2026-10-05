@@ -1,4 +1,4 @@
-# Supplementary twin data (SESSION_LOG_TWIN.md, 2026-09-28): precondition conflicts and a closer look to the real frames.
+# Supplementary twin data (README.md §6, 2026-09-28): precondition conflicts and a closer look to the real frames.
 # Deep-merged over dofbot_twin.yaml. Generate into its own directory (dofbot_conflict) with --start-episode 100000 so the
 # frame paths (and DINO cache names) never collide with dofbot_v1.
 base: dofbot_twin.yaml

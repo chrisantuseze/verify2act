@@ -258,7 +258,7 @@ def run_goal(t: DofbotTwin, g: Goal, rng: np.random.Generator,
     return executed
 
 
-# ── precondition conflicts (SESSION_LOG_TWIN.md, 2026-09-28) ─────────────────────────────────────────────────────────
+# ── precondition conflicts (README.md §6, 2026-09-28) ─────────────────────────────────────────────────────────
 # Scenes where the direct subtask for a goal cannot work: the block to move is covered ("covered"), the stacking
 # reference is covered ("ref_covered"), or another block sits where the robot puts a left/right block ("occupied").
 # The episode either starts with that naive subtask (executed with scene.apply(conflicts=True): a recorded failure) or

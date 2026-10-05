@@ -8,7 +8,7 @@
 
     MUJOCO_GL=egl python -m verify2act.twin.generate --out verify2act/data/twin/dofbot_v1 --num-episodes 20000 --workers 8
 
-See TWIN_DATASET.md at the repo root for the full procedure (server setup, generation, training).
+See README.md §5 for the full procedure (generation, training).
 """
 
 import argparse
@@ -238,7 +238,7 @@ def main() -> None:
     missing = [n for n in needed if not (Path(args.assets) / n).exists()]
     if missing and not args.allow_flat:
         raise SystemExit(f"missing textures in {args.assets}: {missing[:4]}{' ...' if len(missing) > 4 else ''}\n"
-                         "build them with `python -m verify2act.twin.textures --frames <real frames>` (TWIN_DATASET.md)")
+                         "build them with `python -m verify2act.twin.textures --frames <real frames>` (README.md §5)")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

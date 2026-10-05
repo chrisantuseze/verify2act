@@ -119,7 +119,7 @@ def dispatch(backend, op: str, r: dict) -> dict:
 
 
 # Per-variant checkpoints and thresholds, used when the flag is not given. --preset calvin (default) is the CALVIN
-# models, as in commands/v2a_wm.sh; --preset twin is the DOFBOT digital-twin models (SESSION_LOG_TWIN.md): twin delta AE,
+# models, as in commands/v2a_wm.sh; --preset twin is the DOFBOT digital-twin models (README.md §6): twin delta AE,
 # twin critic (temporal head) and a spatial goal head per latent WM, trained on that WM's imagined states.
 _V2A_CALVIN = "verify2act/output/v2a_wm/calvin"
 _TWIN = "verify2act/output/v2a_wm/dofbot_twin"
@@ -137,7 +137,7 @@ PRESETS = {
         "vlm_only": {},
     },
     "twin": {
-        # theta_p 0.5: the goal head returns P(goal met); max_retries 3: best of 3 WM samples (SESSION_LOG_TWIN.md).
+        # theta_p 0.5: the goal head returns P(goal met); max_retries 3: best of 3 WM samples (README.md §6).
         "_common": {"critic_ckpt": "verify2act/output/contrastive/dofbot_twin/best_contrastive_critic.pt",
                     "encoder_ckpt": f"{_TWIN}/encoder/ckpt/delta_encoder_best.pt",
                     "wm_adapter_dir": "verify2act/output/diffusion_wm/dofbot_twin/wm/best/unet_lora",
