@@ -8,7 +8,7 @@ Per layout the sheet shows (a) a to-scale top view of the US-Letter sheet with e
 edge and the left edge of the sheet (as seen from the robot) and its rotation, the tag end marked, and (b) the arm-camera
 view rendered from the base home pose, to compare with the live camera before starting the episode.
 
-python -m verify2act.twin.make_eval_layouts --n 5 --main 3 --out real_eval_layouts
+python -m verify2act.twin.make_eval_layouts --n 5 --main 3 --out verify2act/real_eval_layouts
 """
 import argparse, json, math, os, re
 
@@ -108,7 +108,7 @@ def main():
     ap.add_argument("--main", type=int, default=3, help="the first N are the eval set, the rest spares")
     ap.add_argument("--margin", type=float, default=25.0, help="px from the image border, for every fitted home pose")
     ap.add_argument("--seed", type=int, default=20260930)
-    ap.add_argument("--out", default="real_eval_layouts")
+    ap.add_argument("--out", default="verify2act/real_eval_layouts")
     a = ap.parse_args()
     cfg = load_config("verify2act/configs/twin/dofbot_twin.yaml")
     t = DofbotTwin(cfg)
